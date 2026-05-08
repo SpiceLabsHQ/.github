@@ -125,14 +125,18 @@ jobs:
           fi
           git fetch origin "${HEAD_REF}":"${HEAD_REF}"
           git checkout "${HEAD_REF}"
-          # Configure committer identity for any commits Claude pushes.
-          # Look up the bot user's ID so commits link to the App's profile via the
-          # standard `<id>+<login>@users.noreply.github.com` noreply format.
-          BOT_LOGIN=$(gh api /user --jq '.login')
-          BOT_ID=$(gh api /user --jq '.id')
-          git config user.name "${BOT_LOGIN}"
-          git config user.email "${BOT_ID}+${BOT_LOGIN}@users.noreply.github.com"
-          echo "Switched to PR branch: ${HEAD_REF} (committer: ${BOT_LOGIN})"
+          # Configure committer identity. App installation tokens cannot call /user,
+          # so derive the bot identity from the App metadata via /app (which IS
+          # accessible to install tokens for self-introspection).
+          APP_JSON=$(gh api /app)
+          BOT_SLUG=$(echo "${APP_JSON}" | jq -r '.slug')
+          # Look up the bot's GitHub user ID so commits use the standard noreply
+          # format `<id>+<slug>[bot]@users.noreply.github.com` and link back to
+          # the App's profile in GitHub UIs.
+          BOT_USER_ID=$(gh api "users/${BOT_SLUG}%5Bbot%5D" --jq '.id')
+          git config user.name "${BOT_SLUG}[bot]"
+          git config user.email "${BOT_USER_ID}+${BOT_SLUG}[bot]@users.noreply.github.com"
+          echo "Switched to PR branch: ${HEAD_REF} (committer: ${BOT_SLUG}[bot])"
 
       - name: Fetch review prompt template
         uses: actions/checkout@v4
