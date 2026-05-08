@@ -1,0 +1,72 @@
+# Drop this file into each SpiceLabsHQ repo as `.github/workflows/codeql.yml`.
+# It calls the centrally maintained reusable workflow in SpiceLabsHQ/.github
+# which wraps GitHub's first-party CodeQL action with org defaults
+# (auto-detected languages, the `security-extended` query suite, SARIF upload
+# to the Security tab).
+#
+# ──────────────────────────────────────────────────────────────────────────
+# REQUIRES GitHub Advanced Security (GHAS) for PRIVATE repositories.
+#
+# Public repos work without GHAS — Code Scanning is free for public repos.
+# If your private repo doesn't have GHAS enabled, this workflow will fail
+# at the SARIF-upload step inside `github/codeql-action/analyze@v3` with
+# a 403 "Advanced Security must be enabled" error.
+#
+# GHAS-free alternative: use `sast.yml` (DEV-219, Semgrep-based). It runs
+# the OWASP Top Ten ruleset against the same checked-out tree and uploads
+# SARIF to the Security tab without needing GHAS on private repos.
+# ──────────────────────────────────────────────────────────────────────────
+#
+# Triggers:
+#   * pull_request           — CodeQL scans the PR diff (incremental,
+#                              fast feedback on the lines changed)
+#   * push to main           — full-repo scan after merge keeps the
+#                              baseline current
+#   * schedule (Mon 09:00Z)  — weekly full-repo scan catches findings
+#                              from new CodeQL queries shipped upstream
+#                              even when the codebase hasn't changed
+#
+# Optional per-repo customization (uncomment the `with:` block below):
+#   * `languages`     — override auto-detect with a comma-separated list.
+#                       Use this when auto-detect is wrong for your repo
+#                       or you want to scan a subset.
+#   * `query_suite`   — `default` | `security-extended` (default) |
+#                       `security-and-quality`. Pick `security-and-quality`
+#                       if you want code-quality findings alongside
+#                       security findings.
+#   * `build_command` — custom build step for compiled languages
+#                       (Java/Kotlin, C#, C/C++, Swift) when CodeQL's
+#                       autobuild can't figure out your project layout.
+#
+# No org-level secrets required.
+
+name: CodeQL
+
+# Spread weekly cron load: Monday 09:00 UTC. Public CodeQL queries update
+# upstream throughout the week, so a weekly scan catches new findings
+# without waiting for code changes.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 9 * * 1"
+
+jobs:
+  codeql:
+    uses: SpiceLabsHQ/.github/.github/workflows/codeql.yml@v1
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    # with:
+    #   # Override auto-detect (comma-separated). Valid IDs:
+    #   # javascript-typescript, python, go, java-kotlin, csharp,
+    #   # ruby, swift, cpp.
+    #   languages: javascript-typescript,python
+    #
+    #   # Add code-quality findings alongside security findings.
+    #   query_suite: security-and-quality
+    #
+    #   # Custom build for compiled languages where autobuild fails.
+    #   # build_command: ./gradlew assemble -x test

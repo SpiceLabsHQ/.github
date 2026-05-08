@@ -47,3 +47,25 @@ The bot operates in two modes:
 **6. Bulk rollout:** `scripts/rollout-pepper-pr-review.sh` opens an adoption PR in every non-archived org repo. Defaults to dry-run; pass `--apply` to actually create PRs.
 
 **Versioning:** Callers pin the reusable workflow with `@v1`; the reusable workflow pins the underlying `anthropics/claude-code-action` ref. Action upgrades happen in one place.
+
+### CodeQL (`codeql.yml`)
+
+Reusable wrapper around GitHub's first-party `github/codeql-action` for deep static analysis. Auto-detects supported languages, runs the `security-extended` query suite by default, scans the PR diff on `pull_request` events and the full repo on `push` / `schedule`, and uploads SARIF to the Security tab.
+
+> **GHAS requirement:** **Private repos require [GitHub Advanced Security (GHAS)](https://docs.github.com/en/get-started/learning-about-github/about-github-advanced-security)**. Without GHAS, the SARIF-upload step inside `analyze@v3` returns 403. Public repos work without GHAS — Code Scanning is free for public repos. If your private repo can't enable GHAS, use [`sast.yml`](#sast-semgrep-sastyml) (Semgrep-based) instead.
+
+**1. Add the caller workflow** to each repo at `.github/workflows/codeql.yml`. Copy-paste-ready version at [`examples/caller-codeql.yml`](examples/caller-codeql.yml). Triggers: every PR (diff-scoped), every push to `main` (full repo), and weekly on Mondays.
+
+**2. Auto-detected languages:** the workflow probes the worktree for source files and emits one matrix job per detected language. CodeQL language IDs: `javascript-typescript`, `python`, `go`, `java-kotlin`, `csharp`, `ruby`, `swift`, `cpp`. JS+TS share a single `javascript-typescript` analyzer; Java+Kotlin share `java-kotlin`. No caller configuration needed for the common cases.
+
+**3. Inputs** (all optional, override via `with:`):
+
+| Input | Default | Notes |
+|---|---|---|
+| `languages` | (empty → auto-detect) | Comma-separated CodeQL language IDs to override auto-detect. Use the IDs listed above |
+| `query_suite` | `security-extended` | One of `default`, `security-extended`, `security-and-quality`. Pick `security-and-quality` if you want lint-style code-quality findings alongside security findings |
+| `build_command` | (empty) | Custom shell command to build compiled-language sources (Java/Kotlin, C#, C/C++, Swift) when CodeQL's `autobuild` can't figure out your project. Empty → autobuild for compiled languages, no-op for interpreted languages |
+
+**4. No secrets required.** SARIF upload uses the standard `GITHUB_TOKEN` with `security-events: write`.
+
+**Versioning:** Callers pin the reusable workflow with `@v1`; the reusable workflow pins `github/codeql-action` to `@v3`. Engine upgrades happen in one place.
