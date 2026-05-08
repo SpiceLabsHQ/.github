@@ -1,5 +1,19 @@
 name: Claude PR Review (reusable)
 
+# Security model — read before changing trigger handling:
+#
+# Callers MUST trigger this workflow only via `pull_request` and `issue_comment`.
+# NEVER add `pull_request_target` to a caller. `pull_request_target` runs in the
+# base repo's context with full secret access even for fork PRs, which would let
+# an attacker exfiltrate secrets via a malicious diff or workflow file. The plain
+# `pull_request` event is safe for forks because GitHub strips secrets
+# automatically.
+#
+# `issue_comment` on a public PR can be triggered by any GitHub user, so the job
+# guard below restricts it to OWNER / MEMBER / COLLABORATOR comment authors. Org
+# 2FA is the second line of defense. Do not weaken either layer without a
+# replacement.
+
 on:
   workflow_call:
     inputs:
@@ -57,11 +71,16 @@ jobs:
   review:
     name: Claude review
     runs-on: ubuntu-latest
+    # See "Security model" comment at top of file.
+    # `issue_comment` is gated to org members so non-members can't trigger
+    # secret-bearing runs by typing the trigger phrase on a public PR.
     if: >-
       github.event_name == 'pull_request' ||
       (github.event_name == 'issue_comment' &&
        github.event.issue.pull_request != null &&
-       contains(github.event.comment.body, inputs.trigger_phrase))
+       contains(github.event.comment.body, inputs.trigger_phrase) &&
+       contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'),
+                github.event.comment.author_association))
     steps:
       - name: Generate App installation token
         id: app-token
