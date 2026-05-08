@@ -26,6 +26,7 @@ The bot operates in two modes:
 | `trigger_phrase` | `@claude` | Comment phrase that triggers on-demand mode |
 | `standards_path` | `.claude/pr-review-standards.md` | Override if your repo stores standards elsewhere |
 | `default_reviewer` | `brodkin` | Fallback reviewer login when no other collaborator qualifies for assignment |
+| `show_full_output` | `false` | When `true`, Claude's tool calls + reasoning + tool results stream into Actions logs. Useful for diagnosing permission denials or wasted turns. **Public-repo callers: anyone who can see the Actions run sees the full output** — use only on debug branches |
 
 **4. Required secrets** (set once at the org level — they don't auto-inherit, the caller passes them explicitly):
 
