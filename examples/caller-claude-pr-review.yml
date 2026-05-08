@@ -6,7 +6,7 @@
 #   - Override inputs in the `with:` block below (model, aws_region, etc.).
 #
 # Required org-level secrets (set once on the SpiceLabsHQ org):
-#   - BEDROCK_ROLE_ARN              — AWS role for Bedrock OIDC
+#   - AWS_CLAUDE_BEDROCK_ROLE_ARN              — AWS role for Bedrock OIDC
 #   - CLAUDE_REVIEW_APP_ID          — GitHub App ID (needed for formal PR approvals)
 #   - CLAUDE_REVIEW_APP_PRIVATE_KEY — GitHub App private key
 #
@@ -36,7 +36,7 @@ jobs:
       actions: read
       issues: read
     secrets:
-      BEDROCK_ROLE_ARN: ${{ secrets.BEDROCK_ROLE_ARN }}
+      AWS_CLAUDE_BEDROCK_ROLE_ARN: ${{ secrets.AWS_CLAUDE_BEDROCK_ROLE_ARN }}
       CLAUDE_REVIEW_APP_ID: ${{ secrets.CLAUDE_REVIEW_APP_ID }}
       CLAUDE_REVIEW_APP_PRIVATE_KEY: ${{ secrets.CLAUDE_REVIEW_APP_PRIVATE_KEY }}
       LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
