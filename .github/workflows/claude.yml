@@ -1,0 +1,22 @@
+name: Claude Review
+
+on:
+  pull_request:
+    types: [opened, ready_for_review]
+  issue_comment:
+    types: [created]
+
+jobs:
+  claude:
+    uses: SpiceLabsHQ/.github/.github/workflows/claude-pr-review.yml@v1
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+      actions: read
+      issues: read
+    secrets:
+      BEDROCK_ROLE_ARN: ${{ secrets.BEDROCK_ROLE_ARN }}
+      CLAUDE_REVIEW_APP_ID: ${{ secrets.CLAUDE_REVIEW_APP_ID }}
+      CLAUDE_REVIEW_APP_PRIVATE_KEY: ${{ secrets.CLAUDE_REVIEW_APP_PRIVATE_KEY }}
+      LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
