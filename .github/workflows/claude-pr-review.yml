@@ -1,0 +1,164 @@
+name: Claude PR Review (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      model:
+        description: Bedrock model ID or inference profile to use for review.
+        required: false
+        type: string
+        default: us.anthropic.claude-sonnet-4-5-20250929-v1:0
+      aws_region:
+        description: AWS region where the Bedrock role and models live.
+        required: false
+        type: string
+        default: us-west-2
+      trigger_phrase:
+        description: Comment phrase that triggers an on-demand run.
+        required: false
+        type: string
+        default: "@claude"
+      standards_path:
+        description: Path (relative to the calling repo) to the optional review standards file.
+        required: false
+        type: string
+        default: .claude/pr-review-standards.md
+      default_reviewer:
+        description: GitHub login to fall back to when no other collaborator qualifies for assignment.
+        required: false
+        type: string
+        default: brodkin
+    secrets:
+      BEDROCK_ROLE_ARN:
+        description: ARN of the AWS role to assume via OIDC for Bedrock access.
+        required: true
+      CLAUDE_REVIEW_APP_ID:
+        description: GitHub App ID used to mint a token capable of formal PR approvals.
+        required: true
+      CLAUDE_REVIEW_APP_PRIVATE_KEY:
+        description: Private key (PEM) for the GitHub App used for approvals.
+        required: true
+      LINEAR_API_KEY:
+        description: Linear API key for issue verification. Optional; if absent, Linear checks are skipped.
+        required: false
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+  actions: read
+  issues: read
+
+concurrency:
+  group: claude-pr-review-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  review:
+    name: Claude review
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request != null &&
+       contains(github.event.comment.body, inputs.trigger_phrase))
+    steps:
+      - name: Generate App installation token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.CLAUDE_REVIEW_APP_ID }}
+          private-key: ${{ secrets.CLAUDE_REVIEW_APP_PRIVATE_KEY }}
+
+      - name: Checkout caller repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Fetch review prompt template
+        uses: actions/checkout@v4
+        with:
+          repository: SpiceLabsHQ/.github
+          ref: ${{ github.workflow_sha }}
+          path: .claude-review-tpl
+          sparse-checkout: prompts
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+
+      - name: Build review prompt
+        id: prompt
+        env:
+          STANDARDS_PATH: ${{ inputs.standards_path }}
+          DEFAULT_PROMPT_PATH: .claude-review-tpl/prompts/pr-review-default.md
+          DEFAULT_REVIEWER: ${{ inputs.default_reviewer }}
+          MARKER: "<!-- PROJECT_GUIDELINES_PLACEHOLDER -->"
+        run: |
+          set -euo pipefail
+
+          if [ ! -f "${DEFAULT_PROMPT_PATH}" ]; then
+            echo "Default prompt not found at ${DEFAULT_PROMPT_PATH}" >&2
+            exit 1
+          fi
+
+          PROJECT_BLOCK="$(mktemp)"
+          if [ -n "${STANDARDS_PATH}" ] && [ -f "${STANDARDS_PATH}" ]; then
+            cat "${STANDARDS_PATH}" > "${PROJECT_BLOCK}"
+          else
+            echo "_None provided. Apply the organization defaults above._" > "${PROJECT_BLOCK}"
+          fi
+
+          ASSEMBLED="$(mktemp)"
+          awk -v marker="${MARKER}" -v block_file="${PROJECT_BLOCK}" '
+            $0 == marker {
+              while ((getline line < block_file) > 0) print line
+              close(block_file)
+              next
+            }
+            { print }
+          ' "${DEFAULT_PROMPT_PATH}" > "${ASSEMBLED}"
+
+          # Substitute the default reviewer placeholder.
+          # Use a sentinel-safe delimiter; default_reviewer is a GitHub login (no slashes/special chars).
+          sed -i "s|{{DEFAULT_REVIEWER}}|${DEFAULT_REVIEWER}|g" "${ASSEMBLED}"
+
+          {
+            echo 'prompt<<CLAUDE_PROMPT_EOF'
+            cat "${ASSEMBLED}"
+            echo 'CLAUDE_PROMPT_EOF'
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Determine allowed tools for this run
+        id: tools
+        run: |
+          set -euo pipefail
+          # Auto-review (pull_request) is read-only on the filesystem.
+          # On-demand (issue_comment) opens edit/write/push capabilities.
+          AUTO_TOOLS='Bash(gh *),Bash(git log:*),Bash(git diff:*),Bash(git blame:*),Bash(git show:*),Bash(curl *)'
+          ON_DEMAND_TOOLS='Edit,Write,Bash'
+          if [ "${{ github.event_name }}" = "issue_comment" ]; then
+            echo "allowed=${ON_DEMAND_TOOLS}" >> "${GITHUB_OUTPUT}"
+          else
+            echo "allowed=${AUTO_TOOLS}" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Configure AWS credentials (Bedrock OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.BEDROCK_ROLE_ARN }}
+          aws-region: ${{ inputs.aws_region }}
+          role-session-name: claude-pr-review-${{ github.run_id }}
+
+      - name: Run Claude Code review
+        uses: anthropics/claude-code-action@v1
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        with:
+          github_token: ${{ steps.app-token.outputs.token }}
+          use_bedrock: "true"
+          model: ${{ inputs.model }}
+          trigger_phrase: ${{ inputs.trigger_phrase }}
+          allowed_tools: ${{ steps.tools.outputs.allowed }}
+          additional_permissions: |
+            actions: read
+          prompt: ${{ steps.prompt.outputs.prompt }}

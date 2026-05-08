@@ -1,0 +1,41 @@
+# Drop this file into each SpiceLabsHQ repo as `.github/workflows/claude.yml`.
+# It calls the centrally maintained reusable workflow in SpiceLabsHQ/.github.
+#
+# Optional per-repo customization:
+#   - Add `.claude/pr-review-standards.md` for repo-specific review standards.
+#   - Override inputs in the `with:` block below (model, aws_region, etc.).
+#
+# Required org-level secrets (set once on the SpiceLabsHQ org):
+#   - BEDROCK_ROLE_ARN              — AWS role for Bedrock OIDC
+#   - CLAUDE_REVIEW_APP_ID          — GitHub App ID (needed for formal PR approvals)
+#   - CLAUDE_REVIEW_APP_PRIVATE_KEY — GitHub App private key
+#
+# Optional org-level secret:
+#   - LINEAR_API_KEY                — enables Linear issue verification
+
+name: Claude Review
+
+on:
+  pull_request:
+    types: [opened, ready_for_review]
+  issue_comment:
+    types: [created]
+
+jobs:
+  claude:
+    uses: SpiceLabsHQ/.github/.github/workflows/claude-pr-review.yml@v1
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+      actions: read
+      issues: read
+    secrets:
+      BEDROCK_ROLE_ARN: ${{ secrets.BEDROCK_ROLE_ARN }}
+      CLAUDE_REVIEW_APP_ID: ${{ secrets.CLAUDE_REVIEW_APP_ID }}
+      CLAUDE_REVIEW_APP_PRIVATE_KEY: ${{ secrets.CLAUDE_REVIEW_APP_PRIVATE_KEY }}
+      LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+    # with:
+    #   model: us.anthropic.claude-opus-4-1-20250805-v1:0
+    #   aws_region: us-east-1
+    #   default_reviewer: someone-else
