@@ -39,6 +39,7 @@ jobs:
       AWS_CLAUDE_BEDROCK_ROLE_ARN: ${{ secrets.AWS_CLAUDE_BEDROCK_ROLE_ARN }}
       CLAUDE_REVIEW_APP_ID: ${{ secrets.CLAUDE_REVIEW_APP_ID }}
       CLAUDE_REVIEW_APP_PRIVATE_KEY: ${{ secrets.CLAUDE_REVIEW_APP_PRIVATE_KEY }}
+      # Optional. Pepper falls back to GitHub Issues for intent verification when this is unset.
       LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
     # with:
     #   model: us.anthropic.claude-opus-4-1-20250805-v1:0
