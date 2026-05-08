@@ -47,3 +47,29 @@ The bot operates in two modes:
 **6. Bulk rollout:** `scripts/rollout-pepper-pr-review.sh` opens an adoption PR in every non-archived org repo. Defaults to dry-run; pass `--apply` to actually create PRs.
 
 **Versioning:** Callers pin the reusable workflow with `@v1`; the reusable workflow pins the underlying `anthropics/claude-code-action` ref. Action upgrades happen in one place.
+
+### SAST (Semgrep) (`sast.yml`)
+
+Reusable Semgrep scan that runs the SpiceLabs-curated default ruleset, layers on auto-detected language packs, and uploads SARIF to GitHub Code Scanning (Security tab). Catches OWASP Top Ten classes — including A03 injection — across any caller language without per-repo wiring.
+
+Semgrep is installed via `pip install semgrep==<pinned-version>` so the rule engine version is plain-text auditable in the reusable workflow. No third-party Semgrep Action is used. The pinned version is bumped deliberately when the org wants new rules.
+
+**1. Add the caller workflow** to each repo at `.github/workflows/sast.yml`. Copy-paste-ready version at [`examples/caller-sast.yml`](examples/caller-sast.yml). Triggers: every PR, every push to `main`, and weekly on Mondays.
+
+**2. (Optional) Add repo-specific custom rules** at `.semgrep.yml`. The reusable workflow auto-detects the file at the configured `config_path` and layers it on top of the curated rulesets. Absent file → curated rulesets only.
+
+**3. Auto-detected language packs:** the workflow probes the worktree for source files and adds `p/javascript`, `p/python`, `p/golang`, or `p/java` when it finds matching files. No caller configuration needed for the common cases.
+
+**4. Inputs** (all optional, override via `with:`):
+
+| Input | Default | Notes |
+|---|---|---|
+| `additional_rulesets` | (empty) | Comma-separated extra Semgrep ruleset IDs (e.g. `p/javascript,p/golang`). Each becomes its own `--config` flag. Layered on top of the curated defaults and auto-detected packs |
+| `config_path` | `.semgrep.yml` | Path to a caller-maintained custom-rules file. Tolerated absent — workflow simply skips when the file isn't present |
+| `fail_on_severity` | `error` | Severity gate. One of `info`, `warning`, `error`. Findings at or above this level fail the job. SARIF still uploads either way |
+
+**5. No secrets required.** Semgrep runs against the checked-out tree; SARIF upload uses the standard `GITHUB_TOKEN` with `security-events: write`.
+
+**Curated rulesets (always on):** `p/default`, `p/owasp-top-ten`, `p/secrets`.
+
+**Versioning:** Callers pin the reusable workflow with `@v1`; the reusable workflow pins Semgrep to a specific PyPI release. Engine upgrades happen in one place.

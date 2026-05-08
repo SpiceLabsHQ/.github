@@ -1,0 +1,35 @@
+# Drop this file into each SpiceLabsHQ repo as `.github/workflows/sast.yml`.
+# It calls the centrally maintained reusable workflow in SpiceLabsHQ/.github
+# which runs Semgrep with the org-curated rulesets (p/default, p/owasp-top-ten,
+# p/secrets) plus auto-detected language packs, and uploads SARIF to the
+# Security tab.
+#
+# Optional per-repo customization:
+#   - Add `.semgrep.yml` to layer on caller-specific custom rules.
+#   - Override `additional_rulesets` to layer on more Semgrep registry packs.
+#   - Override `fail_on_severity` to tighten or relax the gate.
+#
+# No org-level secrets required.
+
+name: SAST
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    # Weekly Monday 09:00 UTC — keeps Code Scanning findings fresh even when no
+    # PRs have landed and catches new rules from upstream Semgrep updates.
+    - cron: "0 9 * * 1"
+
+jobs:
+  semgrep:
+    uses: SpiceLabsHQ/.github/.github/workflows/sast.yml@v1
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    # with:
+    #   additional_rulesets: p/javascript,p/golang
+    #   config_path: .semgrep.yml
+    #   fail_on_severity: error
