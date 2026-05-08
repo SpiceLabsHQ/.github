@@ -6,7 +6,7 @@ Organization-level defaults for [SpiceLabsHQ](https://github.com/SpiceLabsHQ). T
 
 ### Pepper PR Review (`pepper-pr-review.yml`)
 
-Pepper is the SpiceLabs PR review bot, powered by Claude Sonnet 4.5 on AWS Bedrock. The reusable workflow is centrally maintained here; each repo opts in with a ~15-line caller workflow and (optionally) carries its own review standards file.
+Pepper is the Spice Labs PR review bot, powered by Claude Sonnet 4.5 on AWS Bedrock. The reusable workflow is centrally maintained here; each repo opts in with a ~15-line caller workflow and (optionally) carries its own review standards file.
 
 **Naming legend:** workflow display name is **Pepper PR Review**, status check appears as **Pepper PR Review / Pepper review**, and humans invoke on-demand mode by typing `@pepper` in a PR comment.
 
