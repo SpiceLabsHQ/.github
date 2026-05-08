@@ -1,5 +1,10 @@
 name: Claude Review
 
+# DO NOT add `pull_request_target` here. That event runs in the base repo's
+# context with full secret access even for fork PRs and would let a malicious
+# fork diff exfiltrate secrets. Plain `pull_request` is safe because GitHub
+# strips secrets from fork PR runs. The reusable workflow further gates
+# `issue_comment` to org members only.
 on:
   pull_request:
     types: [opened, ready_for_review]
@@ -16,7 +21,7 @@ jobs:
       actions: read
       issues: read
     secrets:
-      BEDROCK_ROLE_ARN: ${{ secrets.BEDROCK_ROLE_ARN }}
+      AWS_CLAUDE_BEDROCK_ROLE_ARN: ${{ secrets.AWS_CLAUDE_BEDROCK_ROLE_ARN }}
       CLAUDE_REVIEW_APP_ID: ${{ secrets.CLAUDE_REVIEW_APP_ID }}
       CLAUDE_REVIEW_APP_PRIVATE_KEY: ${{ secrets.CLAUDE_REVIEW_APP_PRIVATE_KEY }}
       LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
