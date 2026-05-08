@@ -1,0 +1,43 @@
+# Drop this file into each SpiceLabsHQ repo as `.github/workflows/scorecard.yml`.
+# It calls the centrally maintained reusable workflow in SpiceLabsHQ/.github.
+#
+# What it does:
+#   Runs the OpenSSF Scorecard against this repo on a weekly schedule (and on
+#   demand), uploads the SARIF results to the Security tab, and stores the raw
+#   SARIF as a workflow artifact for 30 days. Internal-only — no upload to the
+#   public OpenSSF dashboard.
+#
+# Scheduling:
+#   The schedule lives here in the caller, not in the reusable workflow —
+#   `workflow_call` can't dictate cron to its parent. Adjust the cron below if
+#   Monday 06:00 UTC doesn't suit your repo.
+
+name: OpenSSF Scorecard
+
+on:
+  # Weekly run. Default: Monday 06:00 UTC. Stagger across repos if you want to
+  # avoid hammering the Scorecard analysis runners at the same minute.
+  schedule:
+    - cron: "0 6 * * 1"
+  # Manual trigger for ad-hoc runs (e.g. after tightening branch protection).
+  workflow_dispatch:
+  # `branch_protection_rule` is Scorecard's recommended trigger: every change to
+  # branch protection re-scores the repo so the Branch-Protection check stays
+  # accurate without waiting for the weekly cron.
+  branch_protection_rule:
+
+# Calling-job permissions. The reusable workflow declares its own permissions
+# at job level; GitHub still requires the caller to grant at least the union of
+# what the called workflow needs.
+permissions:
+  contents: read
+  security-events: write   # SARIF upload to Code Scanning
+  actions: read            # Scorecard reads workflow files for Token-Permissions / Pinned-Dependencies
+
+jobs:
+  scorecard:
+    uses: SpiceLabsHQ/.github/.github/workflows/scorecard.yml@v1
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
