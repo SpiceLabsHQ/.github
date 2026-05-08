@@ -4,6 +4,6 @@
   },
   "statusLine": {
     "type": "command",
-    "command": "node .claude/spice-statusline.js"
+    "command": "node .claude/spice-statusline.cjs"
   }
 }
