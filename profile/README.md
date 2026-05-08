@@ -22,4 +22,4 @@ Most of what we cook up stays in the kitchen. We work across industries on proje
 
 ## Links
 
-- [spice.cc](http://spice.cc)
+- [spice.cc](https://spice.cc)
