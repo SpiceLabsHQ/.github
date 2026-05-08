@@ -33,7 +33,7 @@ jobs:
       contents: read
       pull-requests: write
       id-token: write
-      actions: read
+      actions: read       # Lets Pepper read failing CI logs for context.
       issues: read
     secrets:
       AWS_CLAUDE_BEDROCK_ROLE_ARN: ${{ secrets.AWS_CLAUDE_BEDROCK_ROLE_ARN }}
