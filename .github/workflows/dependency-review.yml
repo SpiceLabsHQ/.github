@@ -38,14 +38,18 @@ on:
       deny_licenses:
         description: |
           Comma-separated SPDX license identifiers that are denied org-wide.
-          Default targets strong-copyleft licenses that conflict with most
-          SpiceLabs distribution models. Legal/eng should refine this list as
-          obligations evolve. IGNORED when `allow_licenses` is non-empty
-          (dependency-review-action does not accept both — see precedence note
-          on `allow_licenses`).
+          Default blocks all GPL/AGPL/LGPL variants. Spice Labs maintains All
+          Rights Reserved on its own code; the copyleft obligations attached
+          to these licenses would force giving up that ARR posture if a
+          covered dependency were linked into a SpiceLabs product. LGPL is
+          included because dynamic-linking compliance is hard to guarantee in
+          SaaS / containerized deployments — repos with audited LGPL deps and
+          a clean dynamic-linking story can override via `allow_licenses`.
+          IGNORED when `allow_licenses` is non-empty (dependency-review-action
+          does not accept both — see precedence note on `allow_licenses`).
         required: false
         type: string
-        default: GPL-2.0,AGPL-3.0,LGPL-2.0,LGPL-2.1,LGPL-3.0,AGPL-1.0
+        default: GPL-2.0,GPL-3.0,AGPL-1.0,AGPL-3.0,LGPL-2.0,LGPL-2.1,LGPL-3.0
       allow_licenses:
         description: |
           Optional comma-separated SPDX allow-list. When set, the action
@@ -81,6 +85,22 @@ jobs:
     steps:
       - name: Checkout caller repo
         uses: actions/checkout@v4
+
+      # Surface caller misconfiguration: dependency-review-action rejects
+      # callers that pass both deny-licenses and allow-licenses, so the
+      # reusable workflow drops deny_licenses when allow_licenses is set
+      # (see precedence note on the `allow_licenses` input). That fix-up is
+      # silent — this step logs an Actions warning so the caller learns their
+      # `deny_licenses` value was ignored. Runs unconditionally and BEFORE the
+      # action call so it fires even if the action later fails.
+      - name: Detect license-input misuse
+        env:
+          ALLOW_LICENSES: ${{ inputs.allow_licenses }}
+          DENY_LICENSES: ${{ inputs.deny_licenses }}
+        run: |
+          if [ -n "${ALLOW_LICENSES:-}" ] && [ -n "${DENY_LICENSES:-}" ]; then
+            echo "::warning::Both allow_licenses and deny_licenses are set. allow_licenses takes precedence; deny_licenses will be silently ignored. Pass only one."
+          fi
 
       # actions/dependency-review-action v4.9.0 — pinned to SHA for defense in
       # depth (see "Pinning policy" comment at top of file). To upgrade: pick a
