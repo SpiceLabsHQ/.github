@@ -175,9 +175,15 @@ jobs:
         with:
           github_token: ${{ steps.app-token.outputs.token }}
           use_bedrock: "true"
-          model: ${{ inputs.model }}
           trigger_phrase: ${{ inputs.trigger_phrase }}
-          allowed_tools: ${{ steps.tools.outputs.allowed }}
           additional_permissions: |
             actions: read
           prompt: ${{ steps.prompt.outputs.prompt }}
+          # `model` and `--allowedTools` aren't top-level inputs on
+          # claude-code-action@v1; they go through `claude_args` (CLI flags
+          # passed to the underlying Claude Code SDK). Without these,
+          # the action silently uses defaults, which results in permission
+          # denials when Claude tries to run gh / git / curl from the prompt.
+          claude_args: >-
+            --model ${{ inputs.model }}
+            --allowedTools "${{ steps.tools.outputs.allowed }}"
