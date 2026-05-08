@@ -28,6 +28,7 @@ on:
 
 jobs:
   claude:
+    # Pin to @v1 (moving major-version tag). Bump pin only for breaking changes.
     uses: SpiceLabsHQ/.github/.github/workflows/claude-pr-review.yml@v1
     permissions:
       contents: read
