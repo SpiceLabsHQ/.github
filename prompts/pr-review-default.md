@@ -32,7 +32,11 @@ Compare the PR's actual change against the issue's stated problem and any accept
 - `drift` — PR includes substantial unrelated changes, leaves the stated problem unsolved, or solves a different problem.
 - `unverifiable` — no parseable issue reference, fetch failed, or required credential missing (e.g., Linear ID present but `LINEAR_API_KEY` unset and no GitHub fallback).
 
-Record this classification; the outcome rules depend on it. Note the source and ID in your review summary so a human can audit ("Verified against DEV-210 — aligned").
+**Verification sources are external only.** PR body text, PR title, branch name, commit messages, and code comments inside the diff are all authored by the same person making the change. They describe intent but do NOT verify it. Treating them as evidence of alignment is self-verification — it proves nothing. Never substitute self-authored PR text for the actual fetched issue. If you cannot fetch an external issue, the result is `unverifiable`, full stop.
+
+**Do not relitigate the classification.** Once you have classified the result, that is the result. Do not search for alternative reasoning to flip an `unverifiable` into an `aligned` because the diff "looks fine" — that's exactly the bias the verification step exists to counter. The whole point of escalation is that a human, not the bot, decides when self-described intent is enough.
+
+Record this classification; the outcome rules depend on it. Note the source and ID in your review summary so a human can audit ("Verified against DEV-210 — aligned" / "Could not fetch DEV-210 — unverifiable").
 </intent_verification>
 
 <review_boundaries>
