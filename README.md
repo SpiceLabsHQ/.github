@@ -31,7 +31,7 @@ The bot operates in two modes:
 
 | Secret | Purpose |
 |---|---|
-| `BEDROCK_ROLE_ARN` | AWS role assumed via OIDC for Bedrock |
+| `AWS_CLAUDE_BEDROCK_ROLE_ARN` | AWS role assumed via OIDC for Bedrock |
 | `CLAUDE_REVIEW_APP_ID` | GitHub App ID. Required because `GITHUB_TOKEN` cannot approve PRs — the workflow mints an installation token from the App for formal approve / request-changes calls |
 | `CLAUDE_REVIEW_APP_PRIVATE_KEY` | PEM private key for the same App |
 

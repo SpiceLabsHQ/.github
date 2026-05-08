@@ -43,7 +43,7 @@ on:
         type: string
         default: brodkin
     secrets:
-      BEDROCK_ROLE_ARN:
+      AWS_CLAUDE_BEDROCK_ROLE_ARN:
         description: ARN of the AWS role to assume via OIDC for Bedrock access.
         required: true
       CLAUDE_REVIEW_APP_ID:
@@ -164,7 +164,7 @@ jobs:
       - name: Configure AWS credentials (Bedrock OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.BEDROCK_ROLE_ARN }}
+          role-to-assume: ${{ secrets.AWS_CLAUDE_BEDROCK_ROLE_ARN }}
           aws-region: ${{ inputs.aws_region }}
           role-session-name: claude-pr-review-${{ github.run_id }}
 
