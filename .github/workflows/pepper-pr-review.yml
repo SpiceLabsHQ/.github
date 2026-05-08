@@ -1,4 +1,4 @@
-name: Claude PR Review (reusable)
+name: Pepper PR Review (reusable)
 
 # Security model — read before changing trigger handling:
 #
@@ -36,7 +36,7 @@ on:
         description: Path (relative to the calling repo) to the optional review standards file.
         required: false
         type: string
-        default: .claude/pr-review-standards.md
+        default: .pepper/pr-review-standards.md
       default_reviewer:
         description: GitHub login to fall back to when no other collaborator qualifies for assignment.
         required: false
@@ -55,10 +55,10 @@ on:
       AWS_CLAUDE_BEDROCK_ROLE_ARN:
         description: ARN of the AWS role to assume via OIDC for Bedrock access.
         required: true
-      CLAUDE_REVIEW_APP_ID:
+      PEPPER_PR_REVIEW_APP_ID:
         description: GitHub App ID used to mint a token capable of formal PR approvals.
         required: true
-      CLAUDE_REVIEW_APP_PRIVATE_KEY:
+      PEPPER_PR_REVIEW_APP_PRIVATE_KEY:
         description: Private key (PEM) for the GitHub App used for approvals.
         required: true
       LINEAR_API_KEY:
@@ -73,12 +73,12 @@ permissions:
   issues: read
 
 concurrency:
-  group: claude-pr-review-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}
+  group: pepper-pr-review-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}
   cancel-in-progress: false
 
 jobs:
   review:
-    name: Claude review
+    name: Pepper review
     runs-on: ubuntu-latest
     # See "Security model" comment at top of file.
     # `issue_comment` is gated to org members so non-members can't trigger
@@ -95,8 +95,8 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@v1
         with:
-          app-id: ${{ secrets.CLAUDE_REVIEW_APP_ID }}
-          private-key: ${{ secrets.CLAUDE_REVIEW_APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.PEPPER_PR_REVIEW_APP_ID }}
+          private-key: ${{ secrets.PEPPER_PR_REVIEW_APP_PRIVATE_KEY }}
 
       - name: Checkout caller repo
         uses: actions/checkout@v4
@@ -105,7 +105,7 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
 
       # `issue_comment` events check out the default branch by default. For on-demand
-      # mode (Claude making edits the user asked for) we need to be on the PR's head
+      # mode (Pepper making edits the user asked for) we need to be on the PR's head
       # branch so commits land on the right ref. Fork PRs aren't supported in
       # on-demand mode — the App token can't push to forks, and we don't want to
       # silently no-op.
@@ -152,7 +152,7 @@ jobs:
         with:
           repository: SpiceLabsHQ/.github
           ref: refs/tags/v1
-          path: .claude-review-tpl
+          path: .pepper-pr-review-tpl
           sparse-checkout: prompts
           sparse-checkout-cone-mode: false
           fetch-depth: 1
@@ -176,10 +176,10 @@ jobs:
           # edit during auto-review.
           case "${EVENT_NAME}" in
             pull_request)
-              TEMPLATE=".claude-review-tpl/prompts/pr-review-default.md"
+              TEMPLATE=".pepper-pr-review-tpl/prompts/pr-review-default.md"
               ;;
             issue_comment)
-              TEMPLATE=".claude-review-tpl/prompts/on-demand-default.md"
+              TEMPLATE=".pepper-pr-review-tpl/prompts/on-demand-default.md"
               ;;
             *)
               echo "Unsupported event: ${EVENT_NAME}" >&2
@@ -233,9 +233,9 @@ jobs:
           sed -i "s|{{PR_NUMBER}}|${PR_NUMBER}|g" "${ASSEMBLED}"
 
           {
-            echo 'prompt<<CLAUDE_PROMPT_EOF'
+            echo 'prompt<<PEPPER_PROMPT_EOF'
             cat "${ASSEMBLED}"
-            echo 'CLAUDE_PROMPT_EOF'
+            echo 'PEPPER_PROMPT_EOF'
           } >> "${GITHUB_OUTPUT}"
 
       - name: Determine allowed tools for this run
@@ -292,9 +292,9 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_CLAUDE_BEDROCK_ROLE_ARN }}
           aws-region: ${{ inputs.aws_region }}
-          role-session-name: claude-pr-review-${{ github.run_id }}
+          role-session-name: pepper-pr-review-${{ github.run_id }}
 
-      - name: Run Claude Code review
+      - name: Run Pepper
         uses: anthropics/claude-code-action@v1
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
@@ -310,7 +310,7 @@ jobs:
           # claude-code-action@v1; they go through `claude_args` (CLI flags
           # passed to the underlying Claude Code SDK). Without these,
           # the action silently uses defaults, which results in permission
-          # denials when Claude tries to run gh / git / curl from the prompt.
+          # denials when Pepper tries to run gh / git / curl from the prompt.
           claude_args: >-
             --model ${{ inputs.model }}
             --allowedTools "${{ steps.tools.outputs.allowed }}"

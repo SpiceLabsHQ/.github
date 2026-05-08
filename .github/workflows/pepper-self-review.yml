@@ -1,4 +1,4 @@
-name: Claude Review
+name: Pepper PR Review
 
 # DO NOT add `pull_request_target` here. That event runs in the base repo's
 # context with full secret access even for fork PRs and would let a malicious
@@ -12,8 +12,8 @@ on:
     types: [created]
 
 jobs:
-  claude:
-    uses: SpiceLabsHQ/.github/.github/workflows/claude-pr-review.yml@v1
+  pepper:
+    uses: SpiceLabsHQ/.github/.github/workflows/pepper-pr-review.yml@v1
     permissions:
       contents: read
       pull-requests: write
@@ -26,6 +26,6 @@ jobs:
       show_full_output: true
     secrets:
       AWS_CLAUDE_BEDROCK_ROLE_ARN: ${{ secrets.AWS_CLAUDE_BEDROCK_ROLE_ARN }}
-      CLAUDE_REVIEW_APP_ID: ${{ secrets.CLAUDE_REVIEW_APP_ID }}
-      CLAUDE_REVIEW_APP_PRIVATE_KEY: ${{ secrets.CLAUDE_REVIEW_APP_PRIVATE_KEY }}
+      PEPPER_PR_REVIEW_APP_ID: ${{ secrets.PEPPER_PR_REVIEW_APP_ID }}
+      PEPPER_PR_REVIEW_APP_PRIVATE_KEY: ${{ secrets.PEPPER_PR_REVIEW_APP_PRIVATE_KEY }}
       LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}

@@ -1,32 +1,32 @@
 #!/usr/bin/env bash
-# Rolls out the centralized Claude PR review caller workflow to SpiceLabsHQ repos.
+# Rolls out the centralized Pepper PR Review caller workflow to SpiceLabsHQ repos.
 #
 # For each target repo this script will:
-#   1. Skip if .github/workflows/claude.yml already exists on the default branch
+#   1. Skip if .github/workflows/pepper-pr-review.yml already exists on the default branch
 #   2. Create a branch, commit the caller workflow, push, open a PR
 #
 # Usage:
-#   scripts/rollout-claude-review.sh                      # dry-run across all non-archived org repos
-#   scripts/rollout-claude-review.sh --apply              # actually open PRs
-#   scripts/rollout-claude-review.sh --apply repo1 repo2  # only the named repos
+#   scripts/rollout-pepper-pr-review.sh                      # dry-run across all non-archived org repos
+#   scripts/rollout-pepper-pr-review.sh --apply              # actually open PRs
+#   scripts/rollout-pepper-pr-review.sh --apply repo1 repo2  # only the named repos
 #
 # Requirements: gh (authenticated), git, jq.
 
 set -euo pipefail
 
 ORG="SpiceLabsHQ"
-CALLER_TEMPLATE="$(cd "$(dirname "$0")/.." && pwd)/examples/caller-claude-pr-review.yml"
-TARGET_PATH=".github/workflows/claude.yml"
-BRANCH="chore/centralize-claude-pr-review"
-COMMIT_MSG="chore: adopt centralized Claude PR review workflow"
-PR_TITLE="Adopt centralized Claude PR review workflow"
+CALLER_TEMPLATE="$(cd "$(dirname "$0")/.." && pwd)/examples/caller-pepper-pr-review.yml"
+TARGET_PATH=".github/workflows/pepper-pr-review.yml"
+BRANCH="chore/adopt-pepper-pr-review"
+COMMIT_MSG="chore: adopt Pepper PR Review workflow"
+PR_TITLE="Adopt Pepper PR Review workflow"
 PR_BODY=$(cat <<'EOF'
-Adds a thin caller for the reusable Claude PR review workflow maintained in
+Adds a thin caller for the reusable Pepper PR Review workflow maintained in
 [SpiceLabsHQ/.github](https://github.com/SpiceLabsHQ/.github).
 
 - Auto-reviews on PR open and `ready_for_review`.
-- On-demand review by mentioning `@claude` in a PR comment.
-- Add `.claude/pr-review-standards.md` to layer in repo-specific standards.
+- On-demand review by mentioning `@pepper` in a PR comment.
+- Add `.pepper/pr-review-standards.md` to layer in repo-specific standards.
 
 Tracking: DEV-210
 EOF
