@@ -42,6 +42,15 @@ on:
         required: false
         type: string
         default: brodkin
+      show_full_output:
+        description: |
+          When true, claude-code-action streams the full SDK output (tool calls, reasoning, tool results) into the
+          Actions log. Useful for diagnosing permission denials, token waste, or unexpected outcomes. WARNING: log
+          contents are visible to anyone with read access to Actions runs — on a public repo, that's everyone.
+          Leave false in production; enable temporarily on a debug branch when you need to inspect tool calls.
+        required: false
+        type: boolean
+        default: false
     secrets:
       AWS_CLAUDE_BEDROCK_ROLE_ARN:
         description: ARN of the AWS role to assume via OIDC for Bedrock access.
@@ -178,6 +187,7 @@ jobs:
           trigger_phrase: ${{ inputs.trigger_phrase }}
           additional_permissions: |
             actions: read
+          show_full_output: ${{ inputs.show_full_output }}
           prompt: ${{ steps.prompt.outputs.prompt }}
           # `model` and `--allowedTools` aren't top-level inputs on
           # claude-code-action@v1; they go through `claude_args` (CLI flags

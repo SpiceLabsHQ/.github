@@ -44,3 +44,4 @@ jobs:
     #   model: us.anthropic.claude-opus-4-1-20250805-v1:0
     #   aws_region: us-east-1
     #   default_reviewer: someone-else
+    #   show_full_output: true   # debug only — exposes Claude's tool calls and reasoning in Actions logs (visible to anyone who can see the run)
