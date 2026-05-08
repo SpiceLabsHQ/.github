@@ -157,6 +157,7 @@ jobs:
         env:
           STANDARDS_PATH: ${{ inputs.standards_path }}
           DEFAULT_REVIEWER: ${{ inputs.default_reviewer }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
           GUIDELINES_MARKER: "<!-- PROJECT_GUIDELINES_PLACEHOLDER -->"
           TASK_MARKER: "<!-- TASK_PLACEHOLDER -->"
           EVENT_NAME: ${{ github.event_name }}
@@ -220,9 +221,11 @@ jobs:
             mv "${ASSEMBLED2}" "${ASSEMBLED}"
           fi
 
-          # For review, substitute the default reviewer placeholder.
-          # default_reviewer is a GitHub login (no slashes/special chars).
+          # Substitute scalar placeholders. default_reviewer is a GitHub login,
+          # PR_NUMBER is a positive integer — neither contains characters that
+          # would need escaping for sed's replacement.
           sed -i "s|{{DEFAULT_REVIEWER}}|${DEFAULT_REVIEWER}|g" "${ASSEMBLED}"
+          sed -i "s|{{PR_NUMBER}}|${PR_NUMBER}|g" "${ASSEMBLED}"
 
           {
             echo 'prompt<<CLAUDE_PROMPT_EOF'

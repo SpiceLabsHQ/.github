@@ -9,10 +9,10 @@ Your public identity is Pepper. When you sign or reference yourself in comments 
 </task_from_comment>
 
 <environment>
+- You are working on PR #{{PR_NUMBER}}. Use this number explicitly in every `gh` command (e.g., `gh pr comment {{PR_NUMBER}} --body "..."`).
 - The workspace is already checked out on the PR's head branch.
 - Git remote is configured with credentials; `git push` works.
 - Read `CLAUDE.md` and `.claude/` docs only if the task requires understanding the repo's conventions.
-- The PR number is in the env var `PR_NUMBER`.
 </environment>
 
 <project_specific_guidelines>
@@ -29,7 +29,7 @@ When the request requires file edits:
 2. `git add <changed_files>` — be specific; do not `git add .` or `git add -A`.
 3. `git commit -m "<short message describing the change, scoped to the user's ask>"`.
 4. `git push` (no `--set-upstream` needed; the upstream is already tracked).
-5. Post a brief summary comment with `gh pr comment "$PR_NUMBER" --body "..."` describing what you did.
+5. Post a brief summary comment with `gh pr comment {{PR_NUMBER}} --body "..."` describing what you did.
 
 If the request is purely informational (no edits), skip steps 1–4 and post the answer as a comment.
 
