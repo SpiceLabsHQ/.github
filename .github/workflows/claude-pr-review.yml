@@ -143,10 +143,15 @@ jobs:
           echo "Switched to PR branch: ${HEAD_REF} (committer: ${BOT_LOGIN})"
 
       - name: Fetch review prompt template
+        # Pin to the v1 tag rather than ${{ github.workflow_sha }}. When this
+        # reusable workflow is called from a PR in the SAME repo, workflow_sha
+        # resolves to the PR head SHA, not the v1 tag's SHA — so prompt updates
+        # land in main but stale PR branches keep using their own (old) copy.
+        # Always tracking v1 means the latest prompt is used for every review.
         uses: actions/checkout@v4
         with:
           repository: SpiceLabsHQ/.github
-          ref: ${{ github.workflow_sha }}
+          ref: refs/tags/v1
           path: .claude-review-tpl
           sparse-checkout: prompts
           sparse-checkout-cone-mode: false
