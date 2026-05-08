@@ -121,6 +121,8 @@ jobs:
           DEFAULT_PROMPT_PATH: .claude-review-tpl/prompts/pr-review-default.md
           DEFAULT_REVIEWER: ${{ inputs.default_reviewer }}
           MARKER: "<!-- PROJECT_GUIDELINES_PLACEHOLDER -->"
+          EVENT_NAME: ${{ github.event_name }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
           set -euo pipefail
 
@@ -150,9 +152,26 @@ jobs:
           # Use a sentinel-safe delimiter; default_reviewer is a GitHub login (no slashes/special chars).
           sed -i "s|{{DEFAULT_REVIEWER}}|${DEFAULT_REVIEWER}|g" "${ASSEMBLED}"
 
+          # Build the runtime context block. The action does not give Claude an
+          # explicit event_name, so without this it can't reliably distinguish
+          # auto-review from on-demand and defaults to reviewing every PR.
+          RUNTIME_CONTEXT="$(mktemp)"
+          {
+            echo "<runtime_context>"
+            echo "<triggering_event>${EVENT_NAME}</triggering_event>"
+            if [ "${EVENT_NAME}" = "issue_comment" ]; then
+              echo "<task_from_comment>"
+              # Strip the trigger phrase so Claude reads only the actual ask.
+              echo "${COMMENT_BODY}"
+              echo "</task_from_comment>"
+            fi
+            echo "</runtime_context>"
+            echo ""
+          } > "${RUNTIME_CONTEXT}"
+
           {
             echo 'prompt<<CLAUDE_PROMPT_EOF'
-            cat "${ASSEMBLED}"
+            cat "${RUNTIME_CONTEXT}" "${ASSEMBLED}"
             echo 'CLAUDE_PROMPT_EOF'
           } >> "${GITHUB_OUTPUT}"
 
