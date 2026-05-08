@@ -1,19 +1,19 @@
-# Drop this file into each SpiceLabsHQ repo as `.github/workflows/claude.yml`.
+# Drop this file into each SpiceLabsHQ repo as `.github/workflows/pepper-pr-review.yml`.
 # It calls the centrally maintained reusable workflow in SpiceLabsHQ/.github.
 #
 # Optional per-repo customization:
-#   - Add `.claude/pr-review-standards.md` for repo-specific review standards.
+#   - Add `.pepper/pr-review-standards.md` for repo-specific review standards.
 #   - Override inputs in the `with:` block below (model, aws_region, etc.).
 #
 # Required org-level secrets (set once on the SpiceLabsHQ org):
-#   - AWS_CLAUDE_BEDROCK_ROLE_ARN              — AWS role for Bedrock OIDC
-#   - CLAUDE_REVIEW_APP_ID          — GitHub App ID (needed for formal PR approvals)
-#   - CLAUDE_REVIEW_APP_PRIVATE_KEY — GitHub App private key
+#   - AWS_CLAUDE_BEDROCK_ROLE_ARN        — shared AWS role for Bedrock OIDC
+#   - PEPPER_PR_REVIEW_APP_ID            — GitHub App ID (needed for formal PR approvals)
+#   - PEPPER_PR_REVIEW_APP_PRIVATE_KEY   — GitHub App private key
 #
 # Optional org-level secret:
-#   - LINEAR_API_KEY                — enables Linear issue verification
+#   - LINEAR_API_KEY                     — enables Linear issue verification
 
-name: Claude Review
+name: Pepper PR Review
 
 # DO NOT add `pull_request_target` here. That event runs in the base repo's
 # context with full secret access even for fork PRs and would let a malicious
@@ -27,8 +27,8 @@ on:
     types: [created]
 
 jobs:
-  claude:
-    uses: SpiceLabsHQ/.github/.github/workflows/claude-pr-review.yml@v1
+  pepper:
+    uses: SpiceLabsHQ/.github/.github/workflows/pepper-pr-review.yml@v1
     permissions:
       contents: read
       pull-requests: write
@@ -37,11 +37,11 @@ jobs:
       issues: read
     secrets:
       AWS_CLAUDE_BEDROCK_ROLE_ARN: ${{ secrets.AWS_CLAUDE_BEDROCK_ROLE_ARN }}
-      CLAUDE_REVIEW_APP_ID: ${{ secrets.CLAUDE_REVIEW_APP_ID }}
-      CLAUDE_REVIEW_APP_PRIVATE_KEY: ${{ secrets.CLAUDE_REVIEW_APP_PRIVATE_KEY }}
+      PEPPER_PR_REVIEW_APP_ID: ${{ secrets.PEPPER_PR_REVIEW_APP_ID }}
+      PEPPER_PR_REVIEW_APP_PRIVATE_KEY: ${{ secrets.PEPPER_PR_REVIEW_APP_PRIVATE_KEY }}
       LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
     # with:
     #   model: us.anthropic.claude-opus-4-1-20250805-v1:0
     #   aws_region: us-east-1
     #   default_reviewer: someone-else
-    #   show_full_output: true   # debug only — exposes Claude's tool calls and reasoning in Actions logs (visible to anyone who can see the run)
+    #   show_full_output: true   # debug only — exposes Pepper's tool calls and reasoning in Actions logs (visible to anyone who can see the run)
