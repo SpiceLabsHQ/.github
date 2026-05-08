@@ -131,17 +131,31 @@ jobs:
           # files and, when found, append the matching p/<lang> ruleset. Using
           # `-print -quit` keeps each find cheap (stops after the first match).
           # Only language packs that are well-maintained upstream are wired up.
-          declare -A LANG_GLOBS=(
-            [p/javascript]="-name *.js -o -name *.jsx -o -name *.ts -o -name *.tsx"
-            [p/python]="-name *.py"
-            [p/golang]="-name *.go"
-            [p/java]="-name *.java"
+          #
+          # Patterns are stored as comma-separated lists of *literal* glob
+          # strings (e.g. `*.js`). We deliberately do NOT pre-format them as
+          # `-name *.js -o -name *.jsx ...` strings: an unquoted expansion of
+          # such a string would let the shell pathname-expand `*.js` against
+          # the workspace cwd, which can substitute literal filenames into the
+          # find argv and break the invocation. Instead, we build a properly
+          # quoted bash array of `-name <pattern>` args and expand it via
+          # `"${args[@]}"`, which preserves each pattern as a single argv
+          # token with no globbing.
+          declare -A LANG_GLOB_PATTERNS=(
+            [p/javascript]="*.js,*.jsx,*.ts,*.tsx"
+            [p/python]="*.py"
+            [p/golang]="*.go"
+            [p/java]="*.java"
           )
           # Iterate in a stable order so logs are deterministic.
           for ruleset in p/javascript p/python p/golang p/java; do
-            globs="${LANG_GLOBS[$ruleset]}"
-            # shellcheck disable=SC2086
-            if [ -n "$(find . -type d \( -name node_modules -o -name .git -o -name vendor -o -name dist -o -name build \) -prune -o -type f \( ${globs} \) -print -quit 2>/dev/null)" ]; then
+            IFS=',' read -ra patterns <<< "${LANG_GLOB_PATTERNS[$ruleset]}"
+            args=()
+            for ((i=0; i<${#patterns[@]}; i++)); do
+              [ $i -gt 0 ] && args+=(-o)
+              args+=(-name "${patterns[$i]}")
+            done
+            if [ -n "$(find . -type d \( -name node_modules -o -name .git -o -name vendor -o -name dist -o -name build \) -prune -o -type f \( "${args[@]}" \) -print -quit 2>/dev/null)" ]; then
               CONFIGS+=(--config "${ruleset}")
               echo "Detected source for ${ruleset} — adding ruleset"
             fi
