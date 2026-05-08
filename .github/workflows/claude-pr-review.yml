@@ -31,7 +31,7 @@ on:
         description: Comment phrase that triggers an on-demand run.
         required: false
         type: string
-        default: "@claude"
+        default: "@pepper"
       standards_path:
         description: Path (relative to the calling repo) to the optional review standards file.
         required: false

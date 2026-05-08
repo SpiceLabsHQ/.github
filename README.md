@@ -4,14 +4,14 @@ Organization-level defaults for [SpiceLabsHQ](https://github.com/SpiceLabsHQ). T
 
 ## Reusable workflows
 
-### Claude PR Review (`claude-pr-review.yml`)
+### Pepper — PR review bot (`claude-pr-review.yml`)
 
-Centrally maintained Claude Code PR review running on AWS Bedrock. Each repo opts in with a ~15-line caller workflow and (optionally) carries its own review standards file.
+Pepper is the SpiceLabs PR review bot, powered by Claude Sonnet 4.5 on AWS Bedrock. The reusable workflow is centrally maintained here; each repo opts in with a ~15-line caller workflow and (optionally) carries its own review standards file.
 
 The bot operates in two modes:
 
 - **Auto-review** (PR opened / ready_for_review): performs a full review and chooses one of three outcomes — formal approve, formal request-changes, or comment-with-reviewer-assignment. Read-only on the filesystem.
-- **On-demand** (`@claude` mention in a PR comment): treats the comment as a task and can edit files + push commits to the PR branch to satisfy the request.
+- **On-demand** (`@pepper` mention in a PR comment): treats the comment as a task and can edit files + push commits to the PR branch to satisfy the request.
 
 **1. Add the caller workflow** to each repo at `.github/workflows/claude.yml`. Copy-paste-ready version at [`examples/caller-claude-pr-review.yml`](examples/caller-claude-pr-review.yml).
 
@@ -23,10 +23,10 @@ The bot operates in two modes:
 |---|---|---|
 | `model` | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` | Bedrock inference profile or model ID |
 | `aws_region` | `us-west-2` | Bedrock region |
-| `trigger_phrase` | `@claude` | Comment phrase that triggers on-demand mode |
+| `trigger_phrase` | `@pepper` | Comment phrase that triggers on-demand mode |
 | `standards_path` | `.claude/pr-review-standards.md` | Override if your repo stores standards elsewhere |
 | `default_reviewer` | `brodkin` | Fallback reviewer login when no other collaborator qualifies for assignment |
-| `show_full_output` | `false` | When `true`, Claude's tool calls + reasoning + tool results stream into Actions logs. Useful for diagnosing permission denials or wasted turns. **Public-repo callers: anyone who can see the Actions run sees the full output** — use only on debug branches |
+| `show_full_output` | `false` | When `true`, Pepper's tool calls + reasoning + tool results stream into Actions logs. Useful for diagnosing permission denials or wasted turns. **Public-repo callers: anyone who can see the Actions run sees the full output** — use only on debug branches |
 
 **4. Required secrets** (set once at the org level — they don't auto-inherit, the caller passes them explicitly):
 
@@ -40,7 +40,7 @@ The bot operates in two modes:
 
 | Secret | Effect when set |
 |---|---|
-| `LINEAR_API_KEY` | Workflow exposes the key as env to the action; prompt instructs Claude to fetch the linked Linear issue (detected from branch name or PR title) and verify the PR's scope against it |
+| `LINEAR_API_KEY` | Workflow exposes the key as env to the action; prompt instructs Pepper to fetch the linked Linear issue (detected from branch name or PR title) and verify the PR's scope against it |
 
 **6. Bulk rollout:** `scripts/rollout-claude-review.sh` opens an adoption PR in every non-archived org repo. Defaults to dry-run; pass `--apply` to actually create PRs.
 
