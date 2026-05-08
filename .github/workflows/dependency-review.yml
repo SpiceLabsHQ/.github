@@ -1,0 +1,103 @@
+name: Dependency Review (reusable)
+
+# Trigger:        workflow_call only — callers wire this up to `pull_request`.
+# Scope:          Wraps actions/dependency-review-action with org-standard
+#                 severity threshold + license policy. Fails PRs that introduce
+#                 (a) CVEs at/above the configured severity OR (b) dependencies
+#                 carrying licenses on the deny-list (or absent from the
+#                 allow-list, if the caller opts into allow-list mode).
+# Inputs:         fail_on_severity, deny_licenses, allow_licenses,
+#                 comment_summary_in_pr — see workflow_call.inputs below.
+# Permissions:    contents: read (action reads the diff via the API),
+#                 pull-requests: write (action posts the optional summary
+#                 comment). Both granted unconditionally for simplicity; the
+#                 underlying action only writes a comment when
+#                 comment_summary_in_pr is true, so the broader scope is inert
+#                 in practice.
+# Pinning policy: actions/checkout is first-party and tag-pinned to @v4 per the
+#                 actions-audit policy. actions/dependency-review-action is
+#                 ALSO first-party (under the actions/* namespace), so a tag
+#                 pin would satisfy policy — but we deliberately pin to a full
+#                 40-char SHA here for defense in depth: this action runs on
+#                 every PR and ingests the diff, so a compromised tag would be
+#                 high-blast-radius. SHA pinning makes the upgrade path
+#                 explicit (bump in this file, review the diff, ship). The
+#                 trailing comment records the human-readable version.
+
+on:
+  workflow_call:
+    inputs:
+      fail_on_severity:
+        description: |
+          Minimum CVE severity that fails the check. One of:
+          low | moderate | high | critical. Passed straight through to
+          dependency-review-action's `fail-on-severity` input.
+        required: false
+        type: string
+        default: high
+      deny_licenses:
+        description: |
+          Comma-separated SPDX license identifiers that are denied org-wide.
+          Default targets strong-copyleft licenses that conflict with most
+          SpiceLabs distribution models. Legal/eng should refine this list as
+          obligations evolve. IGNORED when `allow_licenses` is non-empty
+          (dependency-review-action does not accept both — see precedence note
+          on `allow_licenses`).
+        required: false
+        type: string
+        default: GPL-2.0,AGPL-3.0,LGPL-2.0,LGPL-2.1,LGPL-3.0,AGPL-1.0
+      allow_licenses:
+        description: |
+          Optional comma-separated SPDX allow-list. When set, the action
+          switches to allow-list mode — only listed licenses pass, everything
+          else (including unknown / unidentified) is rejected. Stricter than
+          deny-list mode; use when the org needs a closed license policy.
+          PRECEDENCE: when this input is non-empty, `deny_licenses` is ignored
+          because dependency-review-action rejects callers that pass both.
+        required: false
+        type: string
+        default: ""
+      comment_summary_in_pr:
+        description: |
+          When true, dependency-review-action posts its built-in vulnerability
+          + license summary as a PR comment. Requires pull-requests: write
+          (granted at workflow level).
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: dependency-review-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: Dependency review
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout caller repo
+        uses: actions/checkout@v4
+
+      # actions/dependency-review-action v4.9.0 — pinned to SHA for defense in
+      # depth (see "Pinning policy" comment at top of file). To upgrade: pick a
+      # new release at https://github.com/actions/dependency-review-action/releases,
+      # resolve its commit SHA, update both the SHA and the trailing comment.
+      #
+      # The conditional wiring of deny-licenses vs allow-licenses below
+      # implements the documented precedence: when allow_licenses is set, the
+      # caller has opted into allow-list mode and deny_licenses is ignored;
+      # otherwise the org-default deny-list applies. The action itself errors
+      # out if both are passed simultaneously, so the empty-string fall-through
+      # below (`|| ''`) leaves the relevant input unset rather than empty
+      # vs. populated — preventing the "passed both" error case.
+      - name: Dependency Review
+        uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
+        with:
+          fail-on-severity: ${{ inputs.fail_on_severity }}
+          deny-licenses: ${{ inputs.allow_licenses == '' && inputs.deny_licenses || '' }}
+          allow-licenses: ${{ inputs.allow_licenses != '' && inputs.allow_licenses || '' }}
+          comment-summary-in-pr: ${{ inputs.comment_summary_in_pr }}

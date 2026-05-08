@@ -47,3 +47,32 @@ The bot operates in two modes:
 **6. Bulk rollout:** `scripts/rollout-pepper-pr-review.sh` opens an adoption PR in every non-archived org repo. Defaults to dry-run; pass `--apply` to actually create PRs.
 
 **Versioning:** Callers pin the reusable workflow with `@v1`; the reusable workflow pins the underlying `anthropics/claude-code-action` ref. Action upgrades happen in one place.
+
+### Dependency Review (`dependency-review.yml`)
+
+Wraps [`actions/dependency-review-action`](https://github.com/actions/dependency-review-action) with org-standard severity threshold and license policy. Designed to fail PRs that introduce (a) dependencies with CVEs at/above the configured severity, or (b) dependencies carrying denied licenses.
+
+**1. Add the caller workflow** to each repo at `.github/workflows/dependency-review.yml`. Copy-paste-ready version at [`examples/caller-dependency-review.yml`](examples/caller-dependency-review.yml).
+
+**2. Inputs** (all optional, override via `with:`):
+
+| Input | Default | Notes |
+|---|---|---|
+| `fail_on_severity` | `high` | Minimum CVE severity that fails the check. One of `low`, `moderate`, `high`, `critical` |
+| `deny_licenses` | `GPL-2.0,AGPL-3.0,LGPL-2.0,LGPL-2.1,LGPL-3.0,AGPL-1.0` | Comma-separated SPDX identifiers denied org-wide. Conservative copyleft default; legal/eng input may refine |
+| `allow_licenses` | _(empty)_ | Optional allow-list. When non-empty, the action switches to allow-list mode and `deny_licenses` is ignored — see precedence below |
+| `comment_summary_in_pr` | `true` | Post the action's built-in vulnerability + license summary as a PR comment |
+
+**Precedence — `allow_licenses` vs `deny_licenses`:** `actions/dependency-review-action` rejects callers that pass both at once. When `allow_licenses` is set the reusable workflow drops `deny_licenses`, putting the action into allow-list mode (stricter — only listed licenses pass). When `allow_licenses` is empty the org-default deny-list applies. To override the deny-list, pass your own `deny_licenses` value; to switch policies entirely, set `allow_licenses`.
+
+**3. Required permissions** in the caller (already shown in the example):
+
+```yaml
+permissions:
+  contents: read
+  pull-requests: write   # only used when comment_summary_in_pr is true
+```
+
+**4. Requirements:** Dependency Review API is free on public repos. On private repos it requires GitHub Advanced Security.
+
+**Versioning:** Callers pin the reusable workflow with `@v1`; the reusable workflow SHA-pins the underlying `actions/dependency-review-action` ref. Action upgrades happen in one place.
