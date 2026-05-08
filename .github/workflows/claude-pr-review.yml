@@ -278,7 +278,7 @@ jobs:
           jq -nc --arg key "${LINEAR_API_KEY}" '{
             mcpServers: {
               linear: {
-                type: "sse",
+                type: "http",
                 url: "https://mcp.linear.app/mcp",
                 headers: { Authorization: ("Bearer " + $key) }
               }
