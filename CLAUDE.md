@@ -1,3 +1,5 @@
+This file documents the .github repo's purpose for AI assistants.
+
 # CLAUDE.md
 
 This repository maintains the `.github` repo for the **SpiceLabsHQ** GitHub organization (`SpiceLabsHQ/.github`).
