@@ -131,10 +131,13 @@ jobs:
           git fetch origin "${HEAD_REF}":"${HEAD_REF}"
           git checkout "${HEAD_REF}"
 
-          BOT_SLUG="${APP_SLUG:-spicelabs-claude-pr-review-actions}"
-          BOT_LOGIN="${BOT_SLUG}[bot]"
+          if [ -z "${APP_SLUG}" ]; then
+            echo "::error::actions/create-github-app-token did not produce app-slug. Pin to a newer minor of the action that exposes it."
+            exit 1
+          fi
+          BOT_LOGIN="${APP_SLUG}[bot]"
           # Public users endpoint, accessible to install tokens. Brackets URL-encoded.
-          BOT_USER_ID=$(gh api "users/${BOT_SLUG}%5Bbot%5D" --jq '.id')
+          BOT_USER_ID=$(gh api "users/${APP_SLUG}%5Bbot%5D" --jq '.id')
           git config user.name "${BOT_LOGIN}"
           git config user.email "${BOT_USER_ID}+${BOT_LOGIN}@users.noreply.github.com"
           echo "Switched to PR branch: ${HEAD_REF} (committer: ${BOT_LOGIN})"
@@ -149,20 +152,37 @@ jobs:
           sparse-checkout-cone-mode: false
           fetch-depth: 1
 
-      - name: Build review prompt
+      - name: Build prompt
         id: prompt
         env:
           STANDARDS_PATH: ${{ inputs.standards_path }}
-          DEFAULT_PROMPT_PATH: .claude-review-tpl/prompts/pr-review-default.md
           DEFAULT_REVIEWER: ${{ inputs.default_reviewer }}
-          MARKER: "<!-- PROJECT_GUIDELINES_PLACEHOLDER -->"
+          GUIDELINES_MARKER: "<!-- PROJECT_GUIDELINES_PLACEHOLDER -->"
+          TASK_MARKER: "<!-- TASK_PLACEHOLDER -->"
           EVENT_NAME: ${{ github.event_name }}
           COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
           set -euo pipefail
 
-          if [ ! -f "${DEFAULT_PROMPT_PATH}" ]; then
-            echo "Default prompt not found at ${DEFAULT_PROMPT_PATH}" >&2
+          # Pick the right template for the triggering event. Each mode has its
+          # own purpose-built prompt — sharing a prompt led to the model picking
+          # the wrong mode and either reviewing on-demand requests or trying to
+          # edit during auto-review.
+          case "${EVENT_NAME}" in
+            pull_request)
+              TEMPLATE=".claude-review-tpl/prompts/pr-review-default.md"
+              ;;
+            issue_comment)
+              TEMPLATE=".claude-review-tpl/prompts/on-demand-default.md"
+              ;;
+            *)
+              echo "Unsupported event: ${EVENT_NAME}" >&2
+              exit 1
+              ;;
+          esac
+
+          if [ ! -f "${TEMPLATE}" ]; then
+            echo "Prompt template not found at ${TEMPLATE}" >&2
             exit 1
           fi
 
@@ -170,43 +190,43 @@ jobs:
           if [ -n "${STANDARDS_PATH}" ] && [ -f "${STANDARDS_PATH}" ]; then
             cat "${STANDARDS_PATH}" > "${PROJECT_BLOCK}"
           else
-            echo "_None provided. Apply the organization defaults above._" > "${PROJECT_BLOCK}"
+            echo "_None provided. Apply the defaults above._" > "${PROJECT_BLOCK}"
           fi
 
+          # Substitute the project guidelines block (both templates have it).
           ASSEMBLED="$(mktemp)"
-          awk -v marker="${MARKER}" -v block_file="${PROJECT_BLOCK}" '
+          awk -v marker="${GUIDELINES_MARKER}" -v block_file="${PROJECT_BLOCK}" '
             $0 == marker {
               while ((getline line < block_file) > 0) print line
               close(block_file)
               next
             }
             { print }
-          ' "${DEFAULT_PROMPT_PATH}" > "${ASSEMBLED}"
+          ' "${TEMPLATE}" > "${ASSEMBLED}"
 
-          # Substitute the default reviewer placeholder.
-          # Use a sentinel-safe delimiter; default_reviewer is a GitHub login (no slashes/special chars).
+          # For on-demand, substitute the user's comment in for the task placeholder.
+          if [ "${EVENT_NAME}" = "issue_comment" ]; then
+            TASK_FILE="$(mktemp)"
+            printf '%s\n' "${COMMENT_BODY}" > "${TASK_FILE}"
+            ASSEMBLED2="$(mktemp)"
+            awk -v marker="${TASK_MARKER}" -v block_file="${TASK_FILE}" '
+              $0 == marker {
+                while ((getline line < block_file) > 0) print line
+                close(block_file)
+                next
+              }
+              { print }
+            ' "${ASSEMBLED}" > "${ASSEMBLED2}"
+            mv "${ASSEMBLED2}" "${ASSEMBLED}"
+          fi
+
+          # For review, substitute the default reviewer placeholder.
+          # default_reviewer is a GitHub login (no slashes/special chars).
           sed -i "s|{{DEFAULT_REVIEWER}}|${DEFAULT_REVIEWER}|g" "${ASSEMBLED}"
-
-          # Build the runtime context block. The action does not give Claude an
-          # explicit event_name, so without this it can't reliably distinguish
-          # auto-review from on-demand and defaults to reviewing every PR.
-          RUNTIME_CONTEXT="$(mktemp)"
-          {
-            echo "<runtime_context>"
-            echo "<triggering_event>${EVENT_NAME}</triggering_event>"
-            if [ "${EVENT_NAME}" = "issue_comment" ]; then
-              echo "<task_from_comment>"
-              # Strip the trigger phrase so Claude reads only the actual ask.
-              echo "${COMMENT_BODY}"
-              echo "</task_from_comment>"
-            fi
-            echo "</runtime_context>"
-            echo ""
-          } > "${RUNTIME_CONTEXT}"
 
           {
             echo 'prompt<<CLAUDE_PROMPT_EOF'
-            cat "${RUNTIME_CONTEXT}" "${ASSEMBLED}"
+            cat "${ASSEMBLED}"
             echo 'CLAUDE_PROMPT_EOF'
           } >> "${GITHUB_OUTPUT}"
 
