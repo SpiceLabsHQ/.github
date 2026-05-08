@@ -1,0 +1,50 @@
+# Drop this file into each SpiceLabsHQ repo as `.github/workflows/release-please.yml`.
+# It calls the centrally maintained reusable workflow in SpiceLabsHQ/.github.
+#
+# Per-repo prerequisites:
+#   - `release-please-config.json`        — declares release-type and extra-files bumps
+#   - `.release-please-manifest.json`     — current versions; rewritten by release-please
+#
+# Token strategy (the `secrets:` block below picks one):
+#
+#   GITHUB_TOKEN path (default — empty `secrets:` block, or omit it entirely):
+#     - Easiest: zero org configuration.
+#     - Caveat: GitHub deliberately suppresses workflow events triggered by
+#       PRs/commits/tags created with GITHUB_TOKEN. The release PR will open
+#       and merging it will create the tag, but no other workflow in this
+#       repo will fire from that tag push. Use this only if you don't have
+#       a release-artifacts pipeline (DEV-223) wired up downstream.
+#
+#   GitHub App path (uncomment the secrets below):
+#     - Mints a short-lived installation token; PRs and tags are authored
+#       by the App, so downstream `push: tags:` and `release:` workflows
+#       (release-artifacts.yml) DO trigger.
+#     - Requires the `Release Bot` GitHub App installed on the org with
+#       `contents: write` and `pull-requests: write` and the secrets set.
+
+name: Release Please
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  release-please:
+    uses: SpiceLabsHQ/.github/.github/workflows/release-please.yml@v1
+    permissions:
+      contents: write
+      pull-requests: write
+    # Default: GITHUB_TOKEN. Leave `secrets:` empty (or remove it) to use it.
+    # secrets: {}
+    #
+    # GitHub App path — uncomment to enable tag-push cascading into
+    # release-artifacts.yml or any other tag-triggered workflow:
+    # secrets:
+    #   RELEASE_APP_ID:          ${{ secrets.RELEASE_APP_ID }}
+    #   RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+    #
+    # Override defaults if your repo isn't standard:
+    # with:
+    #   target_branch: develop
+    #   config_file: .release-please/config.json
+    #   manifest_file: .release-please/manifest.json
