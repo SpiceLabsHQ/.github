@@ -15,6 +15,11 @@
 
 name: Claude Review
 
+# DO NOT add `pull_request_target` here. That event runs in the base repo's
+# context with full secret access even for fork PRs and would let a malicious
+# fork diff exfiltrate secrets. Plain `pull_request` is safe because GitHub
+# strips secrets from fork PR runs. The reusable workflow further gates
+# `issue_comment` to org members only.
 on:
   pull_request:
     types: [opened, ready_for_review]
