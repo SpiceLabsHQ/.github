@@ -1,0 +1,36 @@
+# Drop this file into each SpiceLabsHQ repo as `.github/workflows/pr-hygiene.yml`.
+# It calls the centrally maintained reusable workflow in SpiceLabsHQ/.github.
+#
+# What this enforces:
+#   - PR title must follow Conventional Commits (blocking) — required so
+#     release-please can classify the change at merge time.
+#   - PRs above the org soft size threshold get an informational comment
+#     (non-blocking) — awareness, not enforcement.
+#
+# No secrets required.
+
+name: PR Hygiene
+
+on:
+  pull_request:
+    # `edited` matters: it fires when the title changes, so a fix to a bad
+    # title re-runs the check without forcing a new commit.
+    # `synchronize` keeps the size-warning comment fresh as commits are pushed.
+    types: [opened, edited, synchronize]
+
+jobs:
+  hygiene:
+    uses: SpiceLabsHQ/.github/.github/workflows/pr-hygiene.yml@v1
+    permissions:
+      contents: read
+      pull-requests: write
+    # with:
+    #   # Require a scope, e.g. `feat(api): ...`. Off by default.
+    #   require_scope: true
+    #   # Raise the soft size threshold for repos that ship in larger chunks.
+    #   large_pr_threshold: 1000
+    #   # Restrict the allowed CC types. Default includes all 11:
+    #   # feat,fix,chore,docs,refactor,test,build,ci,perf,style,revert.
+    #   # The line below is a TRIMMED example (drops `style`); use it as a
+    #   # template if you want a narrower set.
+    #   types: feat,fix,chore,docs,refactor,test,build,ci,perf,revert
