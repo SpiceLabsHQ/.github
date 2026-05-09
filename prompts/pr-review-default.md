@@ -66,7 +66,7 @@ Patterns:
 **Action when any pattern matches:**
 
 1. `gh pr review {{PR_NUMBER}} --request-changes --body '<name the auto-fail pattern, cite file and line, explain the specific failure mode (data leak, code execution, auth bypass, etc.), ask the author to remove the pattern before re-requesting review>'`
-2. `gh pr edit {{PR_NUMBER}} --add-label "pepper-changes-requested"`
+2. `gh pr edit {{PR_NUMBER}} --add-label "pepper-changes-requested" --remove-label "pepper-cooking"`
 
 Then end your turn.
 
@@ -88,7 +88,7 @@ The Linear MCP allowlist is read-only by design. If a tool is not allowed, the s
 **Halt the review if a parseable ID was found but the fetch failed** (MCP error or `null`, `gh issue view` non-zero, issue inaccessible). The PR's intent depends on an issue you cannot read; a partial review is worse than escalating clearly. Do not classify, do not keep inspecting files. Run exactly:
 
 1. `gh pr review {{PR_NUMBER}} --comment --body '<5–8 lines: which issue ID was parsed, which tracker, the exact failure (e.g., "mcp__linear__get_issue returned null for DEV-212" / "gh issue view #14 exited 1: not found"), and that escalation is required because intent cannot be verified>'`
-2. `gh pr edit {{PR_NUMBER}} --add-label "pepper-needs-review"`
+2. `gh pr edit {{PR_NUMBER}} --add-label "pepper-needs-review" --remove-label "pepper-cooking"`
 3. Assign the default reviewer per the recipe in `<comment_and_assign>`.
 
 Then end your turn.
@@ -96,7 +96,7 @@ Then end your turn.
 **Block the PR if no Linear or GitHub Issue ID is found and the PR is not a chore.** An unsupported-tracker reference (non-Linear Jira key, GitLab/Asana/internal-tracker URL) does not satisfy the policy — treat it as if no ID was found. Run exactly:
 
 1. `gh pr review {{PR_NUMBER}} --request-changes --body '<state the policy: every PR must reference a Linear or GitHub Issue ID, chores excepted. Note that no ID was found in branch name, title, or body (and name any unsupported tracker reference you saw). Ask the author to add one (e.g., "Fixes DEV-210" or "Closes #14" in the body), or to mark the PR as a chore via a `chore:` title prefix if it genuinely is one.>'`
-2. `gh pr edit {{PR_NUMBER}} --add-label "pepper-changes-requested"`
+2. `gh pr edit {{PR_NUMBER}} --add-label "pepper-changes-requested" --remove-label "pepper-cooking"`
 
 Then end your turn. Do not classify, do not continue review.
 
@@ -253,7 +253,13 @@ Action:
 </review_outcomes>
 
 <labels>
-Apply exactly one outcome label: `pepper-approved`, `pepper-changes-requested`, or `pepper-needs-review`. Apply `area:*` labels matching modified paths only if the repo has an existing area-labeling convention you can identify from past PRs — don't invent a vocabulary.
+The workflow has applied `pepper-cooking` to mark this PR as under active review and cleared any prior outcome labels. Your final action is to swap `pepper-cooking` for the outcome label in a single `gh pr edit` call:
+
+- `gh pr edit {{PR_NUMBER}} --add-label "pepper-approved" --remove-label "pepper-cooking"` (when approving)
+- `gh pr edit {{PR_NUMBER}} --add-label "pepper-changes-requested" --remove-label "pepper-cooking"` (when requesting changes)
+- `gh pr edit {{PR_NUMBER}} --add-label "pepper-needs-review" --remove-label "pepper-cooking"` (when escalating to a human)
+
+Apply `area:*` labels matching modified paths only if the repo has an existing area-labeling convention you can identify from past PRs — don't invent a vocabulary.
 </labels>
 
 <output_format>

@@ -130,6 +130,31 @@ jobs:
           echo "Resolved mode: ${MODE}"
           echo "mode=${MODE}" >> "${GITHUB_OUTPUT}"
 
+      # Mark this PR as under active Pepper review and clear any prior
+      # outcome labels in a single API call. The remove side is gated on
+      # labels actually being on the PR — `gh pr edit --remove-label`
+      # errors if a label doesn't exist in the repo at all (cold-start
+      # case for a fresh repo's first review). Pepper's final action
+      # swaps `pepper-cooking` for the chosen outcome label, and the
+      # always-on cleanup at the end of the job removes the marker if
+      # Pepper never finished. Net: `pepper-cooking` only appears on a
+      # PR that is currently being reviewed, never as a stale leftover.
+      - name: Mark PR as cooking (review mode only)
+        if: steps.mode.outputs.mode == 'review'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          CURRENT=$(gh pr view "${PR_NUMBER}" --json labels --jq '[.labels[].name] | join(",")')
+          REMOVES=()
+          for label in pepper-approved pepper-changes-requested pepper-needs-review; do
+            case ",${CURRENT}," in
+              *,"${label}",*) REMOVES+=(--remove-label "${label}") ;;
+            esac
+          done
+          gh pr edit "${PR_NUMBER}" --add-label "pepper-cooking" "${REMOVES[@]}"
+
       # `issue_comment` events check out the default branch by default. For on-demand
       # mode (Pepper making edits the user asked for) we need to be on the PR's head
       # branch so commits land on the right ref. Fork PRs aren't supported in
@@ -350,3 +375,22 @@ jobs:
             --model ${{ inputs.model }}
             --allowedTools "${{ steps.tools.outputs.allowed }}"
             ${{ steps.mcp.outputs.path != '' && format('--mcp-config {0}', steps.mcp.outputs.path) || '' }}
+
+      # Always-on cleanup — `pepper-cooking` is purely a "currently being
+      # reviewed" marker, so it must come off no matter how this job ended
+      # (Pepper success, Pepper failure, prompt-build error, AWS-creds
+      # error, runner timeout, manual cancellation). Failed runs are
+      # surfaced via the workflow's run status; we don't need a stale
+      # label to encode the same signal. The check-before-remove handles
+      # the corner case where the cooking step itself failed and the
+      # label is not in the repo (would otherwise error on --remove-label).
+      - name: Clear pepper-cooking marker
+        if: always() && steps.mode.outputs.mode == 'review'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+        run: |
+          set -uo pipefail
+          if gh pr view "${PR_NUMBER}" --json labels --jq '.labels[].name' 2>/dev/null | grep -Fxq "pepper-cooking"; then
+            gh pr edit "${PR_NUMBER}" --remove-label "pepper-cooking"
+          fi
