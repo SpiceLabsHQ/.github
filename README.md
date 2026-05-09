@@ -6,7 +6,7 @@ Organization-level defaults for [SpiceLabsHQ](https://github.com/SpiceLabsHQ). T
 
 ### Pepper PR Review (`pepper-pr-review.yml`)
 
-Pepper is the SpiceLabs PR review bot, powered by Claude Sonnet 4.5 on AWS Bedrock. The reusable workflow is centrally maintained here; each repo opts in with a ~15-line caller workflow and (optionally) carries its own review standards file.
+Pepper is the Spice Labs PR review bot, powered by Claude Sonnet 4.5 on AWS Bedrock. The reusable workflow is centrally maintained here; each repo opts in with a ~15-line caller workflow and (optionally) carries its own review standards file.
 
 **Naming legend:** workflow display name is **Pepper PR Review**, status check appears as **Pepper PR Review / Pepper review**, and humans invoke on-demand mode by typing `@pepper` in a PR comment.
 
@@ -225,7 +225,7 @@ For a single-package repo, use the single-key form instead: `{".": "0.0.0"}`. **
 
 ### SAST (Semgrep) (`sast.yml`)
 
-Reusable Semgrep scan that runs the SpiceLabs-curated default ruleset, layers on auto-detected language packs, and uploads SARIF to GitHub Code Scanning (Security tab). Catches OWASP Top Ten classes — including A03 injection — across any caller language without per-repo wiring.
+Reusable Semgrep scan that runs the Spice Labs-curated default ruleset, layers on auto-detected language packs, and uploads SARIF to GitHub Code Scanning (Security tab). Catches OWASP Top Ten classes — including A03 injection — across any caller language without per-repo wiring.
 
 Semgrep is installed via `pip install semgrep==<pinned-version>` so the rule engine version is plain-text auditable in the reusable workflow. No third-party Semgrep Action is used. The pinned version is bumped deliberately when the org wants new rules.
 
@@ -384,7 +384,7 @@ Scorecard's publish endpoint (`post_results.go` in the upstream Scorecard repo) 
 | `allow_licenses` | _(empty)_ | Optional allow-list. When non-empty, the action switches to allow-list mode and `deny_licenses` is ignored — see precedence below |
 | `comment_summary_in_pr` | `true` | Post the action's built-in vulnerability + license summary as a PR comment |
 
-**License policy rationale:** Spice Labs maintains All Rights Reserved on its own code. The default `deny_licenses` blocks all GPL/AGPL/LGPL variants because their copyleft obligations would force giving up the ARR posture if a covered dependency were linked into a SpiceLabs product. The default explicitly enumerates all seven copyleft variants the dependency-review-action will currently see in the wild:
+**License policy rationale:** Spice Labs maintains All Rights Reserved on its own code. The default `deny_licenses` blocks all GPL/AGPL/LGPL variants because their copyleft obligations would force giving up the ARR posture if a covered dependency were linked into a Spice Labs product. The default explicitly enumerates all seven copyleft variants the dependency-review-action will currently see in the wild:
 
 - `GPL-2.0`, `GPL-3.0` — strong copyleft
 - `AGPL-1.0`, `AGPL-3.0` — strong copyleft, network-use trigger
