@@ -1,0 +1,629 @@
+# SpiceLabsHQ — Release Artifacts (reusable)
+#
+# Trigger:   workflow_call only. Callers wire this to `release: types: [published]`
+#            so it runs once per GitHub Release. The companion workflow
+#            release-please.yml cuts the Release; this one attaches the
+#            supply-chain artifacts to it. Together they form the two halves
+#            of the release pipeline.
+#
+# Scope:     For each artifact in `inputs.artifacts` (or the GitHub-generated
+#            source tarball when `artifacts` is empty):
+#              - SBOMs in every requested format (default: SPDX-JSON +
+#                CycloneDX-JSON) via anchore/sbom-action
+#              - SLSA build provenance attestation via
+#                actions/attest-build-provenance (when not in source-fallback)
+#              - Sigstore keyless signature + Fulcio cert via cosign
+#                sign-blob (when not in source-fallback)
+#            Every successfully produced output file is uploaded to the
+#            triggering Release with `gh release upload --clobber`.
+#
+# Empty-artifacts behavior:
+#   When the caller does NOT pass `artifacts:`, we cannot attest or sign a
+#   build output (we did not build one). Instead we download the source
+#   tarball that GitHub auto-generates for every Release (`*.tar.gz`),
+#   produce SBOMs against it, and name them `sbom-source.<format>` so
+#   adopters see clearly that this is source-tree coverage rather than
+#   per-binary coverage. The provenance and signing phases are skipped in
+#   this path: there is no built-by-this-workflow subject to attest, and
+#   sign-blob against a tarball we did not produce buys nothing because
+#   the hash is not stable across re-downloads in a meaningful way for
+#   downstream verifiers. Adopters who want signed binaries should pass
+#   explicit `artifacts:` globs.
+#
+# Failure semantics:
+#   Each phase (SBOM, provenance, signing, upload) runs with
+#   `continue-on-error: true`. A failure in one phase emits an `::error::`
+#   annotation but does not stop the next phase from running — adopters
+#   should see partial artifacts whenever possible. A final summary step
+#   runs with `if: always()` and exits non-zero when any phase reported a
+#   failure, so the job's overall status reflects the union of phase
+#   outcomes (the Release will still get whatever artifacts succeeded).
+#
+# Inputs:    artifacts          — newline OR comma-separated list of file
+#                                  globs to SBOM, attest, and sign. Empty →
+#                                  source-tarball SBOM only (see above).
+#            sbom_formats       — comma-separated SBOM formats. Anchore's
+#                                  sbom-action accepts: spdx-json,
+#                                  cyclonedx-json, spdx-tag-value,
+#                                  cyclonedx-xml, syft-json, syft-table.
+#            enable_provenance  — boolean; default true. Forces-off the
+#                                  attest-build-provenance phase.
+#            enable_signing     — boolean; default true. Forces-off the
+#                                  cosign sign-blob phase.
+#
+# Permissions (workflow-level, with explanatory grants):
+#   id-token: write       — required for cosign keyless signing (Sigstore
+#                           Fulcio's OIDC flow) AND for
+#                           actions/attest-build-provenance, which mints
+#                           an OIDC token for the SLSA generator.
+#   attestations: write   — actions/attest-build-provenance writes the
+#                           attestation bundle to the GitHub-managed
+#                           attestation store.
+#   contents: write       — `gh release upload` writes asset files onto
+#                           the triggering Release.
+#   actions: read         — actions/attest-build-provenance reads workflow
+#                           run metadata to populate the provenance subject.
+#
+# Pinning policy:
+#   - Third-party actions (anchore/sbom-action, sigstore/cosign-installer)
+#     pinned to 40-char commit SHAs per the actions-audit policy.
+#   - actions/attest-build-provenance is first-party (`actions/*`) and would
+#     normally use a major tag, but is SHA-pinned because it is an
+#     attestation primitive whose semantics we want to bump deliberately.
+#   - actions/checkout uses the major-version tag per the standard
+#     first-party policy.
+#
+# Scope (intentional limits):
+#   - File blobs only. No OCI container support in this workflow; cosign
+#     sign-blob and attest-build-provenance both run against file paths.
+#     Container support is a follow-up.
+#   - No matrix over runner OS. Ubuntu-latest is sufficient for SBOM
+#     extraction and Sigstore signing.
+
+name: Release Artifacts (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      artifacts:
+        description: |
+          Newline OR comma-separated list of file globs to sign and attest.
+          Globs are expanded against the checked-out workspace. When empty
+          (the default), the workflow falls back to SBOMing the
+          GitHub-generated source tarball for the triggering Release; the
+          provenance and signing phases are skipped in that path.
+        required: false
+        type: string
+        default: ""
+      sbom_formats:
+        description: |
+          Comma-separated SBOM formats to produce per artifact. Accepted
+          values match anchore/sbom-action's `format` input:
+          `spdx-json`, `cyclonedx-json`, `spdx-tag-value`, `cyclonedx-xml`,
+          `syft-json`, `syft-table`.
+        required: false
+        type: string
+        default: "spdx-json,cyclonedx-json"
+      enable_provenance:
+        description: |
+          When false, skip the SLSA build-provenance phase entirely.
+          Default: true. The phase is also auto-skipped in the source-
+          fallback path (no caller-built artifact to attest).
+        required: false
+        type: boolean
+        default: true
+      enable_signing:
+        description: |
+          When false, skip the cosign keyless signing phase entirely.
+          Default: true. The phase is also auto-skipped in the source-
+          fallback path.
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  # Workflow-level grants. Each is required by at least one phase below;
+  # together they are the minimum needed to attest + sign + upload.
+  id-token: write       # cosign keyless OIDC, attest-build-provenance OIDC
+  attestations: write   # attest-build-provenance bundle write
+  contents: write       # gh release upload writes Release assets
+  actions: read         # attest-build-provenance reads workflow metadata
+
+# Serialize per Release tag. Two concurrent runs would race on
+# `gh release upload --clobber` and produce nondeterministic asset state.
+concurrency:
+  group: release-artifacts-${{ github.event.release.tag_name || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-artifacts:
+    name: Release Artifacts
+    runs-on: ubuntu-latest
+    # Outputs from the resolve step drive every later phase. Phases consult
+    # `is_source_fallback` to decide whether to run; they all consult
+    # `resolved_artifacts` to know what to operate on.
+    steps:
+      - name: Checkout caller repo
+        uses: actions/checkout@v4
+        with:
+          # The release-artifacts job mints an OIDC token for cosign and
+          # attest-build-provenance; we do not want the default GITHUB_TOKEN
+          # lingering in the local git config. None of the steps below need
+          # to push, so dropping the credential is safe.
+          persist-credentials: false
+
+      # ----------------------------------------------------------------
+      # Resolve artifacts list.
+      #
+      # Two paths:
+      #   1. `inputs.artifacts` non-empty → expand the newline/comma list
+      #      against the checked-out workspace. Output is the absolute
+      #      paths of every matched file (deduplicated, in lexical order).
+      #   2. `inputs.artifacts` empty → download the Release's
+      #      auto-generated source tarball via `gh release download
+      #      "$TAG" --pattern '*.tar.gz' --dir .`. The tarball name takes
+      #      the form `<repo>-<tag>.tar.gz`; we treat that single file as
+      #      the only artifact and set is_source_fallback=true so the
+      #      provenance and signing phases skip themselves.
+      #
+      # Fail fast if path (1) produces zero matches: an empty `artifacts:`
+      # value means "use source fallback", but a non-empty value that
+      # globs to nothing is almost always a caller mistake.
+      # ----------------------------------------------------------------
+      - name: Resolve artifacts list
+        id: resolve
+        env:
+          ARTIFACTS_INPUT: ${{ inputs.artifacts }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+
+          out_dir="${RUNNER_TEMP}/release-artifacts"
+          mkdir -p "${out_dir}"
+          resolved_file="${out_dir}/resolved.txt"
+          : > "${resolved_file}"
+
+          if [ -z "${ARTIFACTS_INPUT// /}" ]; then
+            echo "No artifacts: input — falling back to GitHub-generated source tarball."
+            if [ -z "${RELEASE_TAG:-}" ]; then
+              echo "::error::release event is missing tag_name; cannot download source tarball."
+              exit 1
+            fi
+            # `gh release download --pattern '*.tar.gz'` matches the
+            # auto-generated source tarball that GitHub attaches to every
+            # Release. We pull it into a dedicated directory so the
+            # downstream upload step never re-uploads the source tarball
+            # itself (only the SBOMs derived from it).
+            src_dir="${out_dir}/source"
+            mkdir -p "${src_dir}"
+            gh release download "${RELEASE_TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --pattern '*.tar.gz' \
+              --dir "${src_dir}"
+            tarball=""
+            for f in "${src_dir}"/*.tar.gz; do
+              [ -f "${f}" ] || continue
+              tarball="${f}"
+              break
+            done
+            if [ -z "${tarball}" ]; then
+              echo "::error::Failed to locate auto-generated source tarball for ${RELEASE_TAG}."
+              exit 1
+            fi
+            printf '%s\n' "${tarball}" > "${resolved_file}"
+            echo "is_source_fallback=true" >> "${GITHUB_OUTPUT}"
+            echo "Source tarball: ${tarball}"
+          else
+            # Normalize the input: convert commas to newlines, then iterate
+            # line-by-line, expanding each glob with shell globbing.
+            normalized="$(printf '%s\n' "${ARTIFACTS_INPUT}" | tr ',' '\n')"
+            shopt -s nullglob
+            tmp_paths="${out_dir}/.candidates"
+            : > "${tmp_paths}"
+            while IFS= read -r pattern; do
+              # Trim leading/trailing whitespace.
+              pattern="${pattern#"${pattern%%[![:space:]]*}"}"
+              pattern="${pattern%"${pattern##*[![:space:]]}"}"
+              [ -z "${pattern}" ] && continue
+              # shellcheck disable=SC2206
+              matches=( ${pattern} )
+              if [ ${#matches[@]} -eq 0 ]; then
+                echo "::warning::Glob '${pattern}' matched zero files."
+                continue
+              fi
+              for m in "${matches[@]}"; do
+                if [ -f "${m}" ]; then
+                  # Resolve to absolute path so later phases never depend
+                  # on cwd.
+                  abs="$(cd "$(dirname "${m}")" && pwd)/$(basename "${m}")"
+                  printf '%s\n' "${abs}" >> "${tmp_paths}"
+                fi
+              done
+            done <<< "${normalized}"
+            # Sort + dedupe.
+            sort -u "${tmp_paths}" > "${resolved_file}"
+            if [ ! -s "${resolved_file}" ]; then
+              echo "::error::artifacts input was non-empty but matched zero files. Check your globs."
+              exit 1
+            fi
+            echo "is_source_fallback=false" >> "${GITHUB_OUTPUT}"
+            echo "Resolved artifacts:"
+            cat "${resolved_file}"
+          fi
+
+          # Expose paths for later steps. `resolved_file` is always set;
+          # later steps `cat` it to iterate.
+          echo "resolved_file=${resolved_file}" >> "${GITHUB_OUTPUT}"
+          echo "out_dir=${out_dir}" >> "${GITHUB_OUTPUT}"
+          # Sub-directories for each phase's outputs.
+          mkdir -p "${out_dir}/sboms" "${out_dir}/sigs" "${out_dir}/provenance"
+          echo "sboms_dir=${out_dir}/sboms" >> "${GITHUB_OUTPUT}"
+          echo "sigs_dir=${out_dir}/sigs" >> "${GITHUB_OUTPUT}"
+          echo "provenance_dir=${out_dir}/provenance" >> "${GITHUB_OUTPUT}"
+
+          # Pre-seed every per-phase status file as "fail". Each phase
+          # overwrites its own marker with "ok" or "skip" once it
+          # completes (or with "fail" explicitly). This guarantees the
+          # final summary step can detect crashes that prevent a phase
+          # from reaching its own status-write line.
+          for phase in sbom provenance signing upload; do
+            echo "fail" > "${out_dir}/${phase}.status"
+          done
+
+      # ----------------------------------------------------------------
+      # SBOM phase.
+      #
+      # We invoke anchore/sbom-action once per (artifact × format) pair.
+      # The action accepts a single `format` per invocation, so we drive
+      # the matrix with a shell loop. Each successful run drops a file
+      # named `sbom-<basename>.<format>` (or `sbom-source.<format>` when
+      # the source-fallback path is in effect) into ${sboms_dir}.
+      #
+      # `continue-on-error: true` is set on the step so a single SBOM
+      # failure (e.g. an unsupported file type) does not skip the
+      # provenance/signing phases. The summary step at the end
+      # consolidates phase outcomes.
+      # ----------------------------------------------------------------
+      - name: SBOM — install Anchore sbom-action
+        id: sbom-install
+        # Pinned to v0.24.0. Bump via:
+        #   gh api repos/anchore/sbom-action/releases/latest --jq '.tag_name'
+        #   gh api repos/anchore/sbom-action/git/ref/tags/<tag> --jq '.object.sha'
+        # Resolved 2026-03-20 release (40-char SHA below).
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+
+      - name: SBOM — generate per artifact and format
+        id: sbom
+        continue-on-error: true
+        env:
+          RESOLVED_FILE: ${{ steps.resolve.outputs.resolved_file }}
+          SBOMS_DIR: ${{ steps.resolve.outputs.sboms_dir }}
+          SBOM_FORMATS: ${{ inputs.sbom_formats }}
+          IS_SOURCE_FALLBACK: ${{ steps.resolve.outputs.is_source_fallback }}
+        run: |
+          # Pre-seed status as "fail" so any unexpected early exit is
+          # treated as a phase failure by the summary step. We only flip
+          # to "ok" at the very end after a clean run.
+          status_file="${RUNNER_TEMP}/release-artifacts/sbom.status"
+          echo "fail" > "${status_file}"
+          set -euo pipefail
+
+          # Translate Anchore format ids → file extensions. Keep this map
+          # next to the format list so additions stay in sync.
+          ext_for() {
+            case "$1" in
+              spdx-json)        echo "spdx.json" ;;
+              cyclonedx-json)   echo "cdx.json" ;;
+              spdx-tag-value)   echo "spdx" ;;
+              cyclonedx-xml)    echo "cdx.xml" ;;
+              syft-json)        echo "syft.json" ;;
+              syft-table)       echo "syft.txt" ;;
+              *)                echo "" ;;
+            esac
+          }
+
+          formats="$(printf '%s' "${SBOM_FORMATS}" | tr ',' ' ')"
+          any_fail=0
+
+          while IFS= read -r artifact; do
+            [ -z "${artifact}" ] && continue
+            base="$(basename "${artifact}")"
+            # Drop the version suffix when in source-fallback so the SBOM
+            # carries a stable name (`sbom-source.spdx.json`) rather than
+            # the GitHub-generated tarball's repo+tag name. Adopters
+            # downloading SBOMs from the Release should be able to spot
+            # source-coverage at a glance.
+            if [ "${IS_SOURCE_FALLBACK}" = "true" ]; then
+              label="source"
+            else
+              label="${base}"
+            fi
+
+            for fmt in ${formats}; do
+              ext="$(ext_for "${fmt}")"
+              if [ -z "${ext}" ]; then
+                echo "::warning::Unknown sbom format '${fmt}'; skipping."
+                continue
+              fi
+              out="${SBOMS_DIR}/sbom-${label}.${ext}"
+              echo "Generating ${fmt} SBOM for ${artifact} → ${out}"
+              if ! syft "file:${artifact}" -o "${fmt}=${out}"; then
+                echo "::error::SBOM phase failed for ${artifact} (${fmt})"
+                any_fail=1
+                continue
+              fi
+            done
+          done < "${RESOLVED_FILE}"
+
+          # Surface a summary in the step log.
+          echo "SBOM outputs:"
+          ls -l "${SBOMS_DIR}" || true
+
+          # Persist phase status for the summary step. continue-on-error
+          # would mask exits; the marker file lets the summary check.
+          if [ "${any_fail}" -eq 1 ]; then
+            echo "fail" > "${status_file}"
+            exit 1
+          fi
+          echo "ok" > "${status_file}"
+
+      # ----------------------------------------------------------------
+      # Provenance phase.
+      #
+      # Skipped when `enable_provenance: false` OR when we are in the
+      # source-fallback path (we did not build the tarball; we cannot
+      # honestly attest to its provenance).
+      #
+      # actions/attest-build-provenance accepts a newline-separated
+      # `subject-path:` value. We materialize the resolved-artifacts file
+      # contents into a step output so the action can consume them as a
+      # multi-line string (action inputs can't read files directly). The
+      # action writes its bundle into the workflow run's attestation
+      # store; we additionally copy the bundle to the upload-staging
+      # directory so the upload step attaches it to the Release.
+      # ----------------------------------------------------------------
+      - name: Provenance — prepare subject list
+        id: provenance-prep
+        if: ${{ inputs.enable_provenance && steps.resolve.outputs.is_source_fallback != 'true' }}
+        env:
+          RESOLVED_FILE: ${{ steps.resolve.outputs.resolved_file }}
+        run: |
+          set -euo pipefail
+          # Multi-line outputs use the `<<DELIM` heredoc form; pick a
+          # delimiter unlikely to appear in any artifact path.
+          delim="EOF_$(date +%s%N)"
+          {
+            echo "subject_paths<<${delim}"
+            cat "${RESOLVED_FILE}"
+            echo "${delim}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Provenance — attest build provenance
+        id: provenance
+        if: ${{ inputs.enable_provenance && steps.resolve.outputs.is_source_fallback != 'true' }}
+        continue-on-error: true
+        # Pinned to v4.1.0. First-party but SHA-pinned because this is an
+        # attestation primitive whose semantics we want to bump
+        # deliberately. Bump via:
+        #   gh api repos/actions/attest-build-provenance/releases/latest --jq '.tag_name'
+        #   gh api repos/actions/attest-build-provenance/git/ref/tags/<tag> --jq '.object.sha'
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: ${{ steps.provenance-prep.outputs.subject_paths }}
+
+      - name: Provenance — record status
+        if: ${{ always() && inputs.enable_provenance && steps.resolve.outputs.is_source_fallback != 'true' }}
+        env:
+          OUTCOME: ${{ steps.provenance.outcome }}
+          BUNDLE_PATH: ${{ steps.provenance.outputs.bundle-path }}
+          PROVENANCE_DIR: ${{ steps.resolve.outputs.provenance_dir }}
+        run: |
+          set -euo pipefail
+          if [ "${OUTCOME}" = "success" ]; then
+            echo "ok" > "${RUNNER_TEMP}/release-artifacts/provenance.status"
+            # Copy the bundle into the upload-staging directory so the
+            # upload phase finds it alongside SBOMs and signatures.
+            if [ -n "${BUNDLE_PATH:-}" ] && [ -f "${BUNDLE_PATH}" ]; then
+              cp "${BUNDLE_PATH}" "${PROVENANCE_DIR}/provenance.intoto.jsonl"
+              echo "Copied attestation bundle to ${PROVENANCE_DIR}/provenance.intoto.jsonl"
+            else
+              echo "::warning::attest-build-provenance reported success but no bundle path found; nothing to upload."
+            fi
+          else
+            echo "::error::Provenance phase failed (outcome=${OUTCOME})"
+            echo "fail" > "${RUNNER_TEMP}/release-artifacts/provenance.status"
+          fi
+
+      - name: Provenance — record skip
+        if: ${{ !inputs.enable_provenance || steps.resolve.outputs.is_source_fallback == 'true' }}
+        run: |
+          echo "skip" > "${RUNNER_TEMP}/release-artifacts/provenance.status"
+          if [ "${{ steps.resolve.outputs.is_source_fallback }}" = "true" ]; then
+            echo "Provenance skipped: source-tarball fallback (nothing built by this workflow)."
+          else
+            echo "Provenance skipped: enable_provenance=false."
+          fi
+
+      # ----------------------------------------------------------------
+      # Signing phase.
+      #
+      # Skipped when `enable_signing: false` OR when we are in the
+      # source-fallback path. cosign sign-blob mints an OIDC token from
+      # the workflow's `id-token: write` permission; the resulting
+      # certificate is signed by Sigstore Fulcio and the signature is
+      # written to a `.sig` file.
+      #
+      # We emit BOTH the signature and the Fulcio cert so verifiers can
+      # run `cosign verify-blob --certificate <name>.pem --signature
+      # <name>.sig <artifact>` without depending on the Rekor public log
+      # alone.
+      # ----------------------------------------------------------------
+      - name: Signing — install cosign
+        id: cosign-install
+        if: ${{ inputs.enable_signing && steps.resolve.outputs.is_source_fallback != 'true' }}
+        # Pinned to v4.1.2. Bump via:
+        #   gh api repos/sigstore/cosign-installer/releases/latest --jq '.tag_name'
+        #   gh api repos/sigstore/cosign-installer/git/ref/tags/<tag> --jq '.object.sha'
+        # Resolved 2026-05-07 release (40-char SHA below).
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Signing — cosign sign-blob per artifact
+        id: signing
+        if: ${{ inputs.enable_signing && steps.resolve.outputs.is_source_fallback != 'true' }}
+        continue-on-error: true
+        env:
+          RESOLVED_FILE: ${{ steps.resolve.outputs.resolved_file }}
+          SIGS_DIR: ${{ steps.resolve.outputs.sigs_dir }}
+        run: |
+          # Pre-seed status as "fail" so any unexpected early exit is
+          # treated as a phase failure by the summary step. Flip to "ok"
+          # only after a clean run.
+          status_file="${RUNNER_TEMP}/release-artifacts/signing.status"
+          echo "fail" > "${status_file}"
+          set -euo pipefail
+
+          any_fail=0
+          while IFS= read -r artifact; do
+            [ -z "${artifact}" ] && continue
+            base="$(basename "${artifact}")"
+            sig="${SIGS_DIR}/${base}.sig"
+            cert="${SIGS_DIR}/${base}.pem"
+            echo "Signing ${artifact} → ${sig}, ${cert}"
+            # `--yes` accepts the keyless-signing prompt non-interactively.
+            # The OIDC token is minted automatically from id-token:write.
+            # The certificate is the Fulcio-issued short-lived signing cert
+            # tied to the workflow identity URL — adopters verify against
+            # that identity (see README's `cosign verify-blob` example).
+            if ! cosign sign-blob \
+                --yes \
+                --output-signature "${sig}" \
+                --output-certificate "${cert}" \
+                "${artifact}"; then
+              echo "::error::Signing phase failed for ${artifact}"
+              any_fail=1
+              continue
+            fi
+          done < "${RESOLVED_FILE}"
+
+          echo "Signing outputs:"
+          ls -l "${SIGS_DIR}" || true
+
+          if [ "${any_fail}" -eq 1 ]; then
+            echo "fail" > "${status_file}"
+            exit 1
+          fi
+          echo "ok" > "${status_file}"
+
+      - name: Signing — record skip
+        if: ${{ !inputs.enable_signing || steps.resolve.outputs.is_source_fallback == 'true' }}
+        run: |
+          echo "skip" > "${RUNNER_TEMP}/release-artifacts/signing.status"
+          if [ "${{ steps.resolve.outputs.is_source_fallback }}" = "true" ]; then
+            echo "Signing skipped: source-tarball fallback (no stable build artifact to sign)."
+          else
+            echo "Signing skipped: enable_signing=false."
+          fi
+
+      # ----------------------------------------------------------------
+      # Upload phase.
+      #
+      # Collect every produced output (SBOMs, signatures + certs,
+      # provenance bundle) and run a single `gh release upload --clobber`.
+      # `--clobber` allows re-runs to replace previously uploaded files
+      # without manual cleanup; the concurrency: group above prevents
+      # races.
+      # ----------------------------------------------------------------
+      - name: Upload — attach artifacts to Release
+        id: upload
+        if: ${{ always() && github.event.release.tag_name != '' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          SBOMS_DIR: ${{ steps.resolve.outputs.sboms_dir }}
+          SIGS_DIR: ${{ steps.resolve.outputs.sigs_dir }}
+          PROVENANCE_DIR: ${{ steps.resolve.outputs.provenance_dir }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          uploads=()
+          for d in "${SBOMS_DIR}" "${SIGS_DIR}" "${PROVENANCE_DIR}"; do
+            [ -d "${d}" ] || continue
+            for f in "${d}"/*; do
+              [ -f "${f}" ] && uploads+=( "${f}" )
+            done
+          done
+
+          if [ "${#uploads[@]}" -eq 0 ]; then
+            echo "::warning::Upload phase: no artifact files were produced; nothing to upload."
+            echo "skip" > "${RUNNER_TEMP}/release-artifacts/upload.status"
+            exit 0
+          fi
+
+          echo "Uploading ${#uploads[@]} files to release ${RELEASE_TAG}:"
+          printf '  %s\n' "${uploads[@]}"
+          if ! gh release upload "${RELEASE_TAG}" "${uploads[@]}" --clobber --repo "${GITHUB_REPOSITORY}"; then
+            echo "::error::Upload phase failed."
+            echo "fail" > "${RUNNER_TEMP}/release-artifacts/upload.status"
+            exit 1
+          fi
+          echo "ok" > "${RUNNER_TEMP}/release-artifacts/upload.status"
+
+      # ----------------------------------------------------------------
+      # Phase summary. Always runs. Reads the per-phase status markers
+      # written above and emits a human-readable summary into both the
+      # step log and the GitHub Actions job summary. Exits non-zero if
+      # any phase reported a failure, so the overall job status reflects
+      # the union of phase outcomes (the partial artifacts that did
+      # succeed remain attached to the Release).
+      # ----------------------------------------------------------------
+      - name: Phase summary
+        if: ${{ always() }}
+        run: |
+          set -uo pipefail
+          status_dir="${RUNNER_TEMP}/release-artifacts"
+
+          read_status() {
+            f="${status_dir}/$1.status"
+            if [ -f "${f}" ]; then
+              cat "${f}"
+            else
+              echo "missing"
+            fi
+          }
+
+          sbom="$(read_status sbom)"
+          provenance="$(read_status provenance)"
+          signing="$(read_status signing)"
+          upload="$(read_status upload)"
+
+          {
+            echo "## Release Artifacts — phase summary"
+            echo ""
+            echo "| Phase      | Status     |"
+            echo "|------------|------------|"
+            echo "| SBOM       | ${sbom}    |"
+            echo "| Provenance | ${provenance} |"
+            echo "| Signing    | ${signing} |"
+            echo "| Upload     | ${upload}  |"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          echo "Phase outcomes: sbom=${sbom} provenance=${provenance} signing=${signing} upload=${upload}"
+
+          # `ok` and `skip` are non-failing terminal states. Anything else
+          # (including `missing`, written when a step crashed before its
+          # status-file was updated, and `fail`, written explicitly) is
+          # treated as a phase failure.
+          fail=0
+          for s in "${sbom}" "${provenance}" "${signing}" "${upload}"; do
+            case "${s}" in
+              ok|skip) ;;
+              *) fail=1 ;;
+            esac
+          done
+          if [ "${fail}" -eq 1 ]; then
+            echo "::error::One or more phases failed; see annotations above."
+            exit 1
+          fi
