@@ -40,8 +40,8 @@ jobs:
     # GitHub App path — uncomment to enable tag-push cascading into
     # release-artifacts.yml or any other tag-triggered workflow:
     # secrets:
-    #   RELEASE_APP_ID:          ${{ secrets.RELEASE_APP_ID }}
-    #   RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+    #   ROSEMARY_RELEASER_APP_ID:          ${{ secrets.ROSEMARY_RELEASER_APP_ID }}
+    #   ROSEMARY_RELEASER_APP_PRIVATE_KEY: ${{ secrets.ROSEMARY_RELEASER_APP_PRIVATE_KEY }}
     #
     # Override defaults if your repo isn't standard:
     # with:

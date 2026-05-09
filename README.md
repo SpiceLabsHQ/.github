@@ -248,7 +248,7 @@ Semgrep is installed via `pip install semgrep==<pinned-version>` so the rule eng
 | Path | Setup | Behavior |
 |---|---|---|
 | `GITHUB_TOKEN` (default) | Empty `secrets:` block in caller | Release PR + tag are created, but **the tag-push event does not trigger downstream workflows**. GitHub deliberately suppresses event cascades from `GITHUB_TOKEN` to prevent recursion |
-| GitHub App | Set `RELEASE_APP_ID` + `RELEASE_APP_PRIVATE_KEY` org secrets, pass them through | PR + tag authored by the App. Downstream `push: tags:` workflows (release-artifacts.yml) **do** fire |
+| GitHub App | Set `ROSEMARY_RELEASER_APP_ID` + `ROSEMARY_RELEASER_APP_PRIVATE_KEY` org secrets, pass them through | PR + tag authored by the App. Downstream `push: tags:` workflows (release-artifacts.yml) **do** fire |
 
 Repos that depend on the release-artifacts pipeline must use the GitHub App path. The App needs `contents: write` and `pull-requests: write` on the org's repos.
 
@@ -308,7 +308,7 @@ For every artifact (or for the GitHub-generated source tarball when no artifacts
 
 Every successfully produced output is uploaded to the triggering Release with `gh release upload --clobber`.
 
-> **Trigger requirement.** GitHub Releases authored by `GITHUB_TOKEN` do **not** cascade. Pair this caller with the GitHub App path in `release-please.yml`'s caller (`RELEASE_APP_ID` + `RELEASE_APP_PRIVATE_KEY`) so release-please's tag → Release event fires this workflow.
+> **Trigger requirement.** GitHub Releases authored by `GITHUB_TOKEN` do **not** cascade. Pair this caller with the GitHub App path in `release-please.yml`'s caller (`ROSEMARY_RELEASER_APP_ID` + `ROSEMARY_RELEASER_APP_PRIVATE_KEY`) so release-please's tag → Release event fires this workflow.
 
 **1. Add the caller workflow** to each repo at `.github/workflows/release-artifacts.yml`. Copy-paste-ready version at [`examples/caller-release-artifacts.yml`](examples/caller-release-artifacts.yml). The example shows two patterns side-by-side: the empty-`artifacts` default (source-tarball SBOM only) and an explicit-globs job for repos that produce build outputs.
 

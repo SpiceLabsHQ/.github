@@ -13,7 +13,7 @@
 # The triggering Release event must come from a workflow run that is NOT
 # the GITHUB_TOKEN — Release events from GITHUB_TOKEN-authored tags do not
 # cascade. Pair this caller with the GitHub App path in
-# release-please.yml's caller (RELEASE_APP_ID + RELEASE_APP_PRIVATE_KEY)
+# release-please.yml's caller (ROSEMARY_RELEASER_APP_ID + ROSEMARY_RELEASER_APP_PRIVATE_KEY)
 # so release-please's tag → Release sequence triggers this workflow.
 #
 # Empty-artifacts behavior:
