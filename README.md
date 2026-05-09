@@ -48,6 +48,36 @@ The bot operates in two modes:
 
 **Versioning:** Callers pin the reusable workflow with `@v1`; the reusable workflow pins the underlying `anthropics/claude-code-action` ref. Action upgrades happen in one place.
 
+### Actions Audit (`actions-audit.yml`)
+
+Audits a calling repo's `.github/workflows/**` for supply-chain risk. Two layers:
+
+1. **zizmor static analysis** — runs [zizmor](https://github.com/zizmorcore/zizmor) against the workflows, surfacing dangerous GHA patterns (template injection, excessive `GITHUB_TOKEN` permissions, pwn requests, self-hosted runner misuse, etc.). Findings at or above `min_severity` fail the job. SARIF is uploaded to the Security tab so issues persist across runs.
+2. **SHA-pin enforcement** — every `uses:` referencing a third-party action must be pinned to a 40-char commit SHA. Owner globs in `allow_tags_for` may use major-version tags (e.g. `actions/checkout@v4`). Implemented as a small inline shell script — no new third-party action just for this check.
+
+The reusable workflow leads by example: every third-party action it invokes is pinned to a 40-char SHA. First-party `actions/*` and `github/*` use major tags.
+
+**1. Add the caller workflow** to each repo at `.github/workflows/actions-audit.yml`. Copy-paste-ready version at [`examples/caller-actions-audit.yml`](examples/caller-actions-audit.yml).
+
+**2. Inputs** (all optional, override via `with:`):
+
+| Input | Default | Notes |
+|---|---|---|
+| `min_severity` | `medium` | zizmor severity threshold. One of `low`, `medium`, `high`. Findings at or above this level fail the job |
+| `allow_tags_for` | `actions/*,github/*` | Comma-separated owner globs allowed to use tags instead of SHA pins. Add e.g. `aws-actions/*` if you trust other publishers |
+
+**3. Required permissions** (caller declares them in its job block — see the example):
+
+| Permission | Purpose |
+|---|---|
+| `contents: read` | Checkout the caller repo |
+| `security-events: write` | Upload zizmor SARIF to the Security tab |
+| `actions: read` | Lets zizmor read workflow metadata for some audits |
+
+**4. No secrets required.** The audit runs entirely against the caller's checked-out workspace and uses `GITHUB_TOKEN` for SARIF upload.
+
+**Versioning:** Callers pin with `@v1`. The reusable workflow pins zizmor to an exact version (`ZIZMOR_VERSION` env in the workflow) so audit results are reproducible across runs.
+
 ### PR Hygiene (`pr-hygiene.yml`)
 
 Two PR checks bundled into one reusable workflow. Drop the [caller workflow](examples/caller-pr-hygiene.yml) into any repo at `.github/workflows/pr-hygiene.yml`.
