@@ -1,0 +1,197 @@
+name: PR Hygiene (reusable)
+
+# Two checks for PRs:
+#   1. Title check (BLOCKING): enforces Conventional Commits on the PR title.
+#      release-please uses the squashed PR title as the commit message; if the
+#      title isn't a valid CC header, release-please can't classify the change
+#      and the release notes drift from reality. Failing the check here keeps
+#      the contract with release-please honest at merge time.
+#   2. Size warning (NON-BLOCKING): posts an informational sticky comment when
+#      the PR is unusually large. Never fails the check — large PRs are a
+#      smell, not a violation, and forcing a split via a red X tends to push
+#      authors to merge-then-fix instead of split.
+
+on:
+  workflow_call:
+    inputs:
+      types:
+        description: |
+          Comma-separated list of allowed Conventional Commits types. Converted
+          internally to the newline-delimited form that
+          amannn/action-semantic-pull-request expects.
+        required: false
+        type: string
+        default: feat,fix,chore,docs,refactor,test,build,ci,perf,style,revert
+      require_scope:
+        description: |
+          When true, the PR title must include a scope, e.g. `feat(api): ...`.
+          Defaults to false because most repos in the org are single-scope and
+          forcing a scope just adds noise.
+        required: false
+        type: boolean
+        default: false
+      large_pr_threshold:
+        description: |
+          Soft threshold (additions + deletions) above which the size-warning
+          job posts an informational comment. The check itself never fails on
+          size — see file header.
+        required: false
+        type: number
+        default: 500
+
+# Workflow-level permissions are the union of what both jobs need. Each job
+# below restricts further (least privilege per job).
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  title:
+    name: Conventional Commits title
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      # The action takes `types` as newline-delimited multi-line input. Callers
+      # pass a comma-separated string (more ergonomic in YAML), so we convert
+      # here. `tr` is sufficient — type names are [a-z]+ and never contain
+      # commas or whitespace internally.
+      - name: Normalize types to newline-delimited
+        id: types
+        env:
+          TYPES_CSV: ${{ inputs.types }}
+        run: |
+          set -euo pipefail
+          TYPES_NL=$(printf '%s' "${TYPES_CSV}" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$' || true)
+          {
+            echo 'list<<TYPES_EOF'
+            printf '%s\n' "${TYPES_NL}"
+            echo 'TYPES_EOF'
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Check PR title (Conventional Commits)
+        id: lint
+        # SHA-pinned to v6.1.1 (third-party action — must be 40-char SHA per
+        # actions-audit policy). Bump by re-running the API tag lookup and
+        # updating both the SHA and the trailing comment.
+        uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          types: ${{ steps.types.outputs.list }}
+          requireScope: ${{ inputs.require_scope }}
+          # Require something after the type/scope. `.+` is intentionally
+          # permissive — we don't enforce capitalization or trailing-period
+          # style at the org level; individual repos can override via their
+          # own caller if they want stricter rules.
+          subjectPattern: '.+'
+          subjectPatternError: |
+            The PR title subject (text after `type(scope):`) is empty or
+            invalid. Provide a short, imperative description of the change.
+
+      # Sticky comment with a fix example whenever the title check fails.
+      # `if: always() && error_message != null` is the documented pattern from
+      # the action's README: the previous step fails the job, this step still
+      # runs and posts the comment. Keeping the same `header:` across runs
+      # means the comment is updated in place rather than duplicated.
+      - name: Post sticky comment on title failure
+        if: always() && steps.lint.outputs.error_message != null
+        # SHA-pinned to v3.0.4 (third-party).
+        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
+        with:
+          header: pr-hygiene-title
+          message: |
+            ### PR title doesn't follow Conventional Commits
+
+            Your PR title needs to match the [Conventional Commits](https://www.conventionalcommits.org/) format so `release-please` can classify the change.
+
+            **Examples:**
+            ```
+            feat: add user login
+            fix(api): handle null response
+            chore(deps): bump actions/checkout to v4
+            ```
+
+            **Allowed types:** ${{ inputs.types }}
+
+            **Validator output:**
+            ```
+            ${{ steps.lint.outputs.error_message }}
+            ```
+
+            Edit the PR title and the check will re-run automatically.
+
+      # If the title was previously bad and is now fixed, delete the stale
+      # comment so the PR isn't littered with a "you fixed it" trail.
+      - name: Clear sticky comment on title pass
+        if: steps.lint.outputs.error_message == null
+        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
+        with:
+          header: pr-hygiene-title
+          delete: true
+
+  size:
+    name: PR size warning (non-blocking)
+    runs-on: ubuntu-latest
+    # This job MUST exit 0 even when the PR is over the threshold. The intent
+    # is awareness, not enforcement. Branch protection should NOT be
+    # configured to require this check.
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Compute changed lines
+        id: size
+        env:
+          ADDITIONS: ${{ github.event.pull_request.additions }}
+          DELETIONS: ${{ github.event.pull_request.deletions }}
+          THRESHOLD: ${{ inputs.large_pr_threshold }}
+        run: |
+          set -euo pipefail
+          # Both fields come from the pull_request event payload, so no API
+          # call is needed. Defaulting to 0 protects against a malformed
+          # payload (shouldn't happen on `pull_request`, but cheap insurance).
+          ADD=${ADDITIONS:-0}
+          DEL=${DELETIONS:-0}
+          TOTAL=$((ADD + DEL))
+          echo "additions=${ADD}" >> "${GITHUB_OUTPUT}"
+          echo "deletions=${DEL}" >> "${GITHUB_OUTPUT}"
+          echo "total=${TOTAL}" >> "${GITHUB_OUTPUT}"
+          if [ "${TOTAL}" -gt "${THRESHOLD}" ]; then
+            echo "over_threshold=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "over_threshold=false" >> "${GITHUB_OUTPUT}"
+          fi
+          echo "PR changes ${TOTAL} lines (+${ADD} -${DEL}); threshold is ${THRESHOLD}."
+
+      - name: Post sticky size warning
+        if: steps.size.outputs.over_threshold == 'true'
+        # Belt-and-suspenders for the non-blocking guarantee. The job's intent
+        # is awareness only, so a transient failure of the sticky-comment
+        # action (network blip, GitHub API hiccup, secondary rate limit) must
+        # not turn this into a red X. `continue-on-error: true` keeps the step
+        # outcome visible in the logs but lets the job exit 0 regardless.
+        continue-on-error: true
+        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
+        with:
+          header: pr-hygiene-size
+          message: |
+            ### Large PR notice (non-blocking)
+
+            This PR changes **${{ steps.size.outputs.total }}** lines (+${{ steps.size.outputs.additions }} / -${{ steps.size.outputs.deletions }}), above the org soft threshold of **${{ inputs.large_pr_threshold }}**.
+
+            Large PRs are harder to review and likelier to hide regressions. Consider splitting if it spans multiple concerns (e.g. a refactor + a feature, or unrelated bug fixes).
+
+            This is informational — the check will not fail.
+
+      # Clear the warning if a force-push trimmed the PR back below threshold.
+      - name: Clear sticky size warning
+        if: steps.size.outputs.over_threshold == 'false'
+        # See note on the post step: the non-blocking guarantee must hold even
+        # if the comment-delete call transiently fails.
+        continue-on-error: true
+        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
+        with:
+          header: pr-hygiene-size
+          delete: true

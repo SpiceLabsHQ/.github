@@ -1,0 +1,262 @@
+name: Actions Audit (reusable)
+
+# Audits the calling repo's `.github/workflows/**` for supply-chain risk in two
+# layers:
+#
+#   1. zizmor static analysis  — surfaces dangerous GHA patterns (template
+#      injection, excessive permissions, pwn requests, self-hosted runner
+#      misuse, etc.). Findings at or above `min_severity` fail the job. SARIF
+#      is uploaded to the Security tab so issues persist across runs.
+#
+#   2. SHA-pin enforcement     — every `uses:` referencing a third-party action
+#      must be pinned to a 40-char commit SHA. Owner globs in `allow_tags_for`
+#      may use major-version tags (e.g. `actions/checkout@v4`). Implemented
+#      with a small inline POSIX shell script — deliberately no new third-party
+#      action just for this check (it would defeat the purpose).
+#
+# Lead-by-example: every third-party action invoked from this workflow is
+# pinned to a 40-char SHA. First-party `actions/*` and `github/*` use major
+# tags — they're on the default allow list because GitHub controls them.
+
+on:
+  workflow_call:
+    inputs:
+      min_severity:
+        description: |
+          zizmor severity threshold. Findings at this level or above fail the
+          job. Valid values: low, medium, high.
+        required: false
+        type: string
+        default: medium
+      allow_tags_for:
+        description: |
+          Comma-separated globs (matched against `owner/repo` of each `uses:`)
+          allowed to use tags instead of 40-char SHA pins. Glob syntax is
+          shell-style (`*` matches any sequence). Examples:
+            - `actions/*`            — any repo under the `actions` org
+            - `actions/checkout`     — only that one repo
+            - `aws-actions/*`        — trust all of AWS's published actions
+          The default trusts GitHub-published actions only.
+        required: false
+        type: string
+        default: "actions/*,github/*"
+
+permissions:
+  contents: read
+  security-events: write
+
+concurrency:
+  group: actions-audit-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  zizmor:
+    name: zizmor scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate min_severity
+        env:
+          MIN_SEVERITY: ${{ inputs.min_severity }}
+        run: |
+          set -euo pipefail
+          case "${MIN_SEVERITY}" in
+            low|medium|high) ;;
+            *)
+              echo "::error::min_severity must be one of: low, medium, high (got '${MIN_SEVERITY}')"
+              exit 1
+              ;;
+          esac
+
+      - name: Checkout caller repo
+        # actions/checkout — first-party, allowed to use a major-version tag.
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install uv (for fast zizmor install)
+        # astral-sh/setup-uv v8.1.0 — pinned to 40-char SHA per this workflow's
+        # own SHA-pin policy. uv installs zizmor as an isolated tool in a few
+        # seconds, faster than `cargo install` and without needing a Rust
+        # toolchain on the runner.
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+
+      - name: Install zizmor
+        env:
+          # Pin zizmor itself so audit results are reproducible. Bump
+          # deliberately when upgrading; new releases can introduce new audits
+          # that change pass/fail outcomes for callers.
+          ZIZMOR_VERSION: "1.24.1"
+        run: |
+          set -euo pipefail
+          uv tool install "zizmor==${ZIZMOR_VERSION}"
+          zizmor --version
+
+      # zizmor's SARIF mode disables severity-based exit codes (it always exits
+      # 0 unless the run itself errors), so the SARIF run can't gate the job.
+      # Run twice: first for SARIF (always succeeds → upload), then again with
+      # --min-severity to fail the job on real findings. See
+      # https://docs.zizmor.sh/usage/#exit-codes for the exit-code contract.
+      - name: Run zizmor (SARIF for Security tab)
+        run: |
+          set -euo pipefail
+          if [ ! -d .github/workflows ]; then
+            echo "No .github/workflows directory in caller repo — nothing to scan."
+            : > zizmor.sarif
+            exit 0
+          fi
+          zizmor \
+            --format sarif \
+            --collect workflows \
+            .github/workflows \
+            > zizmor.sarif
+
+      - name: Upload SARIF to GitHub Security tab
+        # Skip on forks: github/codeql-action/upload-sarif needs
+        # security-events: write, which fork PRs don't get. Findings still
+        # surface in the gating step's logs.
+        if: ${{ hashFiles('zizmor.sarif') != '' && github.event.pull_request.head.repo.fork != true }}
+        # github/codeql-action — first-party, allowed to use a major-version tag.
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: zizmor.sarif
+          category: zizmor
+
+      - name: Run zizmor (gating run — fail on min_severity)
+        env:
+          MIN_SEVERITY: ${{ inputs.min_severity }}
+        run: |
+          set -euo pipefail
+          if [ ! -d .github/workflows ]; then
+            echo "No .github/workflows directory in caller repo — nothing to scan."
+            exit 0
+          fi
+          # zizmor exit codes:
+          #   0     = no findings
+          #   11-14 = findings at informational/low/medium/high
+          #   1/2/3 = audit error / bad args / no inputs
+          # `--min-severity` filters which findings count, so any non-zero exit
+          # at this point means "findings at or above the threshold".
+          zizmor \
+            --min-severity "${MIN_SEVERITY}" \
+            --min-confidence medium \
+            --format plain \
+            --collect workflows \
+            .github/workflows
+
+  sha-pin:
+    name: SHA-pin enforcement
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout caller repo
+        # actions/checkout — first-party, allowed to use a major-version tag.
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Enforce 40-char SHA pins on third-party actions
+        env:
+          ALLOW_TAGS_FOR: ${{ inputs.allow_tags_for }}
+        run: |
+          set -euo pipefail
+
+          if [ ! -d .github/workflows ]; then
+            echo "No .github/workflows directory — nothing to enforce."
+            exit 0
+          fi
+
+          # Parse the comma-separated allow-list into a newline-separated file
+          # so we can match owner globs with shell `case` (POSIX-portable, no
+          # awk regex escaping pain).
+          allow_file="$(mktemp)"
+          printf '%s' "${ALLOW_TAGS_FOR}" \
+            | tr ',' '\n' \
+            | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' \
+            | grep -v '^$' \
+            > "${allow_file}" || true
+
+          echo "Allow-tag globs (matched against owner/repo of each uses:):"
+          sed 's/^/  /' "${allow_file}" || true
+          echo
+
+          # Returns 0 if `owner/repo` matches any glob in $allow_file, 1 otherwise.
+          # Globs are matched against the full `owner/repo` segment (the part
+          # before any `/path` and before the `@ref`), so `actions/*` matches
+          # `actions/checkout` but not `actions-marketplace/foo`.
+          repo_allows_tag() {
+            local owner_repo="$1"
+            while IFS= read -r glob; do
+              [ -z "${glob}" ] && continue
+              # shellcheck disable=SC2254  # intentional glob expansion
+              case "${owner_repo}" in
+                ${glob}) return 0 ;;
+              esac
+            done < "${allow_file}"
+            return 1
+          }
+
+          violations=0
+          # Use `find` so we pick up both .yml and .yaml, including in nested
+          # composite-action subdirectories under .github/.
+          while IFS= read -r -d '' wf; do
+            # Capture line numbers for cleaner error messages. We match `uses:`
+            # at any indent, single- or double-quoted or bare. The leading `-?`
+            # is load-bearing: YAML compact list-item form (`- uses: foo/bar@v1`)
+            # is the most common authoring style and was missed in the round-1
+            # review — without the optional dash, every `- uses:` ref silently
+            # bypassed enforcement. Comments after `#` are stripped before
+            # parsing.
+            while IFS=: read -r lineno raw; do
+              # Strip trailing comments and whitespace from the value. The
+              # `uses:` strip mirrors the grep pattern (optional leading `-`)
+              # so list-form values come out clean.
+              value="$(printf '%s' "${raw}" | sed -E 's/[[:space:]]*#.*$//' | sed -E 's/^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*//; s/^["'\'']//; s/["'\'']$//; s/[[:space:]]+$//')"
+
+              # Skip empty values and local action references (./path or
+              # docker:// — neither resolves to a third-party ref).
+              case "${value}" in
+                ''|./*|.\\*|docker://*) continue ;;
+              esac
+
+              # `uses:` shape we care about is `owner/repo[/path]@ref`. Anything
+              # else — including folded/literal block scalars (`uses: >` /
+              # `uses: |` with the value on the next line), templated
+              # expressions, or YAML anchors — is treated as a violation rather
+              # than a warning. Defense-in-depth on top of zizmor: an
+              # unparseable `uses:` is an evasion path we won't silently let
+              # through.
+              if ! printf '%s' "${value}" | grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[A-Za-z0-9_./-]+$'; then
+                echo "::error file=${wf},line=${lineno}::unparseable uses: '${value}' — must be inline 'owner/repo[/path]@ref' on the same line"
+                violations=$((violations + 1))
+                continue
+              fi
+
+              # Strip the @ref to get `owner/repo[/path]`, then strip any /path
+              # to leave `owner/repo` for glob matching.
+              owner_repo_path="${value%@*}"
+              owner_repo="$(printf '%s' "${owner_repo_path}" | cut -d/ -f1-2)"
+              ref="${value##*@}"
+
+              # 40 lowercase hex chars == git SHA-1. Always allowed.
+              if printf '%s' "${ref}" | grep -Eq '^[0-9a-f]{40}$'; then
+                continue
+              fi
+
+              # Tag/branch ref — only allowed if owner/repo matches the allow list.
+              if repo_allows_tag "${owner_repo}"; then
+                continue
+              fi
+
+              echo "::error file=${wf},line=${lineno}::third-party action '${value}' must be pinned to a 40-char commit SHA ('${owner_repo}' not matched by allow_tags_for)"
+              violations=$((violations + 1))
+            done < <(grep -nE '^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*' "${wf}" || true)
+          done < <(find .github/workflows -type f \( -name '*.yml' -o -name '*.yaml' \) -print0)
+
+          if [ "${violations}" -gt 0 ]; then
+            echo
+            echo "::error::SHA-pin enforcement failed: ${violations} unpinned third-party action reference(s)."
+            echo "Fix by replacing the tag with the 40-char commit SHA, e.g.:"
+            echo "  uses: owner/repo@<40-char-sha>  # v1.2.3"
+            exit 1
+          fi
+
+          echo "SHA-pin enforcement passed: all third-party uses: refs are pinned (or owner is in allow_tags_for)."
