@@ -1,0 +1,301 @@
+name: CodeQL (reusable)
+
+# Deep static analysis via GitHub's first-party CodeQL engine. Wraps
+# `github/codeql-action` with sensible defaults: auto-detected languages,
+# the `security-extended` query suite, and SARIF upload to the Security
+# tab via the standard `github/codeql-action/analyze` step.
+#
+# Trigger semantics (controlled by the CALLER, not this file):
+#   * pull_request  → CodeQL scans the PR diff (incremental).
+#   * push to main / schedule → CodeQL scans the full repository.
+# This workflow is just the engine; the caller's `on:` block decides scope.
+#
+# GHAS requirement:
+#   * PUBLIC repos: works without GitHub Advanced Security. Code Scanning is
+#     free for public repos.
+#   * PRIVATE repos: REQUIRES GitHub Advanced Security (GHAS). Without GHAS,
+#     the SARIF-upload step at the end of `analyze@v3` will fail with a 403.
+#     If GHAS isn't an option, callers should use the `sast.yml` reusable
+#     workflow (Semgrep-based) instead — it's GHAS-free.
+#
+# Pinning policy (per the actions-audit allow-list):
+#   * `actions/checkout` and `github/codeql-action/*` are first-party.
+#     Major-tag pins (`@v4`, `@v3`) are acceptable; SHA pinning is not
+#     required by the org's audit policy for first-party actions.
+
+on:
+  workflow_call:
+    inputs:
+      languages:
+        description: |
+          Comma-separated CodeQL language IDs to scan. Valid values:
+          `javascript-typescript`, `python`, `go`, `java-kotlin`, `csharp`,
+          `ruby`, `swift`, `cpp`. When empty (default), the workflow
+          auto-detects languages by probing the checked-out tree for
+          source files. When non-empty, the input overrides auto-detect
+          and is used verbatim.
+        required: false
+        type: string
+        default: ""
+      query_suite:
+        description: |
+          CodeQL query suite to run. One of:
+            * `default`              — baseline security queries
+            * `security-extended`    — default + additional security queries
+                                        (the org default; recommended)
+            * `security-and-quality` — security-extended + code-quality queries
+                                        (use when you want lint-style findings
+                                        alongside security findings)
+        required: false
+        type: string
+        default: security-extended
+      build_command:
+        description: |
+          Optional shell command to build compiled-language sources before
+          analysis. Use this when CodeQL's autobuild fails for a Java, C#,
+          C/C++, or Swift project (custom build system, non-default Maven
+          profile, Gradle wrapper missing, etc.). When empty (default),
+          the workflow uses `github/codeql-action/autobuild@v3` for
+          compiled languages and skips the build step entirely for
+          interpreted languages (JS/TS, Python, Go, Ruby).
+
+          The command runs in the calling repo's checked-out workspace
+          via `bash -euo pipefail`.
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  # Read source for the analysis.
+  contents: read
+  # Required to upload SARIF results to GitHub Code Scanning (Security tab).
+  security-events: write
+  # CodeQL packs sometimes read workflow metadata (e.g. to attribute results
+  # to the originating workflow run). Without this, certain pack downloads
+  # fail with a non-obvious error.
+  actions: read
+
+concurrency:
+  # One in-flight CodeQL run per PR / branch. Don't cancel in-progress runs:
+  # CodeQL analysis can take 10–30 minutes for compiled languages, and a
+  # cancelled run wastes the build-database work.
+  group: codeql-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────
+  # Job 1: Determine which languages to scan.
+  #
+  # Either uses the caller-supplied `languages` input verbatim, or
+  # probes the worktree for source files and emits a JSON array suitable
+  # for `strategy.matrix.language` in the analyze job.
+  # ─────────────────────────────────────────────────────────────────────
+  detect-languages:
+    name: Detect languages
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.detect.outputs.matrix }}
+      count: ${{ steps.detect.outputs.count }}
+    steps:
+      - name: Checkout caller repo
+        uses: actions/checkout@v4
+        with:
+          # Auto-detect probes the worktree only; full history isn't needed.
+          fetch-depth: 1
+
+      - name: Validate query_suite input
+        env:
+          QUERY_SUITE: ${{ inputs.query_suite }}
+        run: |
+          set -euo pipefail
+          case "${QUERY_SUITE}" in
+            default|security-extended|security-and-quality) ;;
+            *)
+              echo "::error::query_suite must be one of default|security-extended|security-and-quality (got: ${QUERY_SUITE})"
+              exit 1
+              ;;
+          esac
+
+      - name: Determine languages
+        id: detect
+        env:
+          LANGUAGES_INPUT: ${{ inputs.languages }}
+        run: |
+          set -euo pipefail
+
+          # Valid CodeQL language IDs (matches what
+          # `github/codeql-action/init@v3` accepts in 2025). Kept as the
+          # source of truth for both override-validation and auto-detect.
+          VALID_LANGS=(javascript-typescript python go java-kotlin csharp ruby swift cpp)
+
+          declare -a LANGS=()
+
+          if [ -n "${LANGUAGES_INPUT}" ]; then
+            # Caller override. Split on commas, trim whitespace, validate.
+            IFS=',' read -ra RAW <<< "${LANGUAGES_INPUT}"
+            for r in "${RAW[@]}"; do
+              trimmed="$(echo "${r}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+              [ -z "${trimmed}" ] && continue
+              # Validate against the known list. Catch typos at workflow
+              # start instead of letting `codeql-action/init` fail later
+              # with a less-actionable message.
+              valid=0
+              for v in "${VALID_LANGS[@]}"; do
+                if [ "${trimmed}" = "${v}" ]; then valid=1; break; fi
+              done
+              if [ "${valid}" -ne 1 ]; then
+                echo "::error::Unknown CodeQL language '${trimmed}'. Valid: ${VALID_LANGS[*]}"
+                exit 1
+              fi
+              LANGS+=("${trimmed}")
+            done
+            echo "Using caller-supplied languages: ${LANGS[*]}"
+          else
+            # Auto-detect. Probe the worktree for source files matching
+            # each supported language. The pattern mirrors `sast.yml`'s
+            # auto-detect (DEV-219) but uses CodeQL language IDs and
+            # combined buckets (JS+TS → javascript-typescript,
+            # Java+Kotlin → java-kotlin).
+            #
+            # We deliberately build a quoted bash array of `-name <pat>`
+            # args rather than splatting a string, so each glob stays a
+            # single argv token to `find` and never gets pathname-expanded
+            # by the shell against the workspace cwd.
+            declare -A LANG_GLOB_PATTERNS=(
+              [javascript-typescript]="*.js,*.jsx,*.mjs,*.cjs,*.ts,*.tsx"
+              [python]="*.py"
+              [go]="*.go"
+              [java-kotlin]="*.java,*.kt,*.kts"
+              [csharp]="*.cs,*.csx"
+              [ruby]="*.rb,*.rake,*.gemspec"
+              [swift]="*.swift"
+              [cpp]="*.c,*.cc,*.cpp,*.cxx,*.h,*.hh,*.hpp,*.hxx"
+            )
+
+            # Iterate in a fixed order so the matrix is deterministic
+            # (helps with caching, log diffing, and required-check naming).
+            for lang in javascript-typescript python go java-kotlin csharp ruby swift cpp; do
+              IFS=',' read -ra patterns <<< "${LANG_GLOB_PATTERNS[$lang]}"
+              args=()
+              for ((i=0; i<${#patterns[@]}; i++)); do
+                [ $i -gt 0 ] && args+=(-o)
+                args+=(-name "${patterns[$i]}")
+              done
+              # Prune common vendor / build / VCS directories so we don't
+              # match generated or third-party code that CodeQL wouldn't
+              # analyze anyway. `-print -quit` exits at the first match.
+              if [ -n "$(find . \
+                  -type d \( -name node_modules -o -name .git -o -name vendor \
+                            -o -name dist -o -name build -o -name target \
+                            -o -name .venv -o -name venv -o -name __pycache__ \
+                            -o -name .gradle -o -name .next -o -name out \) -prune \
+                  -o -type f \( "${args[@]}" \) -print -quit 2>/dev/null)" ]; then
+                LANGS+=("${lang}")
+                echo "Detected source for ${lang}"
+              fi
+            done
+
+            if [ "${#LANGS[@]}" -eq 0 ]; then
+              echo "::warning::No supported languages detected in the worktree. The analyze job will be skipped."
+            fi
+          fi
+
+          # Emit a JSON array for `strategy.matrix.language`. jq with
+          # `-R . | jq -s` would be tidier, but writing it by hand keeps
+          # the toolchain minimal (jq is preinstalled on ubuntu-latest
+          # but we only need it for two characters of work).
+          if [ "${#LANGS[@]}" -eq 0 ]; then
+            MATRIX_JSON='[]'
+          else
+            MATRIX_JSON='['
+            for ((i=0; i<${#LANGS[@]}; i++)); do
+              [ $i -gt 0 ] && MATRIX_JSON+=','
+              MATRIX_JSON+="\"${LANGS[$i]}\""
+            done
+            MATRIX_JSON+=']'
+          fi
+
+          echo "matrix=${MATRIX_JSON}" >> "${GITHUB_OUTPUT}"
+          echo "count=${#LANGS[@]}" >> "${GITHUB_OUTPUT}"
+          echo "Final matrix: ${MATRIX_JSON}"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Job 2: Run CodeQL analysis, fanned out one job per detected language.
+  #
+  # Skipped entirely when no languages were detected (matrix == []),
+  # which keeps the workflow valid for repos that don't yet have
+  # supported source files.
+  # ─────────────────────────────────────────────────────────────────────
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    needs: detect-languages
+    if: needs.detect-languages.outputs.count != '0'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    strategy:
+      # Don't abort the whole matrix if one language fails — every other
+      # language's findings should still reach the Security tab.
+      fail-fast: false
+      matrix:
+        language: ${{ fromJSON(needs.detect-languages.outputs.matrix) }}
+    steps:
+      - name: Checkout caller repo
+        uses: actions/checkout@v4
+        with:
+          # CodeQL needs full history for some path-based queries and for
+          # accurate diff scoping on `pull_request` events.
+          fetch-depth: 0
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          # `queries:` accepts the suite name. CodeQL resolves
+          # `security-extended` / `security-and-quality` to the bundled
+          # query packs; `default` is a no-op (uses each language's
+          # built-in default suite).
+          queries: ${{ inputs.query_suite }}
+
+      # ─────────────────────────────────────────────────────────────────
+      # Build step (compiled languages only).
+      #
+      # Three branches:
+      #   1. Caller supplied a `build_command`  → run it.
+      #   2. Compiled language, no build_command → autobuild.
+      #   3. Interpreted language               → skip both.
+      #
+      # CodeQL's compiled languages: java-kotlin, csharp, cpp, swift.
+      # CodeQL's interpreted languages (no build needed):
+      #   javascript-typescript, python, go, ruby.
+      # (Go is technically compiled but CodeQL extracts directly from
+      # source, so it doesn't need a build step.)
+      # ─────────────────────────────────────────────────────────────────
+      - name: Run caller-supplied build command
+        if: inputs.build_command != ''
+        env:
+          BUILD_COMMAND: ${{ inputs.build_command }}
+        run: |
+          set -euo pipefail
+          echo "Running caller-supplied build_command for ${{ matrix.language }}"
+          bash -c "${BUILD_COMMAND}"
+
+      - name: Autobuild (compiled languages without a custom build_command)
+        if: >-
+          inputs.build_command == '' &&
+          (matrix.language == 'java-kotlin' ||
+           matrix.language == 'csharp' ||
+           matrix.language == 'cpp' ||
+           matrix.language == 'swift')
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          # `category` keeps results from different languages distinct in
+          # the Security tab when multiple languages are scanned in the
+          # same run. Without it, GitHub treats every matrix leg's SARIF
+          # as the same "tool run" and overwrites earlier results.
+          category: "/language:${{ matrix.language }}"
