@@ -1,0 +1,84 @@
+# Drop this file into each SpiceLabsHQ repo as
+# `.github/workflows/release-artifacts.yml`. It calls the centrally
+# maintained reusable workflow in SpiceLabsHQ/.github.
+#
+# What it does:
+#   When a GitHub Release is published — typically by release-please cutting
+#   a tag — this workflow attaches three supply-chain artifacts to the
+#   Release:
+#     1. SBOMs (SPDX-JSON + CycloneDX-JSON by default)
+#     2. SLSA L3 build provenance (actions/attest-build-provenance)
+#     3. Sigstore keyless signatures (cosign sign-blob → .sig + .pem)
+#
+# The triggering Release event must come from a workflow run that is NOT
+# the GITHUB_TOKEN — Release events from GITHUB_TOKEN-authored tags do not
+# cascade. Pair this caller with the GitHub App path in
+# release-please.yml's caller (RELEASE_APP_ID + RELEASE_APP_PRIVATE_KEY)
+# so release-please's tag → Release sequence triggers this workflow.
+#
+# Empty-artifacts behavior:
+#   The default job below does not pass `artifacts:`. The reusable
+#   workflow falls back to SBOMing the GitHub-generated source tarball and
+#   skips provenance + signing (cannot honestly attest a thing not built
+#   in this run). To get signed binaries, switch to the
+#   `release-artifacts-with-builds` job below and replace the example
+#   globs with your own build outputs.
+
+name: Release Artifacts
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  # ---------------------------------------------------------------------
+  # DEFAULT JOB: no caller-built binaries. The reusable workflow downloads
+  # the auto-generated source tarball and produces a `sbom-source.<fmt>`
+  # for every requested format. Provenance + signing are skipped — there
+  # is no caller-built artifact to honestly attest or sign.
+  # ---------------------------------------------------------------------
+  release-artifacts:
+    uses: SpiceLabsHQ/.github/.github/workflows/release-artifacts.yml@v1
+    permissions:
+      # Each grant is required by at least one phase in the reusable
+      # workflow. The reusable workflow declares the same set at workflow
+      # level; declaring them here too makes the call match.
+      id-token: write       # cosign keyless signing OIDC + attestation OIDC
+      attestations: write   # actions/attest-build-provenance bundle write
+      contents: write       # gh release upload writes asset files
+      actions: read         # attest-build-provenance reads workflow metadata
+    # No `with:` block — empty `artifacts:` triggers the source-tarball
+    # SBOM-only fallback. Override `sbom_formats` if SPDX+CycloneDX isn't
+    # the right shape for your downstream toolchain.
+
+  # ---------------------------------------------------------------------
+  # ALTERNATIVE JOB: caller produces build outputs and wants them signed.
+  # Uncomment and adapt to your repo. This pattern presumes a separate
+  # build job (or a previous workflow) has already produced the files —
+  # this caller does not run a build. If you need to build first, add a
+  # build job that uploads its outputs as workflow artifacts, then a
+  # `download-artifact` step before invoking the reusable workflow (the
+  # reusable workflow runs after the caller's checkout, which is a
+  # SpiceLabsHQ/.github checkout, not the caller's source — so the build
+  # outputs MUST already exist on disk in the caller's workspace, or be
+  # passed via a different path you wire up).
+  #
+  # release-artifacts-with-builds:
+  #   uses: SpiceLabsHQ/.github/.github/workflows/release-artifacts.yml@v1
+  #   permissions:
+  #     id-token: write
+  #     attestations: write
+  #     contents: write
+  #     actions: read
+  #   with:
+  #     # Newline-separated globs (commas are also accepted). Globs are
+  #     # expanded against the checked-out workspace.
+  #     artifacts: |
+  #       dist/*.tar.gz
+  #       dist/*.zip
+  #       bin/myapp-*
+  #     # Optional: customize SBOM formats. Default is "spdx-json,cyclonedx-json".
+  #     sbom_formats: spdx-json,cyclonedx-json
+  #     # Optional toggles. Default: both true.
+  #     enable_provenance: true
+  #     enable_signing: true

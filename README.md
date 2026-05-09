@@ -296,6 +296,81 @@ You can drop the field once the first release PR has merged; release-please igno
 - **The config and manifest are strict JSON.** No comments, no trailing commas. release-please uses raw `JSON.parse()` and a parse failure aborts the whole run — no release PR opens until the file is fixed.
 - **Versioning:** Callers pin the reusable workflow with `@v1`; the reusable workflow SHA-pins both `googleapis/release-please-action` and `actions/create-github-app-token`. Action upgrades happen in one place.
 
+### Release Artifacts (`release-artifacts.yml`)
+
+The second half of the release pipeline. `release-please.yml` cuts the tag and opens the GitHub Release; this workflow attaches the supply-chain artifacts to that Release. Triggered on `release: types: [published]`.
+
+For every artifact (or for the GitHub-generated source tarball when no artifacts are passed), the workflow produces:
+
+- **SBOMs** in every requested format — default `spdx-json` and `cyclonedx-json` — via `anchore/sbom-action`'s bundled `syft` binary
+- **SLSA build provenance** via [`actions/attest-build-provenance`](https://github.com/actions/attest-build-provenance)
+- **Sigstore keyless signatures** via `cosign sign-blob`, producing both a `.sig` and the Fulcio-issued `.pem` certificate per artifact
+
+Every successfully produced output is uploaded to the triggering Release with `gh release upload --clobber`.
+
+> **Trigger requirement.** GitHub Releases authored by `GITHUB_TOKEN` do **not** cascade. Pair this caller with the GitHub App path in `release-please.yml`'s caller (`RELEASE_APP_ID` + `RELEASE_APP_PRIVATE_KEY`) so release-please's tag → Release event fires this workflow.
+
+**1. Add the caller workflow** to each repo at `.github/workflows/release-artifacts.yml`. Copy-paste-ready version at [`examples/caller-release-artifacts.yml`](examples/caller-release-artifacts.yml). The example shows two patterns side-by-side: the empty-`artifacts` default (source-tarball SBOM only) and an explicit-globs job for repos that produce build outputs.
+
+**2. Inputs** (all optional, override via `with:`):
+
+| Input | Default | Notes |
+|---|---|---|
+| `artifacts` | _(empty)_ | Newline OR comma-separated list of file globs to SBOM, attest, and sign. Empty triggers the source-tarball fallback (SBOM only — see below) |
+| `sbom_formats` | `spdx-json,cyclonedx-json` | Comma-separated SBOM formats. Accepts the values supported by Anchore's sbom-action: `spdx-json`, `cyclonedx-json`, `spdx-tag-value`, `cyclonedx-xml`, `syft-json`, `syft-table` |
+| `enable_provenance` | `true` | Set to `false` to skip the SLSA build-provenance phase. Auto-skipped in the source-fallback path |
+| `enable_signing` | `true` | Set to `false` to skip the cosign signing phase. Auto-skipped in the source-fallback path |
+
+**3. Required permissions** on the calling job:
+
+| Permission | Why |
+|---|---|
+| `id-token: write` | Required for cosign keyless signing (Sigstore Fulcio mints a short-lived cert from the workflow's OIDC token) AND for `actions/attest-build-provenance`, which uses the same OIDC primitive to mint provenance |
+| `attestations: write` | `actions/attest-build-provenance` writes its bundle into GitHub's attestation store via the Attestations API |
+| `contents: write` | `gh release upload` attaches asset files to the Release |
+| `actions: read` | `actions/attest-build-provenance` reads workflow run metadata to populate the provenance subject and builder fields |
+
+No secrets required. The workflow uses the run's own `GITHUB_TOKEN` for `gh release upload` and the OIDC token minted at job time for cosign and the attestation action.
+
+**4. Empty-artifacts fallback (default behavior).** When the caller does not pass `artifacts:`, the workflow downloads the GitHub-generated source tarball that ships with every Release (via `gh release download "$TAG" --pattern '*.tar.gz'`) and produces SBOMs against it, named `sbom-source.<format>` (e.g. `sbom-source.spdx.json`, `sbom-source.cdx.json`). The provenance and signing phases are **skipped** in this path: there is no caller-built subject to honestly attest, and signing a tarball this workflow did not produce buys nothing for downstream verifiers. Pass explicit `artifacts:` globs to opt in to provenance + signing.
+
+**5. Failure semantics.** Each phase (SBOM, provenance, signing, upload) runs with `continue-on-error: true`. A failure in one phase emits an `::error::` annotation but does not stop the next phase from running, so adopters see partial artifacts whenever possible. A final summary step always runs, prints a phase outcome table to the job summary, and exits non-zero if any phase failed — so the job's overall status reflects the union of phase outcomes. The Release retains whatever artifacts succeeded.
+
+**6. Verifying signatures.** Spice Labs releases are signed by this workflow's identity URL. The canonical verification command for any Spice Labs Release artifact:
+
+```bash
+cosign verify-blob \
+  --certificate-identity-regexp '^https://github\.com/SpiceLabsHQ/[^/]+/\.github/workflows/release-artifacts\.yml@.*$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate <artifact>.pem \
+  --signature <artifact>.sig \
+  <artifact>
+```
+
+For documentation completeness, the generic shape (any owner/repo) looks like:
+
+```bash
+cosign verify-blob \
+  --certificate-identity-regexp '^https://github\.com/<owner>/<repo>/\.github/workflows/release-artifacts\.yml@.*$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate <artifact>.pem \
+  --signature <artifact>.sig \
+  <artifact>
+```
+
+See the [cosign documentation](https://docs.sigstore.dev/cosign/verifying/verify/) for the full set of certificate-matching flags (`--certificate-identity` for an exact match, `--certificate-github-workflow-*` for the GitHub-specific subject extensions, etc.).
+
+**7. Verifying SLSA provenance.** The provenance bundle is uploaded to the Release as `provenance.intoto.jsonl`. Verify with [`slsa-verifier`](https://github.com/slsa-framework/slsa-verifier):
+
+```bash
+slsa-verifier verify-artifact \
+  --provenance-path provenance.intoto.jsonl \
+  --source-uri github.com/<owner>/<repo> \
+  <artifact>
+```
+
+**8. Pinning policy.** The reusable workflow SHA-pins all third-party actions (`anchore/sbom-action`, `sigstore/cosign-installer`) to 40-char commit SHAs per the actions-audit policy. `actions/attest-build-provenance` is first-party but is also SHA-pinned because it is an attestation primitive whose semantics we want to bump deliberately. `actions/checkout` follows the standard first-party major-tag policy. Callers pin the reusable workflow itself with `@v1`.
+
 | `languages` | (empty → auto-detect) | Comma-separated CodeQL language IDs to override auto-detect. Use the IDs listed above |
 | `query_suite` | `security-extended` | One of `default`, `security-extended`, `security-and-quality`. Pick `security-and-quality` if you want lint-style code-quality findings alongside security findings |
 | `build_command` | (empty) | Custom shell command to build compiled-language sources (Java/Kotlin, C#, C/C++, Swift) when CodeQL's `autobuild` can't figure out your project. Empty → autobuild for compiled languages, no-op for interpreted languages |
