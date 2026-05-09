@@ -94,3 +94,31 @@ Two PR checks bundled into one reusable workflow. Drop the [caller workflow](exa
 | `large_pr_threshold` | `500` | Changed-lines threshold (additions + deletions) for the soft size warning |
 
 No secrets needed. The caller passes `permissions: { contents: read, pull-requests: write }` so the workflow can read the PR payload and post the sticky comments.
+
+### Secret Scan (`secret-scan.yml`)
+
+Gitleaks-based scanner for repo secrets, layered to catch what GitHub's native push-protection misses (custom token formats, secrets that already landed in history). The reusable workflow drives `gitleaks/gitleaks-action` in two complementary modes; callers wire each mode to the appropriate triggers.
+
+The two modes:
+
+- **`pr-diff`** (fast): scans only the lines a PR changes. Findings post as inline review comments on the PR. Run on every `pull_request` for sub-minute author feedback.
+- **`full-history`** (slow): scans the entire git history. Run on `push` to the default branch and on a weekly cron. Catches secrets that pr-diff can't see — e.g., committed and "fixed" within the same PR (the secret is still in history forever) or committed before the repo adopted scanning.
+
+**1. Add the caller workflow** to each repo at `.github/workflows/secret-scan.yml`. Copy-paste-ready version at [`examples/caller-secret-scan.yml`](examples/caller-secret-scan.yml). The example wires up all three triggers (PR, push to main, weekly cron) as separate jobs that select the right mode.
+
+**2. (Optional) Add a Gitleaks config** at `.gitleaks.toml` for repo-specific custom rules and allowlists. The reusable workflow auto-detects the file; absent file → Gitleaks built-in default ruleset.
+
+**3. Inputs** (all optional, override via `with:`):
+
+| Input | Default | Notes |
+|---|---|---|
+| `mode` | `pr-diff` | `pr-diff` (PR diff only, inline review comments) or `full-history` (entire git history) |
+| `config_path` | `.gitleaks.toml` | Path to a Gitleaks config file. Tolerated absent — falls back to built-in defaults |
+
+**4. Optional secret:**
+
+| Secret | Effect when set |
+|---|---|
+| `GITLEAKS_LICENSE` | Required by `gitleaks-action@v2` for repos under an **organization** account; not required for personal-account repos. Pass via `secrets: inherit` (simplest) or explicitly as `GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}`. If absent and the repo is under an org, the action fails fast with its own diagnostic — that's intentional, do not silently no-op a secret scanner |
+
+**Versioning:** Callers pin the reusable workflow with `@v1`; the reusable workflow pins `gitleaks/gitleaks-action` to a 40-char SHA. Action upgrades happen in one place.
