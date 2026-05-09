@@ -77,3 +77,20 @@ The reusable workflow leads by example: every third-party action it invokes is p
 **4. No secrets required.** The audit runs entirely against the caller's checked-out workspace and uses `GITHUB_TOKEN` for SARIF upload.
 
 **Versioning:** Callers pin with `@v1`. The reusable workflow pins zizmor to an exact version (`ZIZMOR_VERSION` env in the workflow) so audit results are reproducible across runs.
+
+### PR Hygiene (`pr-hygiene.yml`)
+
+Two PR checks bundled into one reusable workflow. Drop the [caller workflow](examples/caller-pr-hygiene.yml) into any repo at `.github/workflows/pr-hygiene.yml`.
+
+- **Conventional Commits title check (blocking).** Enforces a [Conventional Commits](https://www.conventionalcommits.org/) header on the PR title — required so `release-please` can classify the change at squash-merge time. On failure the workflow posts a sticky comment with a fix example; the comment is deleted automatically once the title is corrected.
+- **Large-PR size warning (non-blocking).** Posts an informational sticky comment when additions + deletions exceed the soft threshold. The check exits 0 either way — branch protection should not require it.
+
+**Inputs** (all optional, override via `with:`):
+
+| Input | Default | Notes |
+|---|---|---|
+| `types` | `feat,fix,chore,docs,refactor,test,build,ci,perf,style,revert` | Comma-separated allowed CC types (converted internally to the action's newline format) |
+| `require_scope` | `false` | When `true`, PR titles must include a scope, e.g. `feat(api): ...` |
+| `large_pr_threshold` | `500` | Changed-lines threshold (additions + deletions) for the soft size warning |
+
+No secrets needed. The caller passes `permissions: { contents: read, pull-requests: write }` so the workflow can read the PR payload and post the sticky comments.
