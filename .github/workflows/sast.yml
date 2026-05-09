@@ -1,0 +1,277 @@
+name: SAST (reusable)
+
+# Static Application Security Testing via Semgrep.
+#
+# Runs the curated SpiceLabs default ruleset (p/default + p/owasp-top-ten +
+# p/secrets), auto-detects language-specific rulesets based on files in the
+# checked-out tree, and uploads results as SARIF to GitHub Code Scanning.
+#
+# Why pip and not Docker:
+# Both transports were considered. We install Semgrep via `pip install
+# semgrep==<pinned>` because (a) the pinned version is plain-text auditable in
+# this workflow, (b) PyPI ships a reproducible wheel, and (c) it removes the
+# Docker pull / digest-management overhead on every run. The Docker image
+# (`semgrep/semgrep`) would be equivalent functionally, but pinning it safely
+# requires a sha256 digest that we'd have to chase on every Semgrep release.
+# pip + a version pin is the cleaner audit story for a reusable workflow.
+
+on:
+  workflow_call:
+    inputs:
+      additional_rulesets:
+        description: |
+          Comma-separated extra Semgrep ruleset IDs to layer on top of the curated
+          defaults (p/default, p/owasp-top-ten, p/secrets) and auto-detected
+          language packs. Example: `p/javascript,p/golang`. Each entry becomes
+          its own `--config` flag.
+        required: false
+        type: string
+        default: ""
+      config_path:
+        description: |
+          Path (relative to the calling repo) to a caller-maintained Semgrep
+          config (custom rules). Tolerated absent — if no file exists at this
+          path, the workflow simply skips it. Default `.semgrep.yml`.
+        required: false
+        type: string
+        default: .semgrep.yml
+      fail_on_severity:
+        description: |
+          Severity threshold at which Semgrep should fail the job. One of
+          `info`, `warning`, `error`. Default `error` (the OWASP-grade gate).
+        required: false
+        type: string
+        default: error
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+concurrency:
+  group: sast-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  semgrep:
+    name: Semgrep scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout caller repo
+        uses: actions/checkout@v4
+        with:
+          # Full history is unnecessary; Semgrep scans the working tree.
+          fetch-depth: 1
+
+      - name: Validate fail_on_severity input
+        env:
+          FAIL_ON_SEVERITY: ${{ inputs.fail_on_severity }}
+        run: |
+          set -euo pipefail
+          case "${FAIL_ON_SEVERITY}" in
+            info|warning|error) ;;
+            *)
+              echo "::error::fail_on_severity must be one of info|warning|error (got: ${FAIL_ON_SEVERITY})"
+              exit 1
+              ;;
+          esac
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Semgrep
+        # Pinned version — bump deliberately. Latest stable on PyPI as of this
+        # workflow's release. Floating to `latest` would silently change the
+        # rule engine across runs; pinning makes Semgrep upgrades a tracked,
+        # reviewable change.
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install "semgrep==1.162.0"
+          semgrep --version
+
+      - name: Build Semgrep config flags
+        id: cfg
+        env:
+          ADDITIONAL_RULESETS: ${{ inputs.additional_rulesets }}
+          CONFIG_PATH: ${{ inputs.config_path }}
+        run: |
+          set -euo pipefail
+
+          # Curated org-standard rulesets. p/default is Semgrep's general
+          # baseline; p/owasp-top-ten covers OWASP A01..A10 (including A03
+          # injection — the acceptance-criteria target); p/secrets catches
+          # high-entropy strings and known credential shapes.
+          CONFIGS=(--config p/default --config p/owasp-top-ten --config p/secrets)
+
+          # Caller-supplied extras. Comma-separated → individual --config flags.
+          if [ -n "${ADDITIONAL_RULESETS}" ]; then
+            IFS=',' read -ra EXTRAS <<< "${ADDITIONAL_RULESETS}"
+            for r in "${EXTRAS[@]}"; do
+              # Trim surrounding whitespace tolerantly.
+              trimmed="$(echo "${r}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+              if [ -n "${trimmed}" ]; then
+                CONFIGS+=(--config "${trimmed}")
+              fi
+            done
+          fi
+
+          # Caller's optional custom config. Tolerated absent — many callers
+          # won't have one, and we don't want to make this a hard requirement.
+          if [ -n "${CONFIG_PATH}" ] && [ -f "${CONFIG_PATH}" ]; then
+            CONFIGS+=(--config "${CONFIG_PATH}")
+            echo "Caller config detected at ${CONFIG_PATH} — including in scan"
+          else
+            echo "No caller config at ${CONFIG_PATH} — skipping (this is fine)"
+          fi
+
+          # Auto-detect language rulesets. We probe the worktree for source
+          # files and, when found, append the matching p/<lang> ruleset. Using
+          # `-print -quit` keeps each find cheap (stops after the first match).
+          # Only language packs that are well-maintained upstream are wired up.
+          #
+          # Patterns are stored as comma-separated lists of *literal* glob
+          # strings (e.g. `*.js`). We deliberately do NOT pre-format them as
+          # `-name *.js -o -name *.jsx ...` strings: an unquoted expansion of
+          # such a string would let the shell pathname-expand `*.js` against
+          # the workspace cwd, which can substitute literal filenames into the
+          # find argv and break the invocation. Instead, we build a properly
+          # quoted bash array of `-name <pattern>` args and expand it via
+          # `"${args[@]}"`, which preserves each pattern as a single argv
+          # token with no globbing.
+          declare -A LANG_GLOB_PATTERNS=(
+            [p/javascript]="*.js,*.jsx,*.ts,*.tsx"
+            [p/python]="*.py"
+            [p/golang]="*.go"
+            [p/java]="*.java"
+          )
+          # Iterate in a stable order so logs are deterministic.
+          for ruleset in p/javascript p/python p/golang p/java; do
+            IFS=',' read -ra patterns <<< "${LANG_GLOB_PATTERNS[$ruleset]}"
+            args=()
+            for ((i=0; i<${#patterns[@]}; i++)); do
+              [ $i -gt 0 ] && args+=(-o)
+              args+=(-name "${patterns[$i]}")
+            done
+            if [ -n "$(find . -type d \( -name node_modules -o -name .git -o -name vendor -o -name dist -o -name build \) -prune -o -type f \( "${args[@]}" \) -print -quit 2>/dev/null)" ]; then
+              CONFIGS+=(--config "${ruleset}")
+              echo "Detected source for ${ruleset} — adding ruleset"
+            fi
+          done
+
+          # Emit the final flag string for the next step. Quoting via printf
+          # %q preserves any caller-supplied paths that contain spaces.
+          printf 'flags=' >> "${GITHUB_OUTPUT}"
+          printf '%q ' "${CONFIGS[@]}" >> "${GITHUB_OUTPUT}"
+          printf '\n' >> "${GITHUB_OUTPUT}"
+
+          echo "Final Semgrep flags: ${CONFIGS[*]}"
+
+      - name: Run Semgrep
+        env:
+          SEMGREP_FLAGS: ${{ steps.cfg.outputs.flags }}
+        run: |
+          set -euo pipefail
+          # Run every rule at every severity. We deliberately do NOT pass
+          # `--severity` (which is a *rule-selection filter* — it controls
+          # which rules are even loaded) or `--error` (which folds the gate
+          # into Semgrep's exit code). Both would cause lower-severity rules
+          # from p/owasp-top-ten and p/secrets to either be skipped entirely
+          # or fail the job before SARIF upload. We want the SARIF to carry
+          # the COMPLETE set of findings so GitHub Code Scanning shows the
+          # full picture; the gate decision is a separate post-scan step.
+          #
+          # The `|| EXIT=$?` pattern keeps the workflow alive on Semgrep
+          # internal errors so the SARIF upload still runs. A non-zero exit
+          # here means Semgrep itself failed (crash, config error) — not a
+          # findings-based gate fail. Findings-based gating happens later.
+          EXIT=0
+          # shellcheck disable=SC2086
+          semgrep scan \
+            ${SEMGREP_FLAGS} \
+            --sarif \
+            --output semgrep.sarif \
+            --metrics=off \
+            --disable-version-check \
+            || EXIT=$?
+          echo "semgrep exit=${EXIT}"
+          # A non-zero exit with no SARIF means Semgrep crashed; fail loudly.
+          # A non-zero exit *with* a SARIF on disk is tolerated here so the
+          # upload step can still surface partial results — but we still
+          # propagate the failure after upload via the engine-error guard.
+          echo "${EXIT}" > semgrep.exit
+
+      - name: Upload SARIF to Code Scanning
+        # First-party action — major-tag pin is acceptable per org policy.
+        # Always run even if Semgrep failed, so findings reach the Security tab.
+        if: ${{ always() && hashFiles('semgrep.sarif') != '' }}
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+      - name: Fail on Semgrep engine error
+        # If Semgrep itself crashed (non-zero exit) we surface that as a job
+        # failure regardless of findings. The SARIF upload above has already
+        # run, so any partial findings still reached Code Scanning.
+        run: |
+          set -euo pipefail
+          EXIT="$(cat semgrep.exit 2>/dev/null || echo 0)"
+          if [ "${EXIT}" -ne 0 ]; then
+            echo "::error::Semgrep exited with status ${EXIT} (engine error, not a findings gate). Check the 'Run Semgrep' step logs."
+            exit "${EXIT}"
+          fi
+
+      - name: Enforce severity gate
+        # Decoupled from Semgrep's own exit code. We parse the SARIF and
+        # count findings at or above ${FAIL_ON_SEVERITY}. SARIF `level` is
+        # the standardized severity field; Semgrep maps its own severities
+        # to SARIF as: INFO→note, WARNING→warning, ERROR→error. SARIF also
+        # allows `none`, which we ignore (it's not a real finding severity).
+        #
+        # Threshold → set of SARIF levels that count as "at or above":
+        #   info    → note, warning, error
+        #   warning → warning, error
+        #   error   → error
+        env:
+          FAIL_ON_SEVERITY: ${{ inputs.fail_on_severity }}
+        run: |
+          set -euo pipefail
+
+          if [ ! -f semgrep.sarif ]; then
+            echo "::error::semgrep.sarif not found — cannot enforce severity gate."
+            exit 1
+          fi
+
+          case "${FAIL_ON_SEVERITY}" in
+            info)    LEVELS='["note","warning","error"]' ;;
+            warning) LEVELS='["warning","error"]' ;;
+            error)   LEVELS='["error"]' ;;
+            *)
+              echo "::error::Unexpected fail_on_severity '${FAIL_ON_SEVERITY}' (validation should have caught this)"
+              exit 1
+              ;;
+          esac
+
+          # Count findings whose SARIF `level` is in the threshold set. A
+          # missing `level` defaults to `warning` per the SARIF 2.1.0 spec
+          # (§3.27.10), which we honor via `// "warning"`.
+          COUNT="$(jq --argjson levels "${LEVELS}" '
+            [ .runs[]?.results[]? | (.level // "warning") | select(. as $l | $levels | index($l)) ] | length
+          ' semgrep.sarif)"
+
+          # Per-level breakdown for the log — helps debug why the gate fired.
+          BREAKDOWN="$(jq -r '
+            [ .runs[]?.results[]? | (.level // "warning") ]
+            | group_by(.) | map({level: .[0], count: length})
+            | map("\(.level)=\(.count)") | join(" ")
+          ' semgrep.sarif)"
+          echo "SARIF level breakdown: ${BREAKDOWN:-<none>}"
+
+          if [ "${COUNT}" -gt 0 ]; then
+            echo "::error::Semgrep found ${COUNT} finding(s) at or above severity '${FAIL_ON_SEVERITY}'. See the Security tab for details."
+            exit 1
+          fi
+          echo "Semgrep clean at threshold '${FAIL_ON_SEVERITY}'."
