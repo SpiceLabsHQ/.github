@@ -130,6 +130,26 @@ jobs:
           echo "Resolved mode: ${MODE}"
           echo "mode=${MODE}" >> "${GITHUB_OUTPUT}"
 
+      # `gh pr edit --add-label "<name>"` errors with `"<name>" not found`
+      # when the label doesn't exist in the repo — gh does not auto-create
+      # labels on add. Pre-create the four labels Pepper applies so every
+      # downstream `--add-label`/`--remove-label` resolves cleanly,
+      # including the very first review in a fresh consumer repo.
+      # `gh label create` errors when a label already exists; the `|| true`
+      # makes the call a no-op so we don't clobber per-repo customization
+      # of color or description on existing labels.
+      - name: Ensure Pepper labels exist (review mode only)
+        if: steps.mode.outputs.mode == 'review'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh label create "pepper-cooking"           --repo "${REPO}" --color "B87333" --description "Pepper is currently reviewing this PR" 2>/dev/null || true
+          gh label create "pepper-approved"          --repo "${REPO}" --color "0E8A16" --description "Pepper approved this PR" 2>/dev/null || true
+          gh label create "pepper-changes-requested" --repo "${REPO}" --color "D93F0B" --description "Pepper requested changes" 2>/dev/null || true
+          gh label create "pepper-needs-review"      --repo "${REPO}" --color "FBCA04" --description "Pepper needs human review" 2>/dev/null || true
+
       # Mark this PR as under active Pepper review and clear any prior
       # outcome labels in a single API call. The remove side is gated on
       # labels actually being on the PR — `gh pr edit --remove-label`
