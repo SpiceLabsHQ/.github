@@ -1,0 +1,12 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "simple",
+  "include-component-in-tag": false,
+  "include-v-in-tag": true,
+  "bootstrap-sha": "bce3abdf0e6059c911e1617a60cb6bf731cbbb68",
+  "packages": {
+    ".": {
+      "package-name": "spice-labs-org-defaults"
+    }
+  }
+}
