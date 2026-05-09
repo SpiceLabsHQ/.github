@@ -135,8 +135,12 @@ jobs:
       # branch so commits land on the right ref. Fork PRs aren't supported in
       # on-demand mode — the App token can't push to forks, and we don't want to
       # silently no-op.
+      #
+      # Gated on resolved mode rather than event name so a `@pepper review`
+      # comment on a fork PR isn't blocked by the fork-fail below — review mode
+      # doesn't need branch switching at all (it reads the diff via gh).
       - name: Switch to PR head branch (on-demand mode only)
-        if: github.event_name == 'issue_comment'
+        if: steps.mode.outputs.mode == 'on-demand'
         env:
           PR_NUMBER: ${{ github.event.issue.number }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
