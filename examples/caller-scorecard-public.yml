@@ -1,0 +1,51 @@
+# FOR OSS REPOS ONLY. Publishes to OpenSSF's public dashboard at
+# securityscorecards.dev. For internal/private repos, use scorecard.yml
+# (which does NOT publish externally).
+#
+# Drop this file into each public OSS SpiceLabsHQ repo as
+# `.github/workflows/scorecard-public.yml`. It calls the centrally
+# maintained reusable workflow in SpiceLabsHQ/.github.
+#
+# What it does:
+#   Runs the OpenSSF Scorecard against this repo on a weekly schedule (and on
+#   demand), publishes the signed results to OpenSSF's public dashboard at
+#   securityscorecards.dev so the repo earns the public Scorecard badge,
+#   uploads the SARIF results to the Security tab, and stores the raw SARIF
+#   as a workflow artifact for 14 days.
+#
+# Scheduling:
+#   The schedule lives here in the caller, not in the reusable workflow —
+#   `workflow_call` can't dictate cron to its parent. Adjust the cron below if
+#   Monday 06:00 UTC doesn't suit your repo.
+#
+# Why no workflow-level `permissions:` block:
+#   Scorecard's publish API (post_results.go) rejects results from any
+#   workflow that grants write permissions at the workflow level. Permissions
+#   are declared at job level only — both here in the caller and in the
+#   reusable workflow.
+
+name: OpenSSF Scorecard (public)
+
+on:
+  # Weekly run. Default: Monday 06:00 UTC. Stagger across repos if you want to
+  # avoid hammering the Scorecard analysis runners at the same minute.
+  schedule:
+    - cron: "0 6 * * 1"
+  # Manual trigger for ad-hoc runs (e.g. after tightening branch protection).
+  workflow_dispatch:
+  # `branch_protection_rule` is Scorecard's recommended trigger: every change to
+  # branch protection re-scores the repo so the Branch-Protection check stays
+  # accurate without waiting for the weekly cron.
+  branch_protection_rule:
+
+jobs:
+  scorecard:
+    uses: SpiceLabsHQ/.github/.github/workflows/scorecard-public.yml@v1
+    permissions:
+      # Job-level least privilege. A workflow-level `permissions:` block is
+      # intentionally absent — Scorecard's publish API rejects results from
+      # workflows that declare any write permission at the workflow level.
+      contents: read           # Scorecard reads repo metadata
+      security-events: write   # SARIF upload to Code Scanning
+      id-token: write          # Scorecard signs results before uploading to securityscorecards.dev
+      actions: read            # Scorecard reads workflow files for Token-Permissions / Pinned-Dependencies

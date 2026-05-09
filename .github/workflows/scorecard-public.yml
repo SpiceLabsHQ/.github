@@ -1,0 +1,107 @@
+name: OpenSSF Scorecard public (reusable)
+
+# Reusable workflow that runs the OpenSSF Scorecard against the calling repo,
+# publishes the signed results to OpenSSF's public dashboard at
+# securityscorecards.dev, uploads the SARIF results to GitHub Code Scanning so
+# they appear in the repo's Security tab, and stores the raw SARIF as a
+# workflow artifact for 14 days.
+#
+# Scope:
+#   This workflow is the PUBLIC counterpart to the internal scorecard.yml. Use
+#   it ONLY for public OSS repos that should appear on the public Scorecard
+#   dashboard and earn the public Scorecard badge. For internal/private repos,
+#   use scorecard.yml instead — it does not publish externally.
+#
+# Trigger:    workflow_call only
+# Scope:      single job, runs on ubuntu-latest
+# Inputs:     none — the workflow always produces SARIF, publishes to the
+#             public dashboard, and uploads SARIF to Code Scanning
+# Permissions: declared at job level only; each grant is documented inline
+#
+# IMPORTANT — Scorecard publish-API constraints (enforced by post_results.go):
+#   1. NO workflow-level `permissions:` block. Scorecard's publish endpoint
+#      rejects results from workflows that grant any `write` permission at the
+#      workflow level. All permissions MUST live at job level only. Adding a
+#      workflow-level `permissions:` block — even a read-only one — risks
+#      future drift toward broader scope and is forbidden by policy here.
+#   2. Steps may ONLY come from Scorecard's upstream allowlist:
+#        - actions/checkout
+#        - actions/upload-artifact
+#        - github/codeql-action/upload-sarif
+#        - ossf/scorecard-action
+#        - step-security/harden-runner
+#      NO custom `run:` shell steps. NO other actions. NO matrix. NO inputs
+#      that would require validation steps. The workflow is a clean four-step
+#      pipeline by design — keep it that way.
+#   3. `publish_results: true` is mandatory. That's the whole point of this
+#      workflow. The internal scorecard.yml leaves it disabled; this one
+#      always publishes.
+#
+# Pinning policy:
+#   - Third-party action `ossf/scorecard-action` is pinned to a 40-char commit SHA
+#     (see actions-audit policy). The comment next to the pin records the human-readable tag.
+#   - First-party `actions/*` and `github/*` use major-version tags per actions-audit policy.
+#
+# Scheduling:
+#   The cron schedule is defined by the *caller* workflow (see examples/caller-scorecard-public.yml).
+#   `workflow_call` cannot dictate a schedule to its parent, so this reusable workflow
+#   intentionally does not accept a `cron` input — that would be misleading. Callers are
+#   expected to wire `on: schedule:` themselves.
+
+on:
+  workflow_call:
+
+jobs:
+  analysis:
+    name: Scorecard analysis (public)
+    runs-on: ubuntu-latest
+    permissions:
+      # Job-level least privilege. Workflow-level permissions are intentionally
+      # NOT declared — Scorecard's publish API rejects any workflow that grants
+      # write permissions at the workflow level. Every grant below is required
+      # for the publish path to succeed.
+      contents: read           # Scorecard reads repo metadata, branch protection, files, releases
+      security-events: write   # github/codeql-action/upload-sarif pushes SARIF to Code Scanning
+      id-token: write          # Scorecard signs results with an OIDC token before uploading
+                               # to securityscorecards.dev. This is the documented use of OIDC
+                               # in the upstream Scorecard publish-flow template.
+      actions: read            # Scorecard's Token-Permissions / Pinned-Dependencies checks read
+                               # workflow files via the Actions API.
+    steps:
+      - name: Checkout caller repo
+        uses: actions/checkout@v4
+        with:
+          # Scorecard's docs explicitly require persist-credentials: false. Several
+          # checks (notably Token-Permissions) will fail if the default GITHUB_TOKEN
+          # remains in the local git config because the token's permissions become
+          # part of what Scorecard tries to evaluate.
+          persist-credentials: false
+
+      - name: Run analysis
+        # Pinned to v2.4.3 (commit SHA). Bump via `gh api repos/ossf/scorecard-action/git/ref/tags/<tag>`
+        # then dereference the annotated tag with `gh api repos/ossf/scorecard-action/git/tags/<sha>`.
+        uses: ossf/scorecard-action@4eaacf0543bb3f2c246792bd56e8cdeffafb205a # v2.4.3
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          # publish_results MUST be true for this workflow — the whole purpose
+          # of the public variant is to appear on securityscorecards.dev and
+          # earn the public Scorecard badge. Flipping this to false silently
+          # turns the workflow into a worse copy of the internal scorecard.yml.
+          publish_results: true
+
+      - name: Upload results artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: scorecard-public-results-sarif
+          path: results.sarif
+          # Shorter retention than the internal workflow: published results
+          # already live on securityscorecards.dev for long-term reference, so
+          # the local artifact only needs to cover near-term debugging.
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload SARIF to Code Scanning
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
