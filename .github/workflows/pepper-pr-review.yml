@@ -146,14 +146,18 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
         run: |
           set -euo pipefail
+          # Build the gh-pr-edit argv as a single array so we never expand
+          # an empty array under `set -u` (bash 3.2 / 4.3 footgun: empty
+          # `"${arr[@]}"` errors as unbound variable). ARGS always carries
+          # the --add-label pair, so the expansion is always safe.
           CURRENT=$(gh pr view "${PR_NUMBER}" --json labels --jq '[.labels[].name] | join(",")')
-          REMOVES=()
+          ARGS=(--add-label "pepper-cooking")
           for label in pepper-approved pepper-changes-requested pepper-needs-review; do
             case ",${CURRENT}," in
-              *,"${label}",*) REMOVES+=(--remove-label "${label}") ;;
+              *,"${label}",*) ARGS+=(--remove-label "${label}") ;;
             esac
           done
-          gh pr edit "${PR_NUMBER}" --add-label "pepper-cooking" "${REMOVES[@]}"
+          gh pr edit "${PR_NUMBER}" "${ARGS[@]}"
 
       # `issue_comment` events check out the default branch by default. For on-demand
       # mode (Pepper making edits the user asked for) we need to be on the PR's head
