@@ -104,6 +104,32 @@ jobs:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
 
+      # `pull_request` always means review. `issue_comment` splits by body:
+      # `@pepper review` (or whatever trigger_phrase is) followed by the word
+      # `review` routes to the review prompt with read-only tools; anything
+      # else routes to on-demand mode with edit/write/push tools. Keeping the
+      # split here means downstream steps stay branch-free on event_name.
+      - name: Determine mode
+        id: mode
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          TRIGGER_PHRASE: ${{ inputs.trigger_phrase }}
+        run: |
+          set -euo pipefail
+          MODE="on-demand"
+          if [ "${EVENT_NAME}" = "pull_request" ]; then
+            MODE="review"
+          elif [ "${EVENT_NAME}" = "issue_comment" ]; then
+            NORMALIZED=$(printf '%s' "${COMMENT_BODY}" | tr -s '[:space:]' ' ' | tr '[:upper:]' '[:lower:]')
+            TRIGGER_LOWER=$(printf '%s' "${TRIGGER_PHRASE}" | tr '[:upper:]' '[:lower:]')
+            case "${NORMALIZED}" in
+              *"${TRIGGER_LOWER} review"*) MODE="review" ;;
+            esac
+          fi
+          echo "Resolved mode: ${MODE}"
+          echo "mode=${MODE}" >> "${GITHUB_OUTPUT}"
+
       # `issue_comment` events check out the default branch by default. For on-demand
       # mode (Pepper making edits the user asked for) we need to be on the PR's head
       # branch so commits land on the right ref. Fork PRs aren't supported in
@@ -165,24 +191,24 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
           GUIDELINES_MARKER: "<!-- PROJECT_GUIDELINES_PLACEHOLDER -->"
           TASK_MARKER: "<!-- TASK_PLACEHOLDER -->"
-          EVENT_NAME: ${{ github.event_name }}
+          MODE: ${{ steps.mode.outputs.mode }}
           COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
           set -euo pipefail
 
-          # Pick the right template for the triggering event. Each mode has its
+          # Pick the right template for the resolved mode. Each mode has its
           # own purpose-built prompt — sharing a prompt led to the model picking
           # the wrong mode and either reviewing on-demand requests or trying to
           # edit during auto-review.
-          case "${EVENT_NAME}" in
-            pull_request)
+          case "${MODE}" in
+            review)
               TEMPLATE=".pepper-pr-review-tpl/prompts/pr-review-default.md"
               ;;
-            issue_comment)
+            on-demand)
               TEMPLATE=".pepper-pr-review-tpl/prompts/on-demand-default.md"
               ;;
             *)
-              echo "Unsupported event: ${EVENT_NAME}" >&2
+              echo "Unsupported mode: ${MODE}" >&2
               exit 1
               ;;
           esac
@@ -211,7 +237,7 @@ jobs:
           ' "${TEMPLATE}" > "${ASSEMBLED}"
 
           # For on-demand, substitute the user's comment in for the task placeholder.
-          if [ "${EVENT_NAME}" = "issue_comment" ]; then
+          if [ "${MODE}" = "on-demand" ]; then
             TASK_FILE="$(mktemp)"
             printf '%s\n' "${COMMENT_BODY}" > "${TASK_FILE}"
             ASSEMBLED2="$(mktemp)"
@@ -240,10 +266,13 @@ jobs:
 
       - name: Determine allowed tools for this run
         id: tools
+        env:
+          MODE: ${{ steps.mode.outputs.mode }}
         run: |
           set -euo pipefail
-          # Auto-review (pull_request) is read-only on the filesystem.
-          # On-demand (issue_comment) opens edit/write/push capabilities.
+          # Review mode is read-only on the filesystem (auto-review on
+          # pull_request, or `@pepper review` comment on a PR).
+          # On-demand mode opens edit/write/push capabilities.
           AUTO_TOOLS='Bash(gh *),Bash(git log:*),Bash(git diff:*),Bash(git blame:*),Bash(git show:*),Bash(curl *)'
           # Linear MCP read-only tools. The hosted Linear MCP exposes more,
           # but the bot only needs issues/comments/teams/projects/users for
@@ -251,7 +280,7 @@ jobs:
           # tool can never be invoked even if the API key is later upgraded.
           LINEAR_TOOLS='mcp__linear__get_issue,mcp__linear__list_issues,mcp__linear__list_comments,mcp__linear__get_team,mcp__linear__list_teams,mcp__linear__get_user,mcp__linear__list_users,mcp__linear__get_project,mcp__linear__list_projects,mcp__linear__list_issue_labels,mcp__linear__get_milestone,mcp__linear__list_milestones,mcp__linear__get_initiative,mcp__linear__list_initiatives'
           ON_DEMAND_TOOLS='Edit,Write,Bash'
-          if [ "${{ github.event_name }}" = "issue_comment" ]; then
+          if [ "${MODE}" = "on-demand" ]; then
             echo "allowed=${ON_DEMAND_TOOLS}" >> "${GITHUB_OUTPUT}"
           else
             echo "allowed=${AUTO_TOOLS},${LINEAR_TOOLS}" >> "${GITHUB_OUTPUT}"
@@ -262,9 +291,11 @@ jobs:
       # then has read-only access to Linear via mcp__linear__* tools, which
       # supports graph traversal (sub-issues, parents, related, comments)
       # without the bot needing to write GraphQL or auth headers itself.
-      - name: Build MCP config (auto-review only)
+      # Runs for any review-mode invocation (pull_request or `@pepper review`
+      # comment) so re-reviews get the same Linear context as auto-review.
+      - name: Build MCP config (review mode only)
         id: mcp
-        if: github.event_name == 'pull_request'
+        if: steps.mode.outputs.mode == 'review'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         run: |
