@@ -15,7 +15,7 @@
 #            manifest_file   — path to .release-please-manifest.json
 #            target_branch   — branch release-please opens PRs against
 #
-# Secrets:   RELEASE_APP_ID + RELEASE_APP_PRIVATE_KEY (BOTH or NEITHER).
+# Secrets:   ROSEMARY_RELEASER_APP_ID + ROSEMARY_RELEASER_APP_PRIVATE_KEY (BOTH or NEITHER).
 #            When both are provided, this workflow mints a short-lived
 #            installation token via actions/create-github-app-token and
 #            hands it to release-please. PRs and tags then come from the
@@ -66,16 +66,16 @@ on:
         type: string
         default: main
     secrets:
-      RELEASE_APP_ID:
+      ROSEMARY_RELEASER_APP_ID:
         description: |
           GitHub App ID for a dedicated release-bot. Optional. When provided
-          together with RELEASE_APP_PRIVATE_KEY, the release PR and tags are
+          together with ROSEMARY_RELEASER_APP_PRIVATE_KEY, the release PR and tags are
           authored by the App, which lets downstream tag-triggered workflows
           (release-artifacts.yml) actually run. If omitted, GITHUB_TOKEN is
           used and tag-push events do NOT cascade to other workflows.
         required: false
-      RELEASE_APP_PRIVATE_KEY:
-        description: PEM private key for the release-bot GitHub App. Required only if RELEASE_APP_ID is set.
+      ROSEMARY_RELEASER_APP_PRIVATE_KEY:
+        description: PEM private key for the release-bot GitHub App. Required only if ROSEMARY_RELEASER_APP_ID is set.
         required: false
 
 permissions:
@@ -107,22 +107,22 @@ jobs:
       #
       # See: https://docs.github.com/en/actions/security-for-github-actions/security-guides/using-secrets-in-github-actions#using-secrets-in-a-workflow
       # ("you cannot use them directly in if conditionals") — do not
-      # "simplify" this back to `if: ${{ secrets.RELEASE_APP_ID }}`; that
+      # "simplify" this back to `if: ${{ secrets.ROSEMARY_RELEASER_APP_ID }}`; that
       # form is silently always-false.
       - name: Detect App credential availability
         id: app-creds
         env:
-          RELEASE_APP_ID: ${{ secrets.RELEASE_APP_ID }}
-          RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          ROSEMARY_RELEASER_APP_ID: ${{ secrets.ROSEMARY_RELEASER_APP_ID }}
+          ROSEMARY_RELEASER_APP_PRIVATE_KEY: ${{ secrets.ROSEMARY_RELEASER_APP_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          if [ -n "${RELEASE_APP_ID:-}" ] && [ -n "${RELEASE_APP_PRIVATE_KEY:-}" ]; then
+          if [ -n "${ROSEMARY_RELEASER_APP_ID:-}" ] && [ -n "${ROSEMARY_RELEASER_APP_PRIVATE_KEY:-}" ]; then
             echo "available=true" >> "${GITHUB_OUTPUT}"
             echo "Using GitHub App identity for release-please."
           else
             echo "available=false" >> "${GITHUB_OUTPUT}"
-            echo "RELEASE_APP_ID/RELEASE_APP_PRIVATE_KEY not both set; falling back to GITHUB_TOKEN."
-            echo "::notice::Tag-push events from release-please will NOT trigger downstream workflows under GITHUB_TOKEN. Configure RELEASE_APP_ID + RELEASE_APP_PRIVATE_KEY to chain into release-artifacts.yml."
+            echo "ROSEMARY_RELEASER_APP_ID/ROSEMARY_RELEASER_APP_PRIVATE_KEY not both set; falling back to GITHUB_TOKEN."
+            echo "::notice::Tag-push events from release-please will NOT trigger downstream workflows under GITHUB_TOKEN. Configure ROSEMARY_RELEASER_APP_ID + ROSEMARY_RELEASER_APP_PRIVATE_KEY to chain into release-artifacts.yml."
           fi
 
       - name: Mint GitHub App installation token
@@ -130,8 +130,8 @@ jobs:
         if: steps.app-creds.outputs.available == 'true'
         uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
         with:
-          app-id: ${{ secrets.RELEASE_APP_ID }}
-          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.ROSEMARY_RELEASER_APP_ID }}
+          private-key: ${{ secrets.ROSEMARY_RELEASER_APP_PRIVATE_KEY }}
 
       - name: Run release-please
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
