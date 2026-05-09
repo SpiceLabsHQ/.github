@@ -304,11 +304,20 @@ You can drop the field once the first release PR has merged; release-please igno
 
 **Versioning:** Callers pin the reusable workflow with `@v1`; the reusable workflow pins `github/codeql-action` to `@v3`. Engine upgrades happen in one place.
 
-### OpenSSF Scorecard (`scorecard.yml`)
+### OpenSSF Scorecard
 
-Internal Scorecard scan: runs the [OpenSSF Scorecard](https://scorecard.dev) against the calling repo on a weekly schedule and uploads the SARIF findings to GitHub Code Scanning so they appear in the repo's **Security** tab. Raw SARIF is also kept as a workflow artifact for 30 days.
+Two reusable workflows wrap the [OpenSSF Scorecard](https://scorecard.dev) for different audiences. Both run the same Scorecard analysis and upload SARIF to GitHub Code Scanning; the difference is whether results are also published to OpenSSF's public dashboard at [securityscorecards.dev](https://securityscorecards.dev).
 
-**Scope:** This workflow is intentionally scoped to **internal use only**. It does not publish to OpenSSF's public dashboard at [scorecard.dev](https://scorecard.dev) — Spice Labs doesn't currently ship public OSS that would benefit from the public badge, and the publish path requires `id-token: write` plus a strict step allowlist that this workflow doesn't satisfy. If Spice Labs ever ships public OSS, add a separate public-Scorecard workflow that meets Scorecard's `post_results.go` requirements; don't extend this one.
+**Which one to use:**
+
+- Is this repo public OSS that benefits from a **public Scorecard badge** (e.g. on the README, in security marketing, on a project landing page)? → use [`scorecard-public.yml`](#public-scorecard-publicyml).
+- Otherwise (private repos, public repos that don't want a public badge, or anything where you only want Scorecard findings in the **Security** tab)? → use [`scorecard.yml`](#internal-scorecardyml).
+
+The two workflows are intentionally split rather than combined behind a `publish` input, because Scorecard's publish API enforces strict workflow-shape constraints (no workflow-level write permissions, only allowlisted steps) that we don't want to apply to the internal variant — and don't want a future maintainer to accidentally violate while extending the public variant. See the public subsection below for the full constraint list.
+
+#### Internal (`scorecard.yml`)
+
+Internal Scorecard scan: runs Scorecard against the calling repo on a weekly schedule and uploads the SARIF findings to GitHub Code Scanning so they appear in the repo's **Security** tab. Raw SARIF is also kept as a workflow artifact for 30 days. **Does not publish to the public dashboard** — use [`scorecard-public.yml`](#public-scorecard-publicyml) for that.
 
 **1. Add the caller workflow** to each repo at `.github/workflows/scorecard.yml`. Copy-paste-ready version at [`examples/caller-scorecard.yml`](examples/caller-scorecard.yml).
 
@@ -324,11 +333,51 @@ Internal Scorecard scan: runs the [OpenSSF Scorecard](https://scorecard.dev) aga
 | `security-events: write` | SARIF upload to Code Scanning |
 | `actions: read` | Scorecard's Token-Permissions / Pinned-Dependencies checks read workflow files via the Actions API |
 
-`id-token: write` is intentionally **not** required — this workflow doesn't sign or upload anything to the public dashboard, so OIDC issuance is unnecessary. Granting it would expose a high-impact cloud-auth primitive on every weekly run for no functional benefit.
+`id-token: write` is intentionally **not** required — this workflow doesn't sign or upload anything to the public dashboard, so OIDC issuance is unnecessary. Granting it would expose a high-impact cloud-auth primitive on every weekly run for no functional benefit. (The public variant does require `id-token: write` because Scorecard signs results before uploading them.)
 
 No secrets required — Scorecard runs entirely with the workflow's own `GITHUB_TOKEN`.
 
 **Versioning:** Callers pin with `@v1`. The reusable workflow SHA-pins `ossf/scorecard-action` to the latest stable tag (currently v2.4.3) and tracks `actions/*` and `github/*` at major-version tags per the actions-audit policy.
+
+#### Public (`scorecard-public.yml`)
+
+Public Scorecard scan: runs Scorecard against the calling repo on a weekly schedule, **publishes the signed results to OpenSSF's public dashboard at [securityscorecards.dev](https://securityscorecards.dev)** so the repo earns the public Scorecard badge, and uploads the SARIF findings to GitHub Code Scanning so they also appear in the repo's **Security** tab. Raw SARIF is kept as a workflow artifact for 14 days (shorter than the internal variant's 30 days because published results already live on the public dashboard for long-term reference).
+
+> **OSS only.** Use this workflow only for public OSS repos that should appear on the public Scorecard dashboard. For internal/private repos — or public repos that don't want a public badge — use [`scorecard.yml`](#internal-scorecardyml) instead.
+
+**1. Add the caller workflow** to each public-OSS repo at `.github/workflows/scorecard-public.yml`. Copy-paste-ready version at [`examples/caller-scorecard-public.yml`](examples/caller-scorecard-public.yml).
+
+**2. Scheduling lives in the caller, not the reusable workflow.** Same rationale as the internal variant — `workflow_call` can't dictate cron to its parent. The example caller wires `schedule` (Monday 06:00 UTC), `workflow_dispatch`, and `branch_protection_rule`.
+
+**3. Inputs:** None. The reusable workflow always runs Scorecard, publishes results to the public dashboard, emits SARIF, uploads it to Code Scanning, and stashes the raw SARIF as an artifact. There's nothing to configure per-call — and intentionally so (see the publish-API constraints below).
+
+**4. Required permissions on the calling job:**
+
+| Permission | Why |
+|---|---|
+| `contents: read` | Scorecard reads repo files, branch protection, releases |
+| `security-events: write` | SARIF upload to Code Scanning |
+| `id-token: write` | Scorecard signs results with an OIDC token before uploading to securityscorecards.dev. This is the documented use of OIDC in the upstream Scorecard publish-flow template |
+| `actions: read` | Scorecard's Token-Permissions / Pinned-Dependencies checks read workflow files via the Actions API |
+
+No secrets required — Scorecard runs entirely with the workflow's own `GITHUB_TOKEN` (plus the OIDC token minted at job time).
+
+**5. Publish-API constraints (do NOT violate when editing this workflow):**
+
+Scorecard's publish endpoint (`post_results.go` in the upstream Scorecard repo) inspects the workflow YAML before accepting results. Workflows that don't match its expected shape get their results silently rejected. Future maintainers should treat the following as hard constraints:
+
+- **No workflow-level `permissions:` block.** Scorecard rejects results from any workflow that grants write permissions at the workflow level. All permissions live at job level only — in both the reusable workflow and the caller. Adding even a read-only workflow-level block invites future drift toward broader scope and is forbidden by policy here.
+- **Steps come ONLY from Scorecard's allowlist:**
+  - `actions/checkout`
+  - `actions/upload-artifact`
+  - `github/codeql-action/upload-sarif`
+  - `ossf/scorecard-action`
+  - `step-security/harden-runner`
+
+  No custom `run:` shell steps. No other actions. No matrix. No inputs that would require validation steps. The workflow is a clean four-step pipeline by design — keep it that way. If you need richer behavior (e.g. cosign-signing artifacts, posting Slack notifications), do it in a **separate** workflow that runs after this one, not by adding steps here.
+- **`publish_results: true` is mandatory.** That's the whole point of this workflow. Flipping it to `false` silently turns this into a worse copy of the internal `scorecard.yml`.
+
+**Versioning:** Callers pin with `@v1`. The reusable workflow SHA-pins `ossf/scorecard-action` to the same tag as the internal variant (currently v2.4.3) and tracks `actions/*` and `github/*` at major-version tags per the actions-audit policy.
 
 | `fail_on_severity` | `high` | Minimum CVE severity that fails the check. One of `low`, `moderate`, `high`, `critical` |
 | `deny_licenses` | `GPL-2.0,GPL-3.0,AGPL-1.0,AGPL-3.0,LGPL-2.0,LGPL-2.1,LGPL-3.0` | Comma-separated SPDX identifiers denied org-wide. See **License policy rationale** below |
