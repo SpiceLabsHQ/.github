@@ -1,0 +1,83 @@
+name: OpenSSF Scorecard (reusable)
+
+# Reusable workflow that runs the OpenSSF Scorecard against the calling repo,
+# uploads the SARIF results to GitHub Code Scanning so they appear in the repo's
+# Security tab, and stores the raw SARIF as a workflow artifact for 30 days.
+#
+# Scope:
+#   This workflow is intentionally an INTERNAL Scorecard runner. It does not
+#   publish to OpenSSF's public dashboard at securityscorecards.dev. Spice Labs
+#   does not currently ship public OSS that would benefit from the public
+#   dashboard, and the publish path requires `id-token: write` plus a strict
+#   step allowlist that this workflow does not satisfy. If Spice Labs ever ships
+#   public OSS, add a separate public-Scorecard workflow that meets Scorecard's
+#   `post_results.go` requirements (no workflow-level write permissions, only
+#   allowlisted steps) — don't extend this one.
+#
+# Trigger:    workflow_call only
+# Scope:      single job, runs on ubuntu-latest
+# Inputs:     none — the workflow always produces SARIF and uploads it
+# Permissions: declared at job level; each grant is documented inline
+#
+# Pinning policy:
+#   - Third-party action `ossf/scorecard-action` is pinned to a 40-char commit SHA
+#     (see actions-audit policy). The comment next to the pin records the human-readable tag.
+#   - First-party `actions/*` and `github/*` use major-version tags per actions-audit policy.
+#
+# Scheduling:
+#   The cron schedule is defined by the *caller* workflow (see examples/caller-scorecard.yml).
+#   `workflow_call` cannot dictate a schedule to its parent, so this reusable workflow
+#   intentionally does not accept a `cron` input — that would be misleading. Callers are
+#   expected to wire `on: schedule:` themselves.
+
+on:
+  workflow_call:
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    permissions:
+      # Job-level least privilege. Workflow-level permissions are intentionally
+      # not declared so this job's grants don't leak to any future jobs and so
+      # Scorecard's own Token-Permissions check sees a tightly scoped workflow.
+      contents: read           # Scorecard reads repo metadata, branch protection, files, releases
+      security-events: write   # github/codeql-action/upload-sarif pushes SARIF to Code Scanning
+      actions: read            # Scorecard's Token-Permissions / Pinned-Dependencies checks read
+                               # workflow files via the Actions API.
+    steps:
+      - name: Checkout caller repo
+        uses: actions/checkout@v4
+        with:
+          # Scorecard's docs explicitly require persist-credentials: false. Several
+          # checks (notably Token-Permissions) will fail if the default GITHUB_TOKEN
+          # remains in the local git config because the token's permissions become
+          # part of what Scorecard tries to evaluate.
+          persist-credentials: false
+
+      - name: Run analysis
+        # Pinned to v2.4.3 (commit SHA). Bump via `gh api repos/ossf/scorecard-action/git/ref/tags/<tag>`
+        # then dereference the annotated tag with `gh api repos/ossf/scorecard-action/git/tags/<sha>`.
+        uses: ossf/scorecard-action@4eaacf0543bb3f2c246792bd56e8cdeffafb205a # v2.4.3
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          # publish_results is intentionally omitted (defaults to false). This
+          # workflow is internal-only; we never sign or upload to the public
+          # dashboard. See the file header for the rationale.
+
+      - name: Upload results artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: scorecard-results-sarif
+          path: results.sarif
+          # Keep artifacts long enough for humans to investigate but short enough that
+          # weekly runs don't accumulate indefinitely. 30 days lines up with most
+          # incident-response windows.
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload SARIF to Code Scanning
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
