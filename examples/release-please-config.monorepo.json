@@ -1,0 +1,28 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "separate-pull-requests": false,
+  "include-component-in-tag": true,
+  "packages": {
+    "packages/api": {
+      "release-type": "node",
+      "package-name": "@example/api",
+      "extra-files": [
+        { "type": "yaml", "path": "packages/api/openapi.yaml", "jsonpath": "$.info.version" },
+        { "type": "yaml", "path": "deploy/api/values.yaml", "jsonpath": "$.image.tag" }
+      ]
+    },
+    "packages/web": {
+      "release-type": "node",
+      "package-name": "@example/web",
+      "extra-files": [
+        "packages/web/src/version.ts",
+        { "type": "yaml", "path": "deploy/web/values.yaml", "jsonpath": "$.image.tag" }
+      ]
+    },
+    "packages/shared": {
+      "release-type": "node",
+      "package-name": "@example/shared"
+    }
+  },
+  "plugins": ["node-workspace"]
+}

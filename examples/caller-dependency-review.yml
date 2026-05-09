@@ -1,0 +1,53 @@
+# Drop this file into each SpiceLabsHQ repo as `.github/workflows/dependency-review.yml`.
+# It calls the centrally maintained reusable workflow in SpiceLabsHQ/.github,
+# which wraps actions/dependency-review-action with org-standard severity and
+# license policy.
+#
+# What this catches:
+#   - PRs introducing dependencies with CVEs at/above the configured severity
+#     (default: high).
+#   - PRs introducing dependencies under denied licenses. Default blocks all
+#     GPL/AGPL/LGPL variants (GPL-2.0, GPL-3.0, AGPL-1.0, AGPL-3.0, LGPL-2.0,
+#     LGPL-2.1, LGPL-3.0). Spice Labs maintains All Rights Reserved on its own
+#     code; copyleft obligations on a linked dep would force giving up that
+#     posture. See the README's "License policy rationale" section.
+#
+# Required: GitHub Advanced Security on private repos, OR public repo. The
+# underlying API (Dependency Review) is free for public repos and bundled with
+# GHAS for private repos.
+
+name: Dependency Review
+
+on:
+  pull_request:
+
+jobs:
+  dependency-review:
+    uses: SpiceLabsHQ/.github/.github/workflows/dependency-review.yml@v1
+    permissions:
+      contents: read
+      pull-requests: write
+    # with:
+    #   # Tighten severity threshold to fail only on critical CVEs:
+    #   fail_on_severity: critical
+    #
+    #   # Override the org-default deny-list (e.g. add a license your repo
+    #   # specifically can't accept). Comma-separated SPDX identifiers. The
+    #   # example below extends the org default (all GPL/AGPL/LGPL variants)
+    #   # with SSPL-1.0.
+    #   deny_licenses: GPL-2.0,GPL-3.0,AGPL-1.0,AGPL-3.0,LGPL-2.0,LGPL-2.1,LGPL-3.0,SSPL-1.0
+    #
+    #   # OR switch to allow-list mode — stricter than deny-list, only the
+    #   # licenses you list will pass. Setting this causes the reusable
+    #   # workflow to ignore `deny_licenses` (the underlying action rejects
+    #   # callers that pass both at once). Use when your repo needs a closed
+    #   # license policy.
+    #   #
+    #   # NOTE: passing both `allow_licenses` and `deny_licenses` is a
+    #   # misconfiguration — the reusable workflow drops `deny_licenses` and
+    #   # emits a `::warning::` to the Actions log so the caller learns their
+    #   # deny-list was silently ignored.
+    #   allow_licenses: MIT,Apache-2.0,BSD-2-Clause,BSD-3-Clause,ISC,0BSD
+    #
+    #   # Suppress the inline PR summary comment (default: true):
+    #   comment_summary_in_pr: false

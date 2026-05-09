@@ -1,0 +1,145 @@
+# SpiceLabsHQ — Release Please (reusable)
+#
+# Trigger:   workflow_call only. Callers wire this to `push` on their default
+#            branch and pass `target_branch` if it isn't `main`.
+#
+# Scope:     Wraps `googleapis/release-please-action`. Maintains a rolling
+#            "release PR" for the calling repo using Conventional Commits.
+#            When the release PR is merged, release-please tags the new
+#            version and creates a GitHub Release. That tag push is the
+#            handoff point to the release-artifacts workflow (DEV-223),
+#            which builds artifacts, attaches an SBOM and SLSA provenance,
+#            and signs with cosign.
+#
+# Inputs:    config_file     — path to release-please-config.json
+#            manifest_file   — path to .release-please-manifest.json
+#            target_branch   — branch release-please opens PRs against
+#
+# Secrets:   RELEASE_APP_ID + RELEASE_APP_PRIVATE_KEY (BOTH or NEITHER).
+#            When both are provided, this workflow mints a short-lived
+#            installation token via actions/create-github-app-token and
+#            hands it to release-please. PRs and tags then come from the
+#            App identity, and downstream `push` / `pull_request` workflows
+#            (most importantly DEV-223 release-artifacts.yml, which is
+#            triggered by tag push) DO fire — required for the release
+#            chain to work end-to-end.
+#
+#            When the secrets are absent, the workflow falls back to
+#            GITHUB_TOKEN. PRs created with GITHUB_TOKEN are functional,
+#            but GitHub deliberately suppresses workflow events triggered
+#            by them — meaning a release PR merge will create the tag, but
+#            the tag-push event won't trigger release-artifacts.yml in the
+#            calling repo. Use the App path for any repo whose release
+#            pipeline depends on tag-triggered automation.
+#
+# Permissions:
+#            contents: write       — release-please pushes release commits
+#                                    and creates tags on the target branch
+#            pull-requests: write  — open / update the rolling release PR
+#            (no other permissions; do not add)
+#
+# Pinning policy:
+#            All third-party actions pinned to 40-char commit SHAs per the
+#            actions-audit policy (DEV-215). `actions/create-github-app-token`
+#            is first-party (`actions/*`) and would qualify for major-tag
+#            pinning, but is SHA-pinned anyway because it mints elevated
+#            credentials and we want bumps to be deliberate.
+
+name: Release Please (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      config_file:
+        description: Path (relative to the calling repo) to the release-please config file.
+        required: false
+        type: string
+        default: release-please-config.json
+      manifest_file:
+        description: Path (relative to the calling repo) to the release-please manifest file.
+        required: false
+        type: string
+        default: .release-please-manifest.json
+      target_branch:
+        description: Branch that release-please opens the release PR against. Defaults to `main`.
+        required: false
+        type: string
+        default: main
+    secrets:
+      RELEASE_APP_ID:
+        description: |
+          GitHub App ID for a dedicated release-bot. Optional. When provided
+          together with RELEASE_APP_PRIVATE_KEY, the release PR and tags are
+          authored by the App, which lets downstream tag-triggered workflows
+          (release-artifacts.yml) actually run. If omitted, GITHUB_TOKEN is
+          used and tag-push events do NOT cascade to other workflows.
+        required: false
+      RELEASE_APP_PRIVATE_KEY:
+        description: PEM private key for the release-bot GitHub App. Required only if RELEASE_APP_ID is set.
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+# Serialize per target branch. release-please reads HEAD of the branch to
+# decide what to bump and to update the rolling PR; two concurrent runs can
+# race and produce conflicting "release-please--" branches that need manual
+# cleanup. `cancel-in-progress: false` is intentional — we'd rather queue
+# than cancel a half-finished PR update.
+concurrency:
+  group: release-please-${{ inputs.target_branch }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: Release Please
+    runs-on: ubuntu-latest
+    steps:
+      # GitHub Actions does not let `if:` reference `secrets.*` directly,
+      # so we materialize a "do we have App credentials?" boolean by piping
+      # the secrets through env (which `if:` CAN see). Either-or-neither is
+      # the contract; partial config (just an ID, no key) is treated as
+      # "no App" and falls through to GITHUB_TOKEN. We don't error in that
+      # case because reusable-workflow secrets can be filtered by the caller
+      # and we want the workflow to remain usable without the App for repos
+      # that don't need tag-cascade behavior.
+      #
+      # See: https://docs.github.com/en/actions/security-for-github-actions/security-guides/using-secrets-in-github-actions#using-secrets-in-a-workflow
+      # ("you cannot use them directly in if conditionals") — do not
+      # "simplify" this back to `if: ${{ secrets.RELEASE_APP_ID }}`; that
+      # form is silently always-false.
+      - name: Detect App credential availability
+        id: app-creds
+        env:
+          RELEASE_APP_ID: ${{ secrets.RELEASE_APP_ID }}
+          RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -n "${RELEASE_APP_ID:-}" ] && [ -n "${RELEASE_APP_PRIVATE_KEY:-}" ]; then
+            echo "available=true" >> "${GITHUB_OUTPUT}"
+            echo "Using GitHub App identity for release-please."
+          else
+            echo "available=false" >> "${GITHUB_OUTPUT}"
+            echo "RELEASE_APP_ID/RELEASE_APP_PRIVATE_KEY not both set; falling back to GITHUB_TOKEN."
+            echo "::notice::Tag-push events from release-please will NOT trigger downstream workflows under GITHUB_TOKEN. Configure RELEASE_APP_ID + RELEASE_APP_PRIVATE_KEY to chain into release-artifacts.yml."
+          fi
+
+      - name: Mint GitHub App installation token
+        id: app-token
+        if: steps.app-creds.outputs.available == 'true'
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      - name: Run release-please
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          # Prefer the App token when minted; otherwise GITHUB_TOKEN. The
+          # `||` here works because `steps.app-token.outputs.token` is the
+          # empty string when the previous step was skipped.
+          token: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
+          config-file: ${{ inputs.config_file }}
+          manifest-file: ${{ inputs.manifest_file }}
+          target-branch: ${{ inputs.target_branch }}
