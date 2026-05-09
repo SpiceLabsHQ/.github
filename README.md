@@ -59,6 +59,12 @@ The reusable workflow leads by example: every third-party action it invokes is p
 
 **1. Add the caller workflow** to each repo at `.github/workflows/actions-audit.yml`. Copy-paste-ready version at [`examples/caller-actions-audit.yml`](examples/caller-actions-audit.yml).
 
+### Dependency Review (`dependency-review.yml`)
+
+Wraps [`actions/dependency-review-action`](https://github.com/actions/dependency-review-action) with org-standard severity threshold and license policy. Designed to fail PRs that introduce (a) dependencies with CVEs at/above the configured severity, or (b) dependencies carrying denied licenses.
+
+**1. Add the caller workflow** to each repo at `.github/workflows/dependency-review.yml`. Copy-paste-ready version at [`examples/caller-dependency-review.yml`](examples/caller-dependency-review.yml).
+
 **2. Inputs** (all optional, override via `with:`):
 
 | Input | Default | Notes |
@@ -311,3 +317,32 @@ Internal Scorecard scan: runs the [OpenSSF Scorecard](https://scorecard.dev) aga
 No secrets required — Scorecard runs entirely with the workflow's own `GITHUB_TOKEN`.
 
 **Versioning:** Callers pin with `@v1`. The reusable workflow SHA-pins `ossf/scorecard-action` to the latest stable tag (currently v2.4.3) and tracks `actions/*` and `github/*` at major-version tags per the actions-audit policy.
+
+| `fail_on_severity` | `high` | Minimum CVE severity that fails the check. One of `low`, `moderate`, `high`, `critical` |
+| `deny_licenses` | `GPL-2.0,GPL-3.0,AGPL-1.0,AGPL-3.0,LGPL-2.0,LGPL-2.1,LGPL-3.0` | Comma-separated SPDX identifiers denied org-wide. See **License policy rationale** below |
+| `allow_licenses` | _(empty)_ | Optional allow-list. When non-empty, the action switches to allow-list mode and `deny_licenses` is ignored — see precedence below |
+| `comment_summary_in_pr` | `true` | Post the action's built-in vulnerability + license summary as a PR comment |
+
+**License policy rationale:** Spice Labs maintains All Rights Reserved on its own code. The default `deny_licenses` blocks all GPL/AGPL/LGPL variants because their copyleft obligations would force giving up the ARR posture if a covered dependency were linked into a SpiceLabs product. The default explicitly enumerates all seven copyleft variants the dependency-review-action will currently see in the wild:
+
+- `GPL-2.0`, `GPL-3.0` — strong copyleft
+- `AGPL-1.0`, `AGPL-3.0` — strong copyleft, network-use trigger
+- `LGPL-2.0`, `LGPL-2.1`, `LGPL-3.0` — weak copyleft
+
+LGPL is included in the default deny list because dynamic-linking compliance is hard to guarantee in SaaS / containerized deployments. Repos with audited LGPL deps and a clean dynamic-linking story can override via `allow_licenses` (or by passing a narrower `deny_licenses`).
+
+**Precedence — `allow_licenses` vs `deny_licenses`:** `actions/dependency-review-action` rejects callers that pass both at once. When `allow_licenses` is set the reusable workflow drops `deny_licenses`, putting the action into allow-list mode (stricter — only listed licenses pass). When `allow_licenses` is empty the org-default deny-list applies. To override the deny-list, pass your own `deny_licenses` value; to switch policies entirely, set `allow_licenses`.
+
+**Misuse warning:** The reusable workflow's silent drop of `deny_licenses` when both inputs are set could mask a caller mistake, so it emits a `::warning::` to the Actions log when both `allow_licenses` and `deny_licenses` are non-empty. The warning records that `deny_licenses` was ignored and asks the caller to pass only one.
+
+**3. Required permissions** in the caller (already shown in the example):
+
+```yaml
+permissions:
+  contents: read
+  pull-requests: write   # only used when comment_summary_in_pr is true
+```
+
+**4. Requirements:** Dependency Review API is free on public repos. On private repos it requires GitHub Advanced Security.
+
+**Versioning:** Callers pin the reusable workflow with `@v1`; the reusable workflow SHA-pins the underlying `actions/dependency-review-action` ref. Action upgrades happen in one place.
