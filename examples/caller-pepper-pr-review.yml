@@ -20,6 +20,13 @@ name: Pepper PR Review
 # fork diff exfiltrate secrets. Plain `pull_request` is safe because GitHub
 # strips secrets from fork PR runs. The reusable workflow further gates
 # `issue_comment` to org members only.
+#
+# Label lifecycle: while a Pepper review is running, the PR carries the
+# `pepper-cooking` label. When the review concludes, that marker is swapped
+# for exactly one of `pepper-approved`, `pepper-changes-requested`, or
+# `pepper-needs-review`. If the workflow fails before Pepper finishes, the
+# always-on cleanup step removes `pepper-cooking` and the PR ends up
+# unlabeled — the workflow's run status is the failure signal in that case.
 on:
   pull_request:
     types: [opened, ready_for_review]
