@@ -48,7 +48,14 @@ jobs:
       PEPPER_PR_REVIEW_APP_PRIVATE_KEY: ${{ secrets.PEPPER_PR_REVIEW_APP_PRIVATE_KEY }}
       LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
     # with:
-    #   model: us.anthropic.claude-opus-4-1-20250805-v1:0
+    #   # Per-mode model overrides. Both default to AWS Application Inference Profiles
+    #   # tagged for cost allocation (Product=pepper, Mode=review|on-demand) so spend
+    #   # shows up split by flow in Cost Explorer. Override only if a repo needs a
+    #   # different model — overrides bypass the tagged profiles, so cost attribution
+    #   # for that repo will collapse back into the underlying foundation model.
+    #   review_model: arn:aws:bedrock:us-west-2:618640261060:application-inference-profile/cz21awrop223
+    #   on_demand_model: arn:aws:bedrock:us-west-2:618640261060:application-inference-profile/68jw718dw1jv
+    #   model: us.anthropic.claude-opus-4-1-20250805-v1:0   # legacy: wins for both modes, forfeits cost attribution
     #   aws_region: us-east-1
     #   default_reviewer: someone-else
     #   show_full_output: true   # debug only — exposes Pepper's tool calls and reasoning in Actions logs (visible to anyone who can see the run)
