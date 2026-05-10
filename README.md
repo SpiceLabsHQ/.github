@@ -8,7 +8,7 @@ Organization-level defaults for [SpiceLabsHQ](https://github.com/SpiceLabsHQ). T
 
 Pepper is the Spice Labs PR review bot, powered by Claude Sonnet 4.5 on AWS Bedrock. The reusable workflow is centrally maintained here; each repo opts in with a ~15-line caller workflow and (optionally) carries its own review standards file.
 
-**Naming legend:** workflow display name is **Pepper PR Review**, status check appears as **Pepper PR Review / Pepper review**, and humans invoke on-demand mode by typing `@pepper` in a PR comment.
+**Naming legend:** workflow display name is **Pepper PR Review**, status check appears as **Pepper PR Review / Pepper review**, formal approves and request-changes are authored by the **Pepper PR Review** GitHub App (the reviewer name shown on the PR, not the workflow bot account), and humans invoke on-demand mode by typing `@pepper` in a PR comment.
 
 The bot operates in two modes:
 
