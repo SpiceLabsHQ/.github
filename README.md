@@ -26,7 +26,7 @@ The bot operates in two modes:
 | `review_model` | `arn:…application-inference-profile/cz21awrop223` (`pepper-pr-review`) | Model used in review mode. Default is an AWS Application Inference Profile wrapping Sonnet 4.5, tagged `Product=pepper, Mode=review` for cost allocation |
 | `on_demand_model` | `arn:…application-inference-profile/68jw718dw1jv` (`pepper-on-demand`) | Model used in on-demand mode. Same Sonnet 4.5 underneath, tagged `Mode=on-demand` so AWS Cost Explorer can split spend by flow |
 | `model` | `""` | Override that wins for **both** modes. Set only when testing a different model on a debug branch — bypassing the per-mode profiles forfeits cost attribution |
-| `aws_region` | `us-west-2` | Bedrock region |
+| `aws_region` | `us-west-2` | AWS region where the Bedrock role and inference profiles live |
 | `trigger_phrase` | `@pepper` | Comment phrase that triggers on-demand mode |
 | `standards_path` | `.pepper/pr-review-standards.md` | Override if your repo stores standards elsewhere |
 | `default_reviewer` | `brodkin` | Fallback reviewer login when no other collaborator qualifies for assignment |
