@@ -105,16 +105,27 @@ No secrets needed. The caller passes `permissions: { contents: read, pull-reques
 
 ### Secret Scan (`secret-scan.yml`)
 
-Gitleaks-based scanner for repo secrets, layered to catch what GitHub's native push-protection misses (custom token formats, secrets that already landed in history). The reusable workflow drives `gitleaks/gitleaks-action` in two complementary modes; callers wire each mode to the appropriate triggers.
+Gitleaks-based scanner for repo secrets, layered to catch what GitHub's native push-protection misses (custom token formats, secrets that already landed in history). The reusable workflow runs the open-source **gitleaks CLI** directly in two complementary modes; callers wire each mode to the appropriate triggers. It does **not** use the paid `gitleaks-action` — there is **no license and no org secret to provision** (the CLI is free for organization accounts too).
 
 The two modes:
 
-- **`pr-diff`** (fast): scans only the lines a PR changes. Findings post as inline review comments on the PR. Run on every `pull_request` for sub-minute author feedback.
+- **`pr-diff`** (fast): scans only the commits a PR adds. Findings appear in the run's job summary and **fail the check** so a leak can't merge. Run on every `pull_request`.
 - **`full-history`** (slow): scans the entire git history. Run on `push` to the default branch and on a weekly cron. Catches secrets that pr-diff can't see — e.g., committed and "fixed" within the same PR (the secret is still in history forever) or committed before the repo adopted scanning.
 
 **1. Add the caller workflow** to each repo at `.github/workflows/secret-scan.yml`. Copy-paste-ready version at [`examples/caller-secret-scan.yml`](examples/caller-secret-scan.yml). The example wires up all three triggers (PR, push to main, weekly cron) as separate jobs that select the right mode.
 
 **2. (Optional) Add a Gitleaks config** at `.gitleaks.toml` for repo-specific custom rules and allowlists. The reusable workflow auto-detects the file; absent file → Gitleaks built-in default ruleset.
+
+**3. Inputs** (all optional, override via `with:`):
+
+| Input | Default | Notes |
+|---|---|---|
+| `mode` | `pr-diff` | `pr-diff` (PR's new commits only, fails the check on a finding) or `full-history` (entire git history) |
+| `config_path` | `.gitleaks.toml` | Path to a Gitleaks config file. Tolerated absent — falls back to built-in defaults |
+
+**4. (Optional) Security-tab integration on public repos.** On **public** repos, findings are uploaded as SARIF to GitHub code scanning (the Security tab) for free — grant `security-events: write` on the calling job (the example does). On **private/internal** repos this upload is auto-skipped, because code scanning there requires paid [GitHub Advanced Security](https://docs.github.com/en/get-started/learning-about-github/about-github-advanced-security); the scan still runs and still fails the check. No license is required either way.
+
+**Versioning:** Callers pin the reusable workflow with `@v1`; the reusable workflow pins the gitleaks CLI to a release version and verifies the downloaded binary against the release's published checksums. Scanner upgrades happen in one place.
 
 ### CodeQL (`codeql.yml`)
 
@@ -125,21 +136,6 @@ Reusable wrapper around GitHub's first-party `github/codeql-action` for deep sta
 **1. Add the caller workflow** to each repo at `.github/workflows/codeql.yml`. Copy-paste-ready version at [`examples/caller-codeql.yml`](examples/caller-codeql.yml). Triggers: every PR (diff-scoped), every push to `main` (full repo), and weekly on Mondays.
 
 **2. Auto-detected languages:** the workflow probes the worktree for source files and emits one matrix job per detected language. CodeQL language IDs: `javascript-typescript`, `python`, `go`, `java-kotlin`, `csharp`, `ruby`, `swift`, `cpp`. JS+TS share a single `javascript-typescript` analyzer; Java+Kotlin share `java-kotlin`. No caller configuration needed for the common cases.
-
-**3. Inputs** (all optional, override via `with:`):
-
-| Input | Default | Notes |
-|---|---|---|
-| `mode` | `pr-diff` | `pr-diff` (PR diff only, inline review comments) or `full-history` (entire git history) |
-| `config_path` | `.gitleaks.toml` | Path to a Gitleaks config file. Tolerated absent — falls back to built-in defaults |
-
-**4. Optional secret:**
-
-| Secret | Effect when set |
-|---|---|
-| `GITLEAKS_LICENSE` | Required by `gitleaks-action@v2` for repos under an **organization** account; not required for personal-account repos. Pass via `secrets: inherit` (simplest) or explicitly as `GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}`. If absent and the repo is under an org, the action fails fast with its own diagnostic — that's intentional, do not silently no-op a secret scanner |
-
-**Versioning:** Callers pin the reusable workflow with `@v1`; the reusable workflow pins `gitleaks/gitleaks-action` to a 40-char SHA. Action upgrades happen in one place.
 
 ### Release Please (`release-please.yml`)
 
