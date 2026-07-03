@@ -24,7 +24,9 @@ on:
 
 jobs:
   semgrep:
-    uses: SpiceLabsHQ/.github/.github/workflows/sast.yml@v1
+    # @sast-v1 floats within major 1 (non-breaking updates only). To harden, pin an
+    # immutable @sast-vX.Y.Z tag or a commit SHA — see README → "Versioning & releases".
+    uses: SpiceLabsHQ/.github/.github/workflows/sast.yml@sast-v1
     permissions:
       contents: read
       security-events: write

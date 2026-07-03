@@ -36,7 +36,9 @@ permissions:
 
 jobs:
   scorecard:
-    uses: SpiceLabsHQ/.github/.github/workflows/scorecard.yml@v1
+    # @scorecard-v1 floats within major 1 (non-breaking updates only). To harden, pin an
+    # immutable @scorecard-vX.Y.Z tag or a commit SHA — see README → "Versioning & releases".
+    uses: SpiceLabsHQ/.github/.github/workflows/scorecard.yml@scorecard-v1
     permissions:
       contents: read
       security-events: write

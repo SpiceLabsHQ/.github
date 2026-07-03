@@ -38,7 +38,9 @@ jobs:
   # is no caller-built artifact to honestly attest or sign.
   # ---------------------------------------------------------------------
   release-artifacts:
-    uses: SpiceLabsHQ/.github/.github/workflows/release-artifacts.yml@v1
+    # @release-artifacts-v1 floats within major 1 (non-breaking updates only). To harden, pin an
+    # immutable @release-artifacts-vX.Y.Z tag or a commit SHA — see README → "Versioning & releases".
+    uses: SpiceLabsHQ/.github/.github/workflows/release-artifacts.yml@release-artifacts-v1
     permissions:
       # Each grant is required by at least one phase in the reusable
       # workflow. The reusable workflow declares the same set at workflow
@@ -64,7 +66,7 @@ jobs:
   # passed via a different path you wire up).
   #
   # release-artifacts-with-builds:
-  #   uses: SpiceLabsHQ/.github/.github/workflows/release-artifacts.yml@v1
+  #   uses: SpiceLabsHQ/.github/.github/workflows/release-artifacts.yml@release-artifacts-v1
   #   permissions:
   #     id-token: write
   #     attestations: write

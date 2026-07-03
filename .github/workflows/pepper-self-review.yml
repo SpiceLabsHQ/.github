@@ -13,7 +13,12 @@ on:
 
 jobs:
   pepper:
-    uses: SpiceLabsHQ/.github/.github/workflows/pepper-pr-review.yml@v1
+    # Local reference: resolves to the same commit as this run, so this repo
+    # never pins itself to its own tags (the legacy shared `v1` is frozen —
+    # see README "Versioning & releases"). Side effect worth knowing: a PR
+    # that edits pepper-pr-review.yml is reviewed by its own modified
+    # workflow. Same-repo PR authors are org members, so that's acceptable.
+    uses: ./.github/workflows/pepper-pr-review.yml
     permissions:
       contents: read
       pull-requests: write

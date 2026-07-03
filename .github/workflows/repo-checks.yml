@@ -1,0 +1,31 @@
+name: Repo Checks
+
+# Repo-local CI for the versioning invariants that per-workflow release-please
+# routing depends on. Fails the PR when:
+#
+#   * a reusable workflow changed but workflows/<name>/workflow.sha256 wasn't
+#     regenerated (commits would silently stop routing to that workflow's
+#     release-please package — no release PR, no changelog entry, no tag)
+#   * a package dir is orphaned (workflow renamed/deleted without cleanup)
+#   * release-please-config.json / .release-please-manifest.json don't match
+#     the reusable-workflow inventory 1:1
+#
+# Fix locally with: scripts/sync-workflow-checksums.sh
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  versioning-integrity:
+    name: Versioning integrity
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout — first-party, allowed to use a major-version tag.
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check workflow checksums + release-please registration
+        run: scripts/sync-workflow-checksums.sh --check
