@@ -1,0 +1,13 @@
+{
+  "workflows/actions-audit": "1.0.0",
+  "workflows/codeql": "1.0.0",
+  "workflows/dependency-review": "1.0.0",
+  "workflows/pepper-pr-review": "1.0.0",
+  "workflows/pr-hygiene": "1.0.0",
+  "workflows/release-artifacts": "1.0.0",
+  "workflows/release-please": "1.0.0",
+  "workflows/sast": "1.0.0",
+  "workflows/scorecard": "1.0.0",
+  "workflows/scorecard-public": "1.0.0",
+  "workflows/secret-scan": "1.0.0"
+}

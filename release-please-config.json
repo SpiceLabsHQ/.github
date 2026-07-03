@@ -1,0 +1,63 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "separate-pull-requests": true,
+  "include-component-in-tag": true,
+  "packages": {
+    "workflows/actions-audit": {
+      "release-type": "simple",
+      "package-name": "actions-audit",
+      "component": "actions-audit"
+    },
+    "workflows/codeql": {
+      "release-type": "simple",
+      "package-name": "codeql",
+      "component": "codeql"
+    },
+    "workflows/dependency-review": {
+      "release-type": "simple",
+      "package-name": "dependency-review",
+      "component": "dependency-review"
+    },
+    "workflows/pepper-pr-review": {
+      "release-type": "simple",
+      "package-name": "pepper-pr-review",
+      "component": "pepper-pr-review"
+    },
+    "workflows/pr-hygiene": {
+      "release-type": "simple",
+      "package-name": "pr-hygiene",
+      "component": "pr-hygiene"
+    },
+    "workflows/release-artifacts": {
+      "release-type": "simple",
+      "package-name": "release-artifacts",
+      "component": "release-artifacts"
+    },
+    "workflows/release-please": {
+      "release-type": "simple",
+      "package-name": "release-please",
+      "component": "release-please"
+    },
+    "workflows/sast": {
+      "release-type": "simple",
+      "package-name": "sast",
+      "component": "sast"
+    },
+    "workflows/scorecard": {
+      "release-type": "simple",
+      "package-name": "scorecard",
+      "component": "scorecard"
+    },
+    "workflows/scorecard-public": {
+      "release-type": "simple",
+      "package-name": "scorecard-public",
+      "component": "scorecard-public"
+    },
+    "workflows/secret-scan": {
+      "release-type": "simple",
+      "package-name": "secret-scan",
+      "component": "secret-scan"
+    }
+  },
+  "plugins": []
+}

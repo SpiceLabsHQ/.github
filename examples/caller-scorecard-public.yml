@@ -40,7 +40,9 @@ on:
 
 jobs:
   scorecard:
-    uses: SpiceLabsHQ/.github/.github/workflows/scorecard-public.yml@v1
+    # @scorecard-public-v1 floats within major 1 (non-breaking updates only). To harden, pin an
+    # immutable @scorecard-public-vX.Y.Z tag or a commit SHA — see README → "Versioning & releases".
+    uses: SpiceLabsHQ/.github/.github/workflows/scorecard-public.yml@scorecard-public-v1
     permissions:
       # Job-level least privilege. A workflow-level `permissions:` block is
       # intentionally absent — Scorecard's publish API rejects results from

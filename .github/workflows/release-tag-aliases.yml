@@ -1,0 +1,91 @@
+name: Release Tag Aliases
+
+# Advances the floating major alias tag (<workflow>-vN) when a per-workflow
+# release is published. Example: publishing `secret-scan-v1.2.3` moves (or
+# creates) `secret-scan-v1`.
+#
+# Policy guarantees enforced here (see README "Versioning & releases"):
+#
+#   * An alias only ever points at a release WITHIN its own major — a breaking
+#     change lands as <name>-v(N+1).0.0 and produces a NEW alias, so consumers
+#     pinned to <name>-vN can never receive it. The force-move of the shared
+#     org-wide `v1` that burned us in DEV-404 is structurally impossible.
+#   * Out-of-order publishes can't regress an alias: the alias only moves when
+#     the published tag is the highest existing X.Y.Z within its major
+#     (compared with sort -V).
+#
+# Immutability note: the release tags themselves (<name>-vX.Y.Z) should be
+# made immutable via the repo's "immutable releases" setting / a tag ruleset
+# matching `*-v[0-9]*.[0-9]*.[0-9]*`. The bare `<name>-vN` aliases are
+# deliberately mutable — that is their job. Do NOT include them in a ruleset.
+#
+# Trigger caveat: `release: published` events fire this workflow only when the
+# release was created by something other than GITHUB_TOKEN. self-release.yml
+# passes the Rosemary Releaser App credentials for exactly this reason.
+# Releases created manually with `gh release create` (e.g. the DEV-408
+# baseline script) also fire it.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+# Serialize alias moves; two releases publishing near-simultaneously must not
+# race on reading the tag list.
+concurrency:
+  group: release-tag-aliases
+  cancel-in-progress: false
+
+jobs:
+  advance-alias:
+    name: Advance major alias tag
+    if: ${{ !github.event.release.draft && !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout — first-party, allowed to use a major-version tag.
+      # persist-credentials stays at the default (true): the push step below
+      # authenticates with the persisted GITHUB_TOKEN.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # need full tag list + tag commit ancestry
+
+      - name: Advance <workflow>-vN alias
+        env:
+          # Passed via env, never interpolated into the script body, per the
+          # actions-audit template-injection rules.
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+
+          git fetch --tags --force --quiet
+
+          # Only per-workflow release tags qualify. The legacy shared tags
+          # (v1, v1.0.0) and anything else are ignored on purpose.
+          if [[ ! "$TAG" =~ ^([a-z0-9][a-z0-9-]*)-v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "::notice::'$TAG' is not a <workflow>-vX.Y.Z tag; nothing to do."
+            exit 0
+          fi
+          component="${BASH_REMATCH[1]}"
+          major="${BASH_REMATCH[2]}"
+
+          if [ ! -d "workflows/$component" ]; then
+            echo "::warning::'$TAG' does not correspond to a known workflow package (workflows/$component missing); skipping alias move."
+            exit 0
+          fi
+
+          # Refuse to regress: only move the alias when the published tag is
+          # the highest existing version inside its major line.
+          best="$(git tag -l "${component}-v${major}.*" \
+                    | grep -E "^${component}-v${major}\.[0-9]+\.[0-9]+$" \
+                    | sort -V | tail -1)"
+          if [ "$best" != "$TAG" ]; then
+            echo "::notice::'$TAG' is not the highest release in the ${component}-v${major} line ('$best' is); leaving the alias where it is."
+            exit 0
+          fi
+
+          sha="$(git rev-list -n 1 "$TAG")"
+          alias="${component}-v${major}"
+          echo "Advancing $alias -> $TAG ($sha)"
+          git push --force origin "${sha}:refs/tags/${alias}"

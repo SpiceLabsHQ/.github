@@ -1,0 +1,18 @@
+name: PR Hygiene
+
+# Self-caller for this repo's own reusable pr-hygiene workflow. Conventional
+# Commit PR titles are load-bearing here: the squash-merge title is what
+# release-please classifies to version each workflow package (see README
+# "Versioning & releases"), so a malformed title means a wrong or missing
+# release. Local `uses:` reference — same rationale as pepper-self-review.yml.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize]
+
+jobs:
+  hygiene:
+    uses: ./.github/workflows/pr-hygiene.yml
+    permissions:
+      contents: read
+      pull-requests: write

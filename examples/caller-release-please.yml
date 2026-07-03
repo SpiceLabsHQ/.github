@@ -30,7 +30,9 @@ on:
 
 jobs:
   release-please:
-    uses: SpiceLabsHQ/.github/.github/workflows/release-please.yml@v1
+    # @release-please-v1 floats within major 1 (non-breaking updates only). To harden, pin an
+    # immutable @release-please-vX.Y.Z tag or a commit SHA — see README → "Versioning & releases".
+    uses: SpiceLabsHQ/.github/.github/workflows/release-please.yml@release-please-v1
     permissions:
       contents: write
       pull-requests: write

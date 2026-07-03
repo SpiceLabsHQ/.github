@@ -23,7 +23,9 @@ on:
 
 jobs:
   dependency-review:
-    uses: SpiceLabsHQ/.github/.github/workflows/dependency-review.yml@v1
+    # @dependency-review-v1 floats within major 1 (non-breaking updates only). To harden, pin an
+    # immutable @dependency-review-vX.Y.Z tag or a commit SHA — see README → "Versioning & releases".
+    uses: SpiceLabsHQ/.github/.github/workflows/dependency-review.yml@dependency-review-v1
     permissions:
       contents: read
       pull-requests: write

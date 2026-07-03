@@ -2,6 +2,67 @@
 
 Organization-level defaults for [SpiceLabsHQ](https://github.com/SpiceLabsHQ). The `profile/README.md` is what shows on the org's GitHub page.
 
+## Versioning & releases
+
+Every reusable workflow in this repo is versioned **independently**, via [release-please](https://github.com/googleapis/release-please) in monorepo mode (one package per workflow under [`workflows/`](workflows/README.md)). A release — or a breaking change — in one workflow never affects consumers of another, and no human ever moves a tag by hand.
+
+### Refs you can pin
+
+| Ref | Mutability | Meaning |
+|---|---|---|
+| `<workflow>-vX.Y.Z` (e.g. `secret-scan-v1.2.3`) | **Immutable** | One specific release of one workflow. Cut automatically when that workflow's release PR merges |
+| `<workflow>-vN` (e.g. `secret-scan-v1`) | Floats **within the major only** | The backward-compatibility line. Advanced automatically (`release-tag-aliases.yml`) to the latest release of major N — never across a breaking change |
+| Commit SHA | Immutable | Strongest pin; pair with Dependabot for reviewable upgrades |
+| `v1`, `v1.0.0` | **Frozen — legacy, deprecated** | The old org-wide shared tags, permanently parked at commit `60a48c1`. They will never move again and receive no fixes. Migrate off them (see below) |
+
+### Policy
+
+- **A major alias is a backward-compatibility promise.** `<workflow>-vN` only ever advances to non-breaking releases within major N.
+- **A breaking change requires a new major.** Mark it with Conventional Commits (`feat(secret-scan)!: …` or a `BREAKING CHANGE:` footer); release-please bumps to `(N+1).0.0` and a new `<workflow>-v(N+1)` alias appears. Consumers pinned to `-vN` are untouched until they opt in.
+- **Tags advance only via the release automation.** Force-moving a shared mutable tag to ship changes — which broke every adopter at once during DEV-404 — is retired as a practice and structurally prevented: the alias workflow only moves an alias within its own major, and only forward (never to a lower version).
+- **Platform-level immutability:** keep GitHub's immutable-releases setting enabled for this repo (and/or a tag ruleset matching `*-v[0-9]*.[0-9]*.[0-9]*`) so release tags can't be moved or deleted even accidentally. Do **not** protect the bare `<workflow>-vN` aliases — advancing within a major is their job.
+
+### How consumers should pin
+
+Strongest first:
+
+1. **Commit SHA + Dependabot** — the same rigor these workflows apply to the third-party actions inside them:
+
+   ```yaml
+   uses: SpiceLabsHQ/.github/.github/workflows/secret-scan.yml@a1b2c3… # secret-scan-v1.2.3
+   ```
+
+2. **Immutable release tag** — reproducible, human-readable: `@secret-scan-v1.2.3`
+3. **Floating major** — hands-off non-breaking updates, trusting this repo's release process: `@secret-scan-v1`
+
+Whichever form you choose, add Dependabot so upgrades arrive as reviewable PRs instead of silently:
+
+```yaml
+# .github/dependabot.yml
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+```
+
+> Dependabot handles `uses:` refs to reusable workflows like action refs. SHA pins with the trailing version comment are the most reliably updated form; its parsing of component-prefixed tags (`secret-scan-v1.2.3`) can lag, so verify the first update PR after adopting.
+
+### Migrating off the legacy `@v1`
+
+1. In each consuming repo, find the pins: `grep -rn 'SpiceLabsHQ/.github/.github/workflows/' .github/workflows/`
+2. Replace `@v1` with the per-workflow ref — e.g. `secret-scan.yml@v1` → `secret-scan.yml@secret-scan-v1`, or an immutable tag / SHA per above.
+3. No urgency-forced breakage: legacy `v1` stays parked where it is today, so existing callers keep working — but it receives no fixes, so treat the migration as due promptly.
+
+### Releasing (maintainers)
+
+- **Conventional Commit PR titles drive everything** (this repo squash-merges): `fix(secret-scan): …` → patch, `feat(secret-scan): …` → minor, `!`/`BREAKING CHANGE` → major. `chore`/`docs` don't trigger releases. Enforced on this repo's own PRs by `self-pr-hygiene.yml`.
+- **Keep a PR scoped to one workflow where possible.** The squash commit is attributed to every workflow whose files it touches, so a cross-workflow PR lands in multiple changelogs under a single (possibly mismatched) scope.
+- **After editing any reusable workflow, run [`scripts/sync-workflow-checksums.sh`](scripts/sync-workflow-checksums.sh)** and commit the regenerated `workflows/<name>/workflow.sha256`. GitHub forces all workflow YAML into the flat `.github/workflows/` directory, while release-please routes commits to packages by directory path — the checksum file is the bridge that routes your commit to the right package. `repo-checks.yml` fails any PR where it's stale, so you can't forget silently.
+- On merge to main, `self-release.yml` (this repo dogfooding its own reusable `release-please.yml`) opens or updates a release PR **per changed workflow**. Merging a release PR cuts `<workflow>-vX.Y.Z` + a GitHub Release, and `release-tag-aliases.yml` advances `<workflow>-vN`.
+- **Adding a new reusable workflow:** create `.github/workflows/<name>.yml`, run the sync script, and register `workflows/<name>` in `release-please-config.json` and `.release-please-manifest.json` (start at `0.1.0`; go `1.0.0` when the interface settles). CI enforces the registration.
+
 ## Reusable workflows
 
 ### Pepper PR Review (`pepper-pr-review.yml`)
@@ -48,7 +109,7 @@ The bot operates in two modes:
 
 **6. Bulk rollout:** `scripts/rollout-pepper-pr-review.sh` opens an adoption PR in every non-archived org repo. Defaults to dry-run; pass `--apply` to actually create PRs.
 
-**Versioning:** Callers pin the reusable workflow with `@v1`; the reusable workflow pins the underlying `anthropics/claude-code-action` ref. Action upgrades happen in one place.
+**Versioning:** Callers pin with `@pepper-pr-review-v1` (or harden with an immutable `pepper-pr-review-vX.Y.Z` tag / commit SHA — see [Versioning & releases](#versioning--releases)); the reusable workflow pins the underlying `anthropics/claude-code-action` ref. Action upgrades happen in one place.
 
 ### Actions Audit (`actions-audit.yml`)
 
@@ -84,7 +145,7 @@ Wraps [`actions/dependency-review-action`](https://github.com/actions/dependency
 
 **4. No secrets required.** The audit runs entirely against the caller's checked-out workspace and uses `GITHUB_TOKEN` for SARIF upload.
 
-**Versioning:** Callers pin with `@v1`. The reusable workflow pins zizmor to an exact version (`ZIZMOR_VERSION` env in the workflow) so audit results are reproducible across runs.
+**Versioning:** Callers pin with `@actions-audit-v1` (or harden with an immutable `actions-audit-vX.Y.Z` tag / commit SHA — see [Versioning & releases](#versioning--releases)). The reusable workflow pins zizmor to an exact version (`ZIZMOR_VERSION` env in the workflow) so audit results are reproducible across runs.
 
 ### PR Hygiene (`pr-hygiene.yml`)
 
@@ -125,7 +186,7 @@ The two modes:
 
 **4. (Optional) Security-tab integration on public repos.** On **public** repos, findings are uploaded as SARIF to GitHub code scanning (the Security tab) for free — grant `security-events: write` on the calling job (the example does). On **private/internal** repos this upload is auto-skipped, because code scanning there requires paid [GitHub Advanced Security](https://docs.github.com/en/get-started/learning-about-github/about-github-advanced-security); the scan still runs and still fails the check. No license is required either way.
 
-**Versioning:** Callers pin the reusable workflow with `@v1`; the reusable workflow pins the gitleaks CLI to a release version and verifies the downloaded binary against the release's published checksums. Scanner upgrades happen in one place.
+**Versioning:** Callers pin with `@secret-scan-v1` (or harden with an immutable `secret-scan-vX.Y.Z` tag / commit SHA — see [Versioning & releases](#versioning--releases)); the reusable workflow pins the gitleaks CLI to a release version and verifies the downloaded binary against the release's published checksums. Scanner upgrades happen in one place.
 
 ### CodeQL (`codeql.yml`)
 
@@ -292,7 +353,7 @@ You can drop the field once the first release PR has merged; release-please igno
 - **Manifest mode is sticky.** Once you've onboarded with a manifest, you can't switch back to non-manifest mode without manual cleanup. Manifest is the path forward for any new repo regardless.
 - **Manifest keys must match config keys exactly.** A typo (`packages/api` vs `packages/api/`) will silently no-op for that package on every run.
 - **The config and manifest are strict JSON.** No comments, no trailing commas. release-please uses raw `JSON.parse()` and a parse failure aborts the whole run — no release PR opens until the file is fixed.
-- **Versioning:** Callers pin the reusable workflow with `@v1`; the reusable workflow SHA-pins both `googleapis/release-please-action` and `actions/create-github-app-token`. Action upgrades happen in one place.
+- **Versioning:** Callers pin with `@release-please-v1` (or harden with an immutable `release-please-vX.Y.Z` tag / commit SHA — see [Versioning & releases](#versioning--releases)); the reusable workflow SHA-pins both `googleapis/release-please-action` and `actions/create-github-app-token`. Action upgrades happen in one place.
 
 ### Release Artifacts (`release-artifacts.yml`)
 
@@ -367,7 +428,7 @@ slsa-verifier verify-artifact \
   <artifact>
 ```
 
-**8. Pinning policy.** The reusable workflow SHA-pins all third-party actions (`anchore/sbom-action`, `sigstore/cosign-installer`) to 40-char commit SHAs per the actions-audit policy. `actions/attest-build-provenance` is first-party but is also SHA-pinned because it is an attestation primitive whose semantics we want to bump deliberately. `actions/checkout` follows the standard first-party major-tag policy. Callers pin the reusable workflow itself with `@v1`.
+**8. Pinning policy.** The reusable workflow SHA-pins all third-party actions (`anchore/sbom-action`, `sigstore/cosign-installer`) to 40-char commit SHAs per the actions-audit policy. `actions/attest-build-provenance` is first-party but is also SHA-pinned because it is an attestation primitive whose semantics we want to bump deliberately. `actions/checkout` follows the standard first-party major-tag policy. Callers pin with `@release-artifacts-v1` (or harden with an immutable `release-artifacts-vX.Y.Z` tag / commit SHA — see [Versioning & releases](#versioning--releases)).
 
 | `languages` | (empty → auto-detect) | Comma-separated CodeQL language IDs to override auto-detect. Use the IDs listed above |
 | `query_suite` | `security-extended` | One of `default`, `security-extended`, `security-and-quality`. Pick `security-and-quality` if you want lint-style code-quality findings alongside security findings |
@@ -375,7 +436,7 @@ slsa-verifier verify-artifact \
 
 **4. No secrets required.** SARIF upload uses the standard `GITHUB_TOKEN` with `security-events: write`.
 
-**Versioning:** Callers pin the reusable workflow with `@v1`; the reusable workflow pins `github/codeql-action` to `@v3`. Engine upgrades happen in one place.
+**Versioning:** Callers pin with `@codeql-v1` (or harden with an immutable `codeql-vX.Y.Z` tag / commit SHA — see [Versioning & releases](#versioning--releases)); the reusable workflow pins `github/codeql-action` to `@v3`. Engine upgrades happen in one place.
 
 ### OpenSSF Scorecard
 
@@ -410,7 +471,7 @@ Internal Scorecard scan: runs Scorecard against the calling repo on a weekly sch
 
 No secrets required — Scorecard runs entirely with the workflow's own `GITHUB_TOKEN`.
 
-**Versioning:** Callers pin with `@v1`. The reusable workflow SHA-pins `ossf/scorecard-action` to the latest stable tag (currently v2.4.3) and tracks `actions/*` and `github/*` at major-version tags per the actions-audit policy.
+**Versioning:** Callers pin with `@scorecard-v1` (or harden with an immutable `scorecard-vX.Y.Z` tag / commit SHA — see [Versioning & releases](#versioning--releases)). The reusable workflow SHA-pins `ossf/scorecard-action` to the latest stable tag (currently v2.4.3) and tracks `actions/*` and `github/*` at major-version tags per the actions-audit policy.
 
 #### Public (`scorecard-public.yml`)
 
@@ -450,7 +511,7 @@ Scorecard's publish endpoint (`post_results.go` in the upstream Scorecard repo) 
   No custom `run:` shell steps. No other actions. No matrix. No inputs that would require validation steps. The workflow is a clean four-step pipeline by design — keep it that way. If you need richer behavior (e.g. cosign-signing artifacts, posting Slack notifications), do it in a **separate** workflow that runs after this one, not by adding steps here.
 - **`publish_results: true` is mandatory.** That's the whole point of this workflow. Flipping it to `false` silently turns this into a worse copy of the internal `scorecard.yml`.
 
-**Versioning:** Callers pin with `@v1`. The reusable workflow SHA-pins `ossf/scorecard-action` to the same tag as the internal variant (currently v2.4.3) and tracks `actions/*` and `github/*` at major-version tags per the actions-audit policy.
+**Versioning:** Callers pin with `@scorecard-public-v1` (or harden with an immutable `scorecard-public-vX.Y.Z` tag / commit SHA — see [Versioning & releases](#versioning--releases)). The reusable workflow SHA-pins `ossf/scorecard-action` to the same tag as the internal variant (currently v2.4.3) and tracks `actions/*` and `github/*` at major-version tags per the actions-audit policy.
 
 | `fail_on_severity` | `high` | Minimum CVE severity that fails the check. One of `low`, `moderate`, `high`, `critical` |
 | `deny_licenses` | `GPL-2.0,GPL-3.0,AGPL-1.0,AGPL-3.0,LGPL-2.0,LGPL-2.1,LGPL-3.0` | Comma-separated SPDX identifiers denied org-wide. See **License policy rationale** below |
@@ -479,7 +540,7 @@ permissions:
 
 **4. Requirements:** Dependency Review API is free on public repos. On private repos it requires GitHub Advanced Security.
 
-**Versioning:** Callers pin the reusable workflow with `@v1`; the reusable workflow SHA-pins the underlying `actions/dependency-review-action` ref. Action upgrades happen in one place.
+**Versioning:** Callers pin with `@dependency-review-v1` (or harden with an immutable `dependency-review-vX.Y.Z` tag / commit SHA — see [Versioning & releases](#versioning--releases)); the reusable workflow SHA-pins the underlying `actions/dependency-review-action` ref. Action upgrades happen in one place.
 
 | `additional_rulesets` | (empty) | Comma-separated extra Semgrep ruleset IDs (e.g. `p/javascript,p/golang`). Each becomes its own `--config` flag. Layered on top of the curated defaults and auto-detected packs |
 | `config_path` | `.semgrep.yml` | Path to a caller-maintained custom-rules file. Tolerated absent — workflow simply skips when the file isn't present |
@@ -489,4 +550,4 @@ permissions:
 
 **Curated rulesets (always on):** `p/default`, `p/owasp-top-ten`, `p/secrets`.
 
-**Versioning:** Callers pin the reusable workflow with `@v1`; the reusable workflow pins Semgrep to a specific PyPI release. Engine upgrades happen in one place.
+**Versioning:** Callers pin with `@sast-v1` (or harden with an immutable `sast-vX.Y.Z` tag / commit SHA — see [Versioning & releases](#versioning--releases)); the reusable workflow pins Semgrep to a specific PyPI release. Engine upgrades happen in one place.

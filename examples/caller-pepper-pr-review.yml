@@ -35,7 +35,9 @@ on:
 
 jobs:
   pepper:
-    uses: SpiceLabsHQ/.github/.github/workflows/pepper-pr-review.yml@v1
+    # @pepper-pr-review-v1 floats within major 1 (non-breaking updates only). To harden, pin an
+    # immutable @pepper-pr-review-vX.Y.Z tag or a commit SHA — see README → "Versioning & releases".
+    uses: SpiceLabsHQ/.github/.github/workflows/pepper-pr-review.yml@pepper-pr-review-v1
     permissions:
       contents: read
       pull-requests: write

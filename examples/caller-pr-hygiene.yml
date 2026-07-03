@@ -20,7 +20,9 @@ on:
 
 jobs:
   hygiene:
-    uses: SpiceLabsHQ/.github/.github/workflows/pr-hygiene.yml@v1
+    # @pr-hygiene-v1 floats within major 1 (non-breaking updates only). To harden, pin an
+    # immutable @pr-hygiene-vX.Y.Z tag or a commit SHA — see README → "Versioning & releases".
+    uses: SpiceLabsHQ/.github/.github/workflows/pr-hygiene.yml@pr-hygiene-v1
     permissions:
       contents: read
       pull-requests: write

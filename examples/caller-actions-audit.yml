@@ -24,7 +24,9 @@ on:
 
 jobs:
   audit:
-    uses: SpiceLabsHQ/.github/.github/workflows/actions-audit.yml@v1
+    # @actions-audit-v1 floats within major 1 (non-breaking updates only). To harden, pin an
+    # immutable @actions-audit-vX.Y.Z tag or a commit SHA — see README → "Versioning & releases".
+    uses: SpiceLabsHQ/.github/.github/workflows/actions-audit.yml@actions-audit-v1
     permissions:
       contents: read
       security-events: write

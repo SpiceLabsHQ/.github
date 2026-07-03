@@ -1,0 +1,35 @@
+name: Self Release
+
+# Runs this repo's own reusable release-please workflow against this repo —
+# the .github repo is consumer #1 of its own release pipeline.
+#
+# The root release-please-config.json declares one package per reusable
+# workflow (workflows/<name>/), so each workflow gets its own release PR,
+# its own CHANGELOG, and its own immutable tag (<name>-vX.Y.Z). Merging a
+# release PR publishes a GitHub Release; release-tag-aliases.yml then
+# advances the floating major alias (<name>-vN). See README
+# "Versioning & releases" for the policy.
+#
+# The `uses: ./...` local reference resolves to the same commit that
+# triggered this run — no version pin needed, and no chicken-and-egg with
+# this repo's own tags.
+#
+# Secrets: the Rosemary Releaser GitHub App pair is REQUIRED here (not
+# optional as it is for other consumers). Releases published by plain
+# GITHUB_TOKEN do not emit `release: published` events to other workflows,
+# which would leave release-tag-aliases.yml dead and the <name>-vN aliases
+# frozen.
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  release-please:
+    uses: ./.github/workflows/release-please.yml
+    permissions:
+      contents: write
+      pull-requests: write
+    secrets:
+      ROSEMARY_RELEASER_APP_ID: ${{ secrets.ROSEMARY_RELEASER_APP_ID }}
+      ROSEMARY_RELEASER_APP_PRIVATE_KEY: ${{ secrets.ROSEMARY_RELEASER_APP_PRIVATE_KEY }}
