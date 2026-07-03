@@ -1,8 +1,18 @@
 name: Release Tag Aliases
 
-# Advances the floating major alias tag (<workflow>-vN) when a per-workflow
-# release is published. Example: publishing `secret-scan-v1.2.3` moves (or
-# creates) `secret-scan-v1`.
+# Reconciles the floating major alias tags (<workflow>-vN) whenever a
+# per-workflow release is published. Example: after `secret-scan-v1.2.3`
+# publishes, `secret-scan-v1` points at it.
+#
+# Design: each run reconciles EVERY alias (all components, all majors) to the
+# highest existing X.Y.Z release tag within its major — not just the alias for
+# the release that triggered it. Rationale: GitHub concurrency groups hold at
+# most one pending run; when several releases publish near-simultaneously
+# (bulk-merging release PRs, the DEV-408 baseline script), the queued runs
+# cancel each other and a per-release handler would silently skip an alias.
+# Global reconciliation makes any single surviving run converge all aliases,
+# so cancelled runs are harmless. Observed live during the DEV-408 rollout:
+# 11 releases → 7 runs auto-cancelled.
 #
 # Policy guarantees enforced here (see README "Versioning & releases"):
 #
@@ -10,9 +20,13 @@ name: Release Tag Aliases
 #     change lands as <name>-v(N+1).0.0 and produces a NEW alias, so consumers
 #     pinned to <name>-vN can never receive it. The force-move of the shared
 #     org-wide `v1` that burned us in DEV-404 is structurally impossible.
-#   * Out-of-order publishes can't regress an alias: the alias only moves when
-#     the published tag is the highest existing X.Y.Z within its major
-#     (compared with sort -V).
+#   * An alias can't regress: the target is always the sort -V maximum of the
+#     immutable release tags in its major, regardless of publish order.
+#
+# Prerelease caveat: reconciliation reads git tags and cannot see GitHub's
+# prerelease flag on a release. release-please never cuts prerelease X.Y.Z
+# tags here, so this is theoretical — but if prereleases are ever introduced,
+# give them a non-X.Y.Z tag shape (e.g. -rc suffix) so the regex ignores them.
 #
 # Immutability note: the release tags themselves (<name>-vX.Y.Z) should be
 # made immutable via the repo's "immutable releases" setting / a tag ruleset
@@ -22,8 +36,7 @@ name: Release Tag Aliases
 # Trigger caveat: `release: published` events fire this workflow only when the
 # release was created by something other than GITHUB_TOKEN. self-release.yml
 # passes the Rosemary Releaser App credentials for exactly this reason.
-# Releases created manually with `gh release create` (e.g. the DEV-408
-# baseline script) also fire it.
+# Releases created manually with `gh release create` also fire it.
 
 on:
   release:
@@ -32,15 +45,16 @@ on:
 permissions:
   contents: write
 
-# Serialize alias moves; two releases publishing near-simultaneously must not
-# race on reading the tag list.
+# Serialize reconciliation runs; a stale run pushing after a newer one could
+# otherwise briefly rewind an alias. Queued runs beyond one get auto-cancelled
+# by GitHub — safe here, because the surviving run reconciles globally.
 concurrency:
   group: release-tag-aliases
   cancel-in-progress: false
 
 jobs:
-  advance-alias:
-    name: Advance major alias tag
+  reconcile-aliases:
+    name: Reconcile major alias tags
     if: ${{ !github.event.release.draft && !github.event.release.prerelease }}
     runs-on: ubuntu-latest
     steps:
@@ -51,41 +65,43 @@ jobs:
         with:
           fetch-depth: 0 # need full tag list + tag commit ancestry
 
-      - name: Advance <workflow>-vN alias
+      - name: Reconcile <workflow>-vN aliases
         env:
-          # Passed via env, never interpolated into the script body, per the
-          # actions-audit template-injection rules.
+          # Informational only (which release woke us). Passed via env, never
+          # interpolated into the script body, per the actions-audit
+          # template-injection rules.
           TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
 
           git fetch --tags --force --quiet
+          echo "Reconciling all major aliases (triggered by release '$TAG')"
 
-          # Only per-workflow release tags qualify. The legacy shared tags
-          # (v1, v1.0.0) and anything else are ignored on purpose.
-          if [[ ! "$TAG" =~ ^([a-z0-9][a-z0-9-]*)-v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-            echo "::notice::'$TAG' is not a <workflow>-vX.Y.Z tag; nothing to do."
-            exit 0
-          fi
-          component="${BASH_REMATCH[1]}"
-          major="${BASH_REMATCH[2]}"
+          for dir in workflows/*/; do
+            [ -d "$dir" ] || continue
+            component="$(basename "$dir")"
 
-          if [ ! -d "workflows/$component" ]; then
-            echo "::warning::'$TAG' does not correspond to a known workflow package (workflows/$component missing); skipping alias move."
-            exit 0
-          fi
+            # Majors that have at least one immutable release tag.
+            majors="$(git tag -l "${component}-v[0-9]*" \
+                        | grep -E "^${component}-v[0-9]+\.[0-9]+\.[0-9]+$" \
+                        | sed -E "s/^${component}-v([0-9]+)\..*/\1/" \
+                        | sort -un)"
 
-          # Refuse to regress: only move the alias when the published tag is
-          # the highest existing version inside its major line.
-          best="$(git tag -l "${component}-v${major}.*" \
-                    | grep -E "^${component}-v${major}\.[0-9]+\.[0-9]+$" \
-                    | sort -V | tail -1)"
-          if [ "$best" != "$TAG" ]; then
-            echo "::notice::'$TAG' is not the highest release in the ${component}-v${major} line ('$best' is); leaving the alias where it is."
-            exit 0
-          fi
+            for major in $majors; do
+              best="$(git tag -l "${component}-v${major}.*" \
+                        | grep -E "^${component}-v${major}\.[0-9]+\.[0-9]+$" \
+                        | sort -V | tail -1)"
+              [ -n "$best" ] || continue
 
-          sha="$(git rev-list -n 1 "$TAG")"
-          alias="${component}-v${major}"
-          echo "Advancing $alias -> $TAG ($sha)"
-          git push --force origin "${sha}:refs/tags/${alias}"
+              target="$(git rev-list -n 1 "$best")"
+              alias_tag="${component}-v${major}"
+              current="$(git rev-list -n 1 "$alias_tag" 2>/dev/null || true)"
+
+              if [ "$current" = "$target" ]; then
+                echo "ok       $alias_tag == $best"
+              else
+                echo "advance  $alias_tag -> $best ($target)"
+                git push --force origin "${target}:refs/tags/${alias_tag}"
+              fi
+            done
+          done
