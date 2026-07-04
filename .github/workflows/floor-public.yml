@@ -2,35 +2,28 @@ name: CI Floor — public overlay
 
 # Central PUBLIC-OVERLAY workflow (DEV-499). Referenced by `spice-ci-floor-public`
 # via the "require workflows to pass" rule, targeting the org's public repos
-# additively on top of the code floor. These checks depend on the
-# dependency-review API, which is free on public repos but GHAS-gated on private
-# ones — hence a public-only overlay rather than part of the code floor. See
-# floor-hygiene.yml for the mechanism and the `.github` self-host exclusion.
+# additively on top of the code floor. See floor-hygiene.yml for the mechanism
+# and the `.github` self-host exclusion.
 #
-# NOTE: codeql is deliberately NOT in this blanket overlay. It fans out over a
-# language matrix, and on a public repo with no CodeQL-supported language
-# (Shell, EJS, docs-only) that matrix is empty, which *startup-fails the whole
-# workflow* — blocking every PR. codeql is therefore per-language guidance
-# (Silver): add a codeql caller to the specific public repos that have a
-# supported language (JS/TS, Go, Python, Java, C#, Ruby, Swift, C/C++).
+# Scope note — why this overlay is scorecard-public ONLY:
+# The overlay must be safe as a *blanket required check* across a mixed-language
+# public repo set. Two otherwise-desirable public checks have per-repo
+# prerequisites that make them unsuitable as blanket gates (both observed live
+# on Claude-Powershell-Pilot, a Shell repo):
+#   * codeql fans out over a language matrix; with no CodeQL-supported language
+#     the matrix is empty, which STARTUP-FAILS the whole run and blocks every PR.
+#   * dependency-review hard-errors ("not supported on this repository") unless
+#     the repo's Dependency Graph is enabled.
+# Both are therefore per-repo Silver guidance: add a codeql caller to public
+# repos with a supported language (JS/TS, Go, Python, Java, C#, Ruby, Swift,
+# C/C++), and a dependency-review caller to repos with the Dependency Graph on.
+# scorecard-public runs cleanly on any public repo, so it is the overlay gate.
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
 
 jobs:
-  dependency-review:
-    if: github.repository != 'SpiceLabsHQ/.github'
-    uses: SpiceLabsHQ/.github/.github/workflows/dependency-review.yml@dependency-review-v1
-    permissions:
-      contents: read
-      pull-requests: write
-    with:
-      # Org license policy is "none" (internal-only consumers): don't block on
-      # licenses. The floor value of dependency-review here is vulnerability
-      # blocking (fail_on_severity), not license enforcement.
-      deny_licenses: ""
-
   scorecard-public:
     if: github.repository != 'SpiceLabsHQ/.github'
     uses: SpiceLabsHQ/.github/.github/workflows/scorecard-public.yml@scorecard-public-v1
