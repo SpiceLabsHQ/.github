@@ -91,7 +91,7 @@ jobs:
           publish_results: true
 
       - name: Upload results artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: scorecard-public-results-sarif
           path: results.sarif
