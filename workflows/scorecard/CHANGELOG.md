@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.0](https://github.com/SpiceLabsHQ/.github/compare/scorecard-v1.0.1...scorecard-v1.1.0) (2026-07-04)
+
+
+### Features
+
+* **deps:** update actions/upload-artifact action to v7 ([#77](https://github.com/SpiceLabsHQ/.github/issues/77)) ([57cef1e](https://github.com/SpiceLabsHQ/.github/commit/57cef1eef3033551c0a826454a18f8087dce36f6))
+* **deps:** update github/codeql-action action to v4 ([#79](https://github.com/SpiceLabsHQ/.github/issues/79)) ([bc8086f](https://github.com/SpiceLabsHQ/.github/commit/bc8086f078a9832004ef6ad62849769f44753d8f))
+
 ## [1.0.1](https://github.com/SpiceLabsHQ/.github/compare/scorecard-v1.0.0...scorecard-v1.0.1) (2026-07-04)
 
 
