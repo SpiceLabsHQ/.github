@@ -13,8 +13,8 @@ Every repo in the org is held to a **mechanically enforced minimum CI tier** and
 | **Docs floor** | repos tagged `ci-exception: docs` | `pr-hygiene`, `secret-scan`, seeded `renovate.json` | ruleset `spice-ci-floor-docs` |
 | **Code floor** | all untagged repos (incl. private) | `pr-hygiene`, `secret-scan`, `pepper-pr-review`, `sast`, `actions-audit`, seeded `renovate.json` | ruleset `spice-ci-floor-code` |
 | **Public overlay** | public repos (additive) | `codeql`, `dependency-review`, `scorecard-public` | ruleset `spice-ci-floor-public` |
-| **Silver** (guidance) | code repos | `scorecard` (where supported on private) | audit opens next-rung PRs |
-| **Gold** (guidance) | code repos | `release-please` + `release-artifacts`, SHA-pinned third-party actions | audit opens next-rung PRs |
+| **Silver** (guidance) | code repos | `scorecard` (where supported on private) | audit flags the next rung on the dashboard |
+| **Gold** (guidance) | code repos | `release-please` + `release-artifacts`, SHA-pinned third-party actions | audit flags the next rung on the dashboard |
 
 The floor workflows live in [`.github/workflows/`](.github/workflows/) as `floor-hygiene.yml`, `floor-secret-scan.yml`, `floor-sast.yml`, `floor-pepper.yml`, and `floor-public.yml`. Each is a thin PR-triggered wrapper that calls the corresponding reusable workflow (pinned to its `<workflow>-v1` floating major) in the *target* repo's context — so `secret-scan` scans the target repo, `pepper` reviews the target repo's PR, and so on. They self-skip on this `.github` repo, which dogfoods the same workflows via its own `self-*` / `pepper-self-review` callers.
 
@@ -36,9 +36,9 @@ Targeting is **exception-only**: the default assumption is that *every repo is a
 
 ### Maturity ladder: Floor → Silver → Gold
 
-The floor is the *minimum*; the ladder is the *paved road* up. **Silver** and **Gold** are guidance, not merge-blocking policy — a scheduled org-audit workflow inventories each repo's installed callers and `renovate.json` against its tier, publishes a per-repo scorecard, and **opens a ready-made PR for the next missing rung** (guidance delivered as PRs, not policy docs). It also flags exception-list honesty ("does anything tagged `docs` look like it grew code?").
+The floor is the *minimum*; the ladder is the *paved road* up. **Silver** and **Gold** are guidance, not merge-blocking policy — a scheduled org-audit workflow ([`scripts/org-ci-audit.sh`](scripts/org-ci-audit.sh)) inventories each repo's installed callers and `renovate.json` against its tier and publishes a per-repo scorecard, **flagging the next missing rung for each repo** on the dashboard. It also flags exception-list honesty ("does anything tagged `docs` look like it grew code?"). Today the dashboard names the gap and a human opens the fix PR; auto-opening the next-rung PR is a planned enhancement, not yet implemented.
 
-**Renovate is floor, not Silver** — it's a near-zero-cost JSON file and it's what keeps every other floor workflow current. But a ruleset can't require a *file* to exist, so Renovate's floor status is enforced by the audit + seeder (a missing `renovate.json` is a dashboard violation and an auto-opened PR), not by merge blocking.
+**Renovate is floor, not Silver** — it's a near-zero-cost JSON file and it's what keeps every other floor workflow current. But a ruleset can't require a *file* to exist, so Renovate's floor status is enforced by the audit (a missing `renovate.json` is a dashboard violation), not by merge blocking.
 
 ## Versioning & releases
 
