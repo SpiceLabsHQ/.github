@@ -115,7 +115,7 @@ jobs:
       # below (`|| ''`) leaves the relevant input unset rather than empty
       # vs. populated — preventing the "passed both" error case.
       - name: Dependency Review
-        uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           fail-on-severity: ${{ inputs.fail_on_severity }}
           deny-licenses: ${{ inputs.allow_licenses == '' && inputs.deny_licenses || '' }}
