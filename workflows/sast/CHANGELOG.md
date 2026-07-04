@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.0](https://github.com/SpiceLabsHQ/.github/compare/sast-v1.0.1...sast-v1.1.0) (2026-07-04)
+
+
+### Features
+
+* **deps:** update actions/setup-python action to v6 ([#76](https://github.com/SpiceLabsHQ/.github/issues/76)) ([4326d12](https://github.com/SpiceLabsHQ/.github/commit/4326d12028f40563c7eaf0398eddbc4086854269))
+* **deps:** update github/codeql-action action to v4 ([#79](https://github.com/SpiceLabsHQ/.github/issues/79)) ([bc8086f](https://github.com/SpiceLabsHQ/.github/commit/bc8086f078a9832004ef6ad62849769f44753d8f))
+
 ## [1.0.1](https://github.com/SpiceLabsHQ/.github/compare/sast-v1.0.0...sast-v1.0.1) (2026-07-04)
 
 
