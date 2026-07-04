@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/SpiceLabsHQ/.github/compare/secret-scan-v1.0.1...secret-scan-v1.1.0) (2026-07-04)
+
+
+### Features
+
+* **deps:** update github/codeql-action action to v4 ([#79](https://github.com/SpiceLabsHQ/.github/issues/79)) ([bc8086f](https://github.com/SpiceLabsHQ/.github/commit/bc8086f078a9832004ef6ad62849769f44753d8f))
+
 ## [1.0.1](https://github.com/SpiceLabsHQ/.github/compare/secret-scan-v1.0.0...secret-scan-v1.0.1) (2026-07-04)
 
 
