@@ -1,5 +1,5 @@
 {
-  "workflows/actions-audit": "1.1.0",
+  "workflows/actions-audit": "1.1.1",
   "workflows/codeql": "1.1.0",
   "workflows/dependency-review": "1.1.0",
   "workflows/pepper-pr-review": "1.2.0",

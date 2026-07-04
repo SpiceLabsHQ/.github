@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/SpiceLabsHQ/.github/compare/actions-audit-v1.1.0...actions-audit-v1.1.1) (2026-07-04)
+
+
+### Bug Fixes
+
+* gate SARIF uploads to public repos (sast, actions-audit, scorecard) ([#89](https://github.com/SpiceLabsHQ/.github/issues/89)) ([049cdd5](https://github.com/SpiceLabsHQ/.github/commit/049cdd5f168deb0eaff59676985603bee3a82943))
+
 ## [1.1.0](https://github.com/SpiceLabsHQ/.github/compare/actions-audit-v1.0.1...actions-audit-v1.1.0) (2026-07-04)
 
 
