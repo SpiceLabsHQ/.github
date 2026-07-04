@@ -121,7 +121,7 @@ jobs:
           private-key: ${{ secrets.PEPPER_PR_REVIEW_APP_PRIVATE_KEY }}
 
       - name: Checkout caller repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
@@ -249,7 +249,7 @@ jobs:
         # resolves to the PR head SHA, not the v1 tag's SHA — so prompt updates
         # land in main but stale PR branches keep using their own (old) copy.
         # Always tracking v1 means the latest prompt is used for every review.
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: SpiceLabsHQ/.github
           ref: refs/tags/v1

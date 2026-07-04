@@ -98,7 +98,7 @@ jobs:
       count: ${{ steps.detect.outputs.count }}
     steps:
       - name: Checkout caller repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # Auto-detect probes the worktree only; full history isn't needed.
           fetch-depth: 1
@@ -243,7 +243,7 @@ jobs:
         language: ${{ fromJSON(needs.detect-languages.outputs.matrix) }}
     steps:
       - name: Checkout caller repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # CodeQL needs full history for some path-based queries and for
           # accurate diff scoping on `pull_request` events.

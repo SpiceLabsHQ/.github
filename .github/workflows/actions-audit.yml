@@ -69,7 +69,7 @@ jobs:
 
       - name: Checkout caller repo
         # actions/checkout — first-party, allowed to use a major-version tag.
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -149,7 +149,7 @@ jobs:
     steps:
       - name: Checkout caller repo
         # actions/checkout — first-party, allowed to use a major-version tag.
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 

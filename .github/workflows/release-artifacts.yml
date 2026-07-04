@@ -144,7 +144,7 @@ jobs:
     # `resolved_artifacts` to know what to operate on.
     steps:
       - name: Checkout caller repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # The release-artifacts job mints an OIDC token for cosign and
           # attest-build-provenance; we do not want the default GITHUB_TOKEN
