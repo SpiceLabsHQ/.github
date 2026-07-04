@@ -7,10 +7,6 @@
       "include": ["~DEFAULT_BRANCH"],
       "exclude": []
     },
-    "repository_name": {
-      "include": ["~ALL"],
-      "exclude": [".github"]
-    },
     "repository_property": {
       "include": [],
       "exclude": [

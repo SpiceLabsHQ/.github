@@ -2,26 +2,23 @@ name: CI Floor — public overlay
 
 # Central PUBLIC-OVERLAY workflow (DEV-499). Referenced by `spice-ci-floor-public`
 # via the "require workflows to pass" rule, targeting the org's public repos
-# additively on top of the code floor. These checks depend on features that are
-# free on public repos but GHAS-gated on private ones (code scanning / the
-# dependency-review API), which is why they are a public-only overlay rather
-# than part of the code floor. See floor-hygiene.yml for the mechanism and the
-# `.github` self-host exclusion.
+# additively on top of the code floor. These checks depend on the
+# dependency-review API, which is free on public repos but GHAS-gated on private
+# ones — hence a public-only overlay rather than part of the code floor. See
+# floor-hygiene.yml for the mechanism and the `.github` self-host exclusion.
+#
+# NOTE: codeql is deliberately NOT in this blanket overlay. It fans out over a
+# language matrix, and on a public repo with no CodeQL-supported language
+# (Shell, EJS, docs-only) that matrix is empty, which *startup-fails the whole
+# workflow* — blocking every PR. codeql is therefore per-language guidance
+# (Silver): add a codeql caller to the specific public repos that have a
+# supported language (JS/TS, Go, Python, Java, C#, Ruby, Swift, C/C++).
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
 
 jobs:
-  codeql:
-    if: github.repository != 'SpiceLabsHQ/.github'
-    # languages: "" → CodeQL autodetects the target repo's languages.
-    uses: SpiceLabsHQ/.github/.github/workflows/codeql.yml@codeql-v1
-    permissions:
-      contents: read
-      security-events: write
-      actions: read
-
   dependency-review:
     if: github.repository != 'SpiceLabsHQ/.github'
     uses: SpiceLabsHQ/.github/.github/workflows/dependency-review.yml@dependency-review-v1
