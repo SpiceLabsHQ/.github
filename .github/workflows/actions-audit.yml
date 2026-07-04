@@ -78,7 +78,7 @@ jobs:
         # own SHA-pin policy. uv installs zizmor as an isolated tool in a few
         # seconds, faster than `cargo install` and without needing a Rust
         # toolchain on the runner.
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
 
       - name: Install zizmor
         env:
