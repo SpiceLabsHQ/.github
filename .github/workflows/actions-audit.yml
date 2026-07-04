@@ -110,11 +110,28 @@ jobs:
             .github/workflows \
             > zizmor.sarif
 
-      - name: Upload SARIF to GitHub Security tab
-        # Skip on forks: github/codeql-action/upload-sarif needs
-        # security-events: write, which fork PRs don't get. Findings still
-        # surface in the gating step's logs.
-        if: ${{ hashFiles('zizmor.sarif') != '' && github.event.pull_request.head.repo.fork != true }}
+      - name: Determine repo visibility
+        # Code scanning (SARIF upload) is free on public repos; on private/
+        # internal repos it requires GitHub Advanced Security, which the org's
+        # Team plan does not include. Gate the upload on visibility so this
+        # workflow can run cleanly across private repos in the org CI floor.
+        id: vis
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          vis="$(gh api "repos/${REPO}" --jq .visibility)"
+          echo "visibility=${vis}" >> "${GITHUB_OUTPUT}"
+          echo "Repo visibility: ${vis}"
+
+      - name: Upload SARIF to GitHub Security tab (public repos only)
+        # Skip on private/internal repos (no GHAS on the Team plan) and on
+        # forks: github/codeql-action/upload-sarif needs security-events: write,
+        # which fork PRs don't get. Findings still surface in the gating step's
+        # logs. continue-on-error keeps a missing permission from failing the job.
+        if: ${{ hashFiles('zizmor.sarif') != '' && steps.vis.outputs.visibility == 'public' && github.event.pull_request.head.repo.fork != true }}
+        continue-on-error: true
         # github/codeql-action — first-party, allowed to use a major-version tag.
         uses: github/codeql-action/upload-sarif@v4
         with:

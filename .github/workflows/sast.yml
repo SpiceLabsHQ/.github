@@ -203,10 +203,28 @@ jobs:
           # propagate the failure after upload via the engine-error guard.
           echo "${EXIT}" > semgrep.exit
 
-      - name: Upload SARIF to Code Scanning
+      - name: Determine repo visibility
+        # Code scanning (SARIF upload) is free on public repos; on private/
+        # internal repos it requires GitHub Advanced Security, which the org's
+        # Team plan does not include. Gate the upload on visibility so this
+        # workflow can run cleanly across private repos in the org CI floor.
+        id: vis
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          vis="$(gh api "repos/${REPO}" --jq .visibility)"
+          echo "visibility=${vis}" >> "${GITHUB_OUTPUT}"
+          echo "Repo visibility: ${vis}"
+
+      - name: Upload SARIF to Code Scanning (public repos only)
         # First-party action — major-tag pin is acceptable per org policy.
         # Always run even if Semgrep failed, so findings reach the Security tab.
-        if: ${{ always() && hashFiles('semgrep.sarif') != '' }}
+        # Skipped on private/internal repos (no GHAS on the Team plan);
+        # continue-on-error keeps a missing permission from failing the scan.
+        if: ${{ always() && steps.vis.outputs.visibility == 'public' && hashFiles('semgrep.sarif') != '' }}
+        continue-on-error: true
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: semgrep.sarif

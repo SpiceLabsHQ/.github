@@ -77,7 +77,27 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-      - name: Upload SARIF to Code Scanning
+      - name: Determine repo visibility
+        # Code scanning (SARIF upload) is free on public repos; on private/
+        # internal repos it requires GitHub Advanced Security, which the org's
+        # Team plan does not include. Gate the upload on visibility so the
+        # analysis + artifact still run on private repos without the Security-tab
+        # push failing the job.
+        id: vis
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          vis="$(gh api "repos/${REPO}" --jq .visibility)"
+          echo "visibility=${vis}" >> "${GITHUB_OUTPUT}"
+          echo "Repo visibility: ${vis}"
+
+      - name: Upload SARIF to Code Scanning (public repos only)
+        # Skipped on private/internal repos (no GHAS on the Team plan);
+        # continue-on-error keeps a missing permission from failing the analysis.
+        if: ${{ steps.vis.outputs.visibility == 'public' && hashFiles('results.sarif') != '' }}
+        continue-on-error: true
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: results.sarif
