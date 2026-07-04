@@ -447,7 +447,7 @@ slsa-verifier verify-artifact \
 
 **4. No secrets required.** SARIF upload uses the standard `GITHUB_TOKEN` with `security-events: write`.
 
-**Versioning:** Callers pin with `@codeql-v1` (or harden with an immutable `codeql-vX.Y.Z` tag / commit SHA — see [Versioning & releases](#versioning--releases)); the reusable workflow pins `github/codeql-action` to `@v3`. Engine upgrades happen in one place.
+**Versioning:** Callers pin with `@codeql-v1` (or harden with an immutable `codeql-vX.Y.Z` tag / commit SHA — see [Versioning & releases](#versioning--releases)); the reusable workflow pins `github/codeql-action` to `@v4`. Engine upgrades happen in one place.
 
 ### OpenSSF Scorecard
 
