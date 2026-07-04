@@ -1,0 +1,86 @@
+name: Org CI Audit
+
+# Scheduled CI floor & maturity audit (DEV-499). Runs scripts/org-ci-audit.sh
+# across the org and upserts the resulting dashboard into a single pinned issue
+# in this repo. Guidance (Silver/Gold next rungs) is surfaced there rather than
+# as merge-blocking policy.
+#
+# TOKEN SETUP (one-time): the repo's default GITHUB_TOKEN is scoped to this repo
+# only and cannot read other repos' contents or the org custom-property values.
+# Create an org-scoped token and store it as the `ORG_CI_AUDIT_TOKEN` secret:
+#   - a fine-grained PAT (or GitHub App installation token) with, org-wide:
+#       Repository: Contents = read, Metadata = read
+#       Organization: Custom properties = read
+#     plus, on THIS repo: Issues = write   (to upsert + pin the dashboard issue)
+# Until that secret exists the workflow no-ops with a warning (no red schedule).
+
+on:
+  schedule:
+    - cron: "17 13 * * 1"   # Mondays 13:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: org-ci-audit
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: Inventory & publish dashboard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Guard on token presence
+        id: guard
+        env:
+          TOKEN: ${{ secrets.ORG_CI_AUDIT_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TOKEN}" ]; then
+            echo "::warning::ORG_CI_AUDIT_TOKEN is not set — skipping the org CI audit. See this workflow's header for the one-time setup."
+            echo "ok=false" >> "${GITHUB_OUTPUT}"
+          else
+            echo "ok=true" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Run audit
+        if: steps.guard.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.ORG_CI_AUDIT_TOKEN }}
+        run: |
+          set -euo pipefail
+          bash scripts/org-ci-audit.sh --org "${GITHUB_REPOSITORY_OWNER}" > dashboard.md
+          echo "Generated dashboard ($(wc -l < dashboard.md) lines)."
+
+      - name: Upsert & pin dashboard issue
+        if: steps.guard.outputs.ok == 'true'
+        env:
+          # Issues write goes to THIS repo; the audit token carries that scope.
+          GH_TOKEN: ${{ secrets.ORG_CI_AUDIT_TOKEN }}
+          REPO: ${{ github.repository }}
+          TITLE: "CI Floor & Maturity Dashboard"
+        run: |
+          set -euo pipefail
+          body="$(cat dashboard.md)"
+          # Find an existing open issue with the exact title.
+          num="$(gh issue list --repo "${REPO}" --state open --search "in:title \"${TITLE}\"" \
+                   --json number,title --jq ".[] | select(.title==\"${TITLE}\") | .number" | head -1)"
+          if [ -n "${num}" ]; then
+            gh issue edit "${num}" --repo "${REPO}" --body "${body}"
+            echo "Updated dashboard issue #${num}."
+          else
+            url="$(gh issue create --repo "${REPO}" --title "${TITLE}" --body "${body}")"
+            num="${url##*/}"
+            echo "Created dashboard issue ${url}."
+            # Pin it (GraphQL; ignore failure if already at the 3-pin limit).
+            iid="$(gh api "repos/${REPO}/issues/${num}" --jq '.node_id')"
+            gh api graphql -f query='mutation($id:ID!){pinIssue(input:{issueId:$id}){issue{number}}}' \
+              -f id="${iid}" >/dev/null 2>&1 && echo "Pinned #${num}." || echo "::notice::Could not auto-pin (pin limit?); pin #${num} manually."
+          fi

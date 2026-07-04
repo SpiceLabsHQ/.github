@@ -1,0 +1,29 @@
+{
+  "name": "spice-ci-floor-docs",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": {
+      "include": ["~DEFAULT_BRANCH"],
+      "exclude": []
+    },
+    "repository_property": {
+      "include": [
+        { "name": "ci-exception", "source": "custom", "property_values": ["docs"] }
+      ],
+      "exclude": []
+    }
+  },
+  "rules": [
+    {
+      "type": "workflows",
+      "parameters": {
+        "do_not_enforce_on_create": true,
+        "workflows": [
+          { "repository_id": 1150169232, "path": ".github/workflows/floor-hygiene.yml", "ref": "refs/heads/main" },
+          { "repository_id": 1150169232, "path": ".github/workflows/floor-secret-scan.yml", "ref": "refs/heads/main" }
+        ]
+      }
+    }
+  ]
+}
