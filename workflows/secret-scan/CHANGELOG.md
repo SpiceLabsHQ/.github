@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/SpiceLabsHQ/.github/compare/secret-scan-v1.0.0...secret-scan-v1.0.1) (2026-07-04)
+
+
+### Bug Fixes
+
+* **deps:** update actions/checkout action to v7 ([#61](https://github.com/SpiceLabsHQ/.github/issues/61)) ([f01862d](https://github.com/SpiceLabsHQ/.github/commit/f01862db624a28bce16f535b3c29a8b036927904))
+
 ## 1.0.0 (2026-07-03)
 
 Baseline release establishing per-workflow versioning ([DEV-408]). Functionally
