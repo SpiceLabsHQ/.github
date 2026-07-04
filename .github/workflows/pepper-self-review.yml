@@ -13,6 +13,15 @@ on:
 
 jobs:
   pepper:
+    # Skip release-please's mechanical version-bump PRs: claude-code-action
+    # hard-fails on PRs initiated by non-human actors (observed on the first
+    # DEV-492 release PR — "Workflow initiated by non-human actor:
+    # rosemary-releaser"), and a required check that FAILS blocks the release
+    # loop entirely. A SKIPPED job satisfies branch protection, and there's
+    # nothing for Pepper to review in a manifest/CHANGELOG/version.txt bump
+    # anyway. issue_comment events are unaffected (the expression below is
+    # empty-vs-string, i.e. true, for them).
+    if: github.event.pull_request.user.login != 'rosemary-releaser[bot]'
     # Local reference: resolves to the same commit as this run, so this repo
     # never pins itself to its own tags (the legacy shared `v1` is frozen —
     # see README "Versioning & releases"). Side effect worth knowing: a PR
