@@ -1,0 +1,35 @@
+{
+  "name": "spice-ci-floor-code",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": {
+      "include": ["~DEFAULT_BRANCH"],
+      "exclude": []
+    },
+    "repository_name": {
+      "include": ["~ALL"],
+      "exclude": [".github"]
+    },
+    "repository_property": {
+      "include": [],
+      "exclude": [
+        { "name": "ci-exception", "source": "custom", "property_values": ["docs"] }
+      ]
+    }
+  },
+  "rules": [
+    {
+      "type": "workflows",
+      "parameters": {
+        "do_not_enforce_on_create": true,
+        "workflows": [
+          { "repository_id": 1150169232, "path": ".github/workflows/floor-hygiene.yml", "ref": "refs/heads/main" },
+          { "repository_id": 1150169232, "path": ".github/workflows/floor-secret-scan.yml", "ref": "refs/heads/main" },
+          { "repository_id": 1150169232, "path": ".github/workflows/floor-sast.yml", "ref": "refs/heads/main" },
+          { "repository_id": 1150169232, "path": ".github/workflows/floor-pepper.yml", "ref": "refs/heads/main" }
+        ]
+      }
+    }
+  ]
+}

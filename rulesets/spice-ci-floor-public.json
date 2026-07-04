@@ -1,0 +1,32 @@
+{
+  "name": "spice-ci-floor-public",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": {
+      "include": ["~DEFAULT_BRANCH"],
+      "exclude": []
+    },
+    "repository_name": {
+      "include": [
+        "Claude-Marketplace",
+        "Claude-Plugin-Template",
+        "Claude-Powershell-Pilot",
+        "Mint",
+        "Reaper"
+      ],
+      "exclude": []
+    }
+  },
+  "rules": [
+    {
+      "type": "workflows",
+      "parameters": {
+        "do_not_enforce_on_create": true,
+        "workflows": [
+          { "repository_id": 1150169232, "path": ".github/workflows/floor-public.yml", "ref": "refs/heads/main" }
+        ]
+      }
+    }
+  ]
+}
