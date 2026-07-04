@@ -207,7 +207,7 @@ jobs:
         # First-party action — major-tag pin is acceptable per org policy.
         # Always run even if Semgrep failed, so findings reach the Security tab.
         if: ${{ always() && hashFiles('semgrep.sarif') != '' }}
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: semgrep.sarif
           category: semgrep

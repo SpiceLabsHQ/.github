@@ -250,7 +250,7 @@ jobs:
           fetch-depth: 0
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
           # `queries:` accepts the suite name. CodeQL resolves
@@ -289,10 +289,10 @@ jobs:
            matrix.language == 'csharp' ||
            matrix.language == 'cpp' ||
            matrix.language == 'swift')
-        uses: github/codeql-action/autobuild@v3
+        uses: github/codeql-action/autobuild@v4
 
       - name: Perform CodeQL analysis
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
         with:
           # `category` keeps results from different languages distinct in
           # the Security tab when multiple languages are scanned in the
