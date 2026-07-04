@@ -8,6 +8,6 @@
   "workflows/release-please": "1.1.0",
   "workflows/sast": "1.1.0",
   "workflows/scorecard": "1.1.0",
-  "workflows/scorecard-public": "1.0.1",
+  "workflows/scorecard-public": "1.1.0",
   "workflows/secret-scan": "1.1.0"
 }
