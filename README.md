@@ -11,12 +11,12 @@ Every repo in the org is held to a **mechanically enforced minimum CI tier** and
 | Level | Applies to | Contents | Enforced by |
 |---|---|---|---|
 | **Docs floor** | repos tagged `ci-exception: docs` | `pr-hygiene`, `secret-scan`, seeded `renovate.json` | ruleset `spice-ci-floor-docs` |
-| **Code floor** | all untagged repos (incl. private) | `pr-hygiene`, `secret-scan`, `pepper-pr-review`, `sast`, `actions-audit`, seeded `renovate.json` | ruleset `spice-ci-floor-code` |
+| **Code floor** | all untagged repos (incl. private) | `pr-hygiene`, `secret-scan`, `pepper-pr-review`, `sast`, `actions-audit`, `auto-merge enable`, seeded `renovate.json` | ruleset `spice-ci-floor-code` |
 | **Public overlay** | public repos (additive) | `scorecard-public` | ruleset `spice-ci-floor-public` |
 | **Silver** (guidance) | code repos | `scorecard` (where supported on private); `codeql` on public repos with a CodeQL-supported language; `dependency-review` on public repos with the Dependency Graph enabled — neither can be a blanket gate (an empty language matrix or a missing dependency graph fails the run) | audit flags the next rung on the dashboard |
 | **Gold** (guidance) | code repos | `release-please` + `release-artifacts`, SHA-pinned third-party actions | audit flags the next rung on the dashboard |
 
-The floor workflows live in [`.github/workflows/`](.github/workflows/) as `floor-hygiene.yml`, `floor-secret-scan.yml`, `floor-sast.yml`, `floor-pepper.yml`, and `floor-public.yml`. Each is a thin PR-triggered wrapper that calls the corresponding reusable workflow (pinned to its `<workflow>-v1` floating major) in the *target* repo's context — so `secret-scan` scans the target repo, `pepper` reviews the target repo's PR, and so on. They self-skip on this `.github` repo, which dogfoods the same workflows via its own `self-*` / `pepper-self-review` callers.
+The floor workflows live in [`.github/workflows/`](.github/workflows/) as `floor-hygiene.yml`, `floor-secret-scan.yml`, `floor-sast.yml`, `floor-pepper.yml`, `floor-automerge.yml`, and `floor-public.yml`. Each is a thin PR-triggered wrapper that calls the corresponding reusable workflow (pinned to its `<workflow>-v1` floating major) in the *target* repo's context — so `secret-scan` scans the target repo, `pepper` reviews the target repo's PR, and so on. They self-skip on this `.github` repo, which dogfoods the same workflows via its own `self-*` / `pepper-self-review` callers.
 
 ### The exception model (fail-safe by default)
 
@@ -39,6 +39,21 @@ Targeting is **exception-only**: the default assumption is that *every repo is a
 The floor is the *minimum*; the ladder is the *paved road* up. **Silver** and **Gold** are guidance, not merge-blocking policy — a scheduled org-audit workflow ([`scripts/org-ci-audit.sh`](scripts/org-ci-audit.sh)) inventories each repo's installed callers and `renovate.json` against its tier and publishes a per-repo scorecard, **flagging the next missing rung for each repo** on the dashboard. It also flags exception-list honesty ("does anything tagged `docs` look like it grew code?"). Today the dashboard names the gap and a human opens the fix PR; auto-opening the next-rung PR is a planned enhancement, not yet implemented.
 
 **Renovate is floor, not Silver** — it's a near-zero-cost JSON file and it's what keeps every other floor workflow current. But a ruleset can't require a *file* to exist, so Renovate's floor status is enforced by the audit (a missing `renovate.json` is a dashboard violation), not by merge blocking.
+
+## Auto-merge policy: Pepper-gated (DEV-502)
+
+Spice is **AI-first**, so the org merges on **review confidence, not change type**. Every PR — bot *and* human, uniformly — auto-merges once **all required checks are green AND an approving review exists**. There are deliberately **no semver tiers** (patch/minor/major auto-merge rules): that's the crutch for orgs without a trustworthy always-on reviewer. Spice has one.
+
+**Pepper is the gate.** [`pepper-pr-review`](#pepper-pr-review-pepper-pr-reviewyml) (Claude Sonnet 5) is a *high-confidence-or-defer* reviewer. High-confidence → it approves → the pending merge fires. Not confident → it **defers to `@SpiceLabsHQ/reviewers`** and does not approve → the PR waits for a human. Pepper's deferral *is* the human fallback — automatic, no rules to maintain. Majors, security bumps, and anomalies are all handled by that judgment + deferral, not by version-delta rules.
+
+How the pieces fit:
+
+- **The unlock** — `spice-branch-protection` keeps `required_approving_review_count: 1` and `require_last_push_approval: true` but **drops `require_code_owner_review`**. A GitHub App cannot be a code owner, so code-owner review would force a human on every PR; without it, Pepper's approval is sufficient while its *deferral* (no approval) still forces a human. **CODEOWNERS files are retained** — they now just *route* Pepper's deferrals to the right reviewers.
+- **Enabling auto-merge** — [`floor-automerge.yml`](.github/workflows/floor-automerge.yml) enables GitHub native auto-merge (squash) on every code-tier PR, injected zero-install by the `spice-ci-floor-code` ruleset. It is best-effort (never fails its required check) and skips drafts, this `.github` repo, and `rosemary-releaser` release PRs.
+- **Renovate PRs** self-enable auto-merge natively. The shared preset [`default.json`](default.json) (consumed via `"extends": ["github>SpiceLabsHQ/.github"]`) sets `platformAutomerge` + `automerge` on all update types, groups non-major updates into one PR (fewer Pepper runs, no lockfile-conflict cascade), and applies a `minimumReleaseAge` of 3 days as a supply-chain soak.
+- **Objective backstop** — where a repo has meaningful tests, its test CI is made a required status check (an objective correctness signal Pepper structurally can't provide for e.g. a lockfile bump — automation, not a human gate, so it stays philosophy-consistent). Where there are no tests, Pepper + the release-age soak are the gate.
+
+> **Trust boundary:** Pepper's approve-vs-defer calibration is load-bearing. Monitor its precision over time (the AI-first equivalent of "review quality"); required test CI + the release-age soak are the objective backstops. See [`rulesets/README.md`](rulesets/README.md#auto-merge-rollout-dev-502) for the staged rollout (pilot on `Reaper` first) and the exact `spice-branch-protection` change.
 
 ## Versioning & releases
 

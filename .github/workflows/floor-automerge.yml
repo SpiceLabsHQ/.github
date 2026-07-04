@@ -1,0 +1,66 @@
+name: CI Floor — Auto-merge enable
+
+# Central CODE-floor workflow (DEV-502). Registered in `spice-ci-floor-code`
+# via the "require workflows to pass" rule, so it runs on every code-tier PR
+# with zero per-repo install — the same mechanism as floor-pepper (DEV-499).
+#
+# WHAT IT DOES: enables GitHub native auto-merge (squash) on the PR. The PR then
+# merges ITSELF once all required checks are green AND an approving review
+# exists. Pepper (floor-pepper) is that reviewer: high-confidence -> approves ->
+# merge fires; not confident -> defers to @SpiceLabsHQ/reviewers and does NOT
+# approve -> the PR waits for a human. Pepper's deferral IS the human fallback,
+# automatically, with no rules to maintain.
+#
+# THE MERGE GATE IS REVIEW CONFIDENCE, NOT CHANGE TYPE. There are deliberately
+# no semver tiers (patch/minor/major auto-merge rules). Spice is AI-first and
+# has an always-on reviewer, so majors, security bumps, and anomalies are all
+# handled by Pepper's judgment + its deferral to humans — not by version-delta
+# rules. Applies uniformly to bot AND human PRs.
+#
+# Renovate PRs also enable auto-merge natively via `platformAutomerge` (shared
+# renovate preset, default.json), so this workflow is the belt-and-suspenders
+# path that covers Dependabot + human PRs uniformly.
+#
+# REQUIRED-CHECK SAFETY: zero-install injection only exists via the ruleset
+# "required workflows" rule, so this job is a *required* check and must always
+# go green — a red required check would DEADLOCK merge. The enable step is
+# therefore best-effort and never fails the job. A green check here means only
+# "auto-merge enable was attempted."
+#
+# `synchronize` is in the trigger list so a Renovate rebase (force-push) re-arms
+# auto-merge if it was ever cleared — the DEV-497 lesson applied here too.
+#
+# Skips: drafts (re-fires on ready_for_review), this `.github` repo (self-skip,
+# matching the floor pattern; .github merges its own PRs via its self-* callers +
+# Renovate platformAutomerge), and rosemary-releaser release PRs (their release
+# loop owns their merge; a version bump has nothing to gate).
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  enable-auto-merge:
+    if: >-
+      github.repository != 'SpiceLabsHQ/.github' &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.user.login != 'rosemary-releaser[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enable auto-merge (squash)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          # Best-effort: never fail this (required) check. Already-merged,
+          # already-closed, or auto-merge-not-permitted all resolve to a green
+          # no-op so merge is never deadlocked by this job.
+          if gh pr merge --auto --squash "$PR_URL"; then
+            echo "Auto-merge enabled (squash) on $PR_URL"
+          else
+            echo "::notice::Auto-merge not enabled (already merged/closed, or not permitted) — non-fatal"
+          fi
