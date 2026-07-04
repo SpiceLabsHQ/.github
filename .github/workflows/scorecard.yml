@@ -47,7 +47,7 @@ jobs:
                                # workflow files via the Actions API.
     steps:
       - name: Checkout caller repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # Scorecard's docs explicitly require persist-credentials: false. Several
           # checks (notably Token-Permissions) will fail if the default GITHUB_TOKEN

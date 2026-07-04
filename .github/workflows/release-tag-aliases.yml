@@ -61,7 +61,7 @@ jobs:
       # actions/checkout — first-party, allowed to use a major-version tag.
       # persist-credentials stays at the default (true): the push step below
       # authenticates with the persisted GITHUB_TOKEN.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # need full tag list + tag commit ancestry
 

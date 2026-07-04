@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # actions/checkout — first-party, allowed to use a major-version tag.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Check workflow checksums + release-please registration
