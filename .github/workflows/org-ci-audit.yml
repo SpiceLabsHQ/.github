@@ -7,12 +7,15 @@ name: Org CI Audit
 #
 # TOKEN SETUP (one-time): the repo's default GITHUB_TOKEN is scoped to this repo
 # only and cannot read other repos' contents or the org custom-property values.
-# Create an org-scoped token and store it as the `ORG_CI_AUDIT_TOKEN` secret:
-#   - a fine-grained PAT (or GitHub App installation token) with, org-wide:
-#       Repository: Contents = read, Metadata = read
+# We mint a short-lived org-scoped installation token at runtime from a GitHub
+# App (org-owned "SpiceLabsHQ CI Floor Audit"), so there is no long-lived PAT to
+# rotate. The App is granted, org-wide:
+#       Repository: Contents = read, Metadata = read, Issues = read/write
 #       Organization: Custom properties = read
-#     plus, on THIS repo: Issues = write   (to upsert + pin the dashboard issue)
-# Until that secret exists the workflow no-ops with a warning (no red schedule).
+# Store the App's credentials as two secrets on THIS repo:
+#       ORG_CI_AUDIT_APP_ID           = the App's numeric App ID
+#       ORG_CI_AUDIT_APP_PRIVATE_KEY  = the App's private-key .pem contents
+# Until those secrets exist the workflow no-ops with a warning (no red schedule).
 
 on:
   schedule:
@@ -37,23 +40,33 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Guard on token presence
+      - name: Guard on App credentials presence
         id: guard
         env:
-          TOKEN: ${{ secrets.ORG_CI_AUDIT_TOKEN }}
+          APP_ID: ${{ secrets.ORG_CI_AUDIT_APP_ID }}
+          APP_KEY: ${{ secrets.ORG_CI_AUDIT_APP_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          if [ -z "${TOKEN}" ]; then
-            echo "::warning::ORG_CI_AUDIT_TOKEN is not set — skipping the org CI audit. See this workflow's header for the one-time setup."
+          if [ -z "${APP_ID}" ] || [ -z "${APP_KEY}" ]; then
+            echo "::warning::ORG_CI_AUDIT_APP_ID / ORG_CI_AUDIT_APP_PRIVATE_KEY are not set — skipping the org CI audit. See this workflow's header for the one-time setup."
             echo "ok=false" >> "${GITHUB_OUTPUT}"
           else
             echo "ok=true" >> "${GITHUB_OUTPUT}"
           fi
 
+      - name: Mint org-scoped installation token
+        id: app-token
+        if: steps.guard.outputs.ok == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.ORG_CI_AUDIT_APP_ID }}
+          private-key: ${{ secrets.ORG_CI_AUDIT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
       - name: Run audit
         if: steps.guard.outputs.ok == 'true'
         env:
-          GH_TOKEN: ${{ secrets.ORG_CI_AUDIT_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
           bash scripts/org-ci-audit.sh --org "${GITHUB_REPOSITORY_OWNER}" > dashboard.md
@@ -62,8 +75,8 @@ jobs:
       - name: Upsert & pin dashboard issue
         if: steps.guard.outputs.ok == 'true'
         env:
-          # Issues write goes to THIS repo; the audit token carries that scope.
-          GH_TOKEN: ${{ secrets.ORG_CI_AUDIT_TOKEN }}
+          # Issues write goes to THIS repo; the minted token carries that scope.
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           TITLE: "CI Floor & Maturity Dashboard"
         run: |
