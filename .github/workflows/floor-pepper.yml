@@ -1,0 +1,48 @@
+name: CI Floor — Pepper review
+
+# Central CODE-floor workflow (DEV-499). Referenced by `spice-ci-floor-code` via
+# the "require workflows to pass" rule; runs Pepper (Bedrock) on every PR in
+# untagged (code-tier) repos with zero per-repo install. This is what
+# guarantees review automation exists wherever bots open PRs — the fix for the
+# stranded-Dependabot/Renovate PRs in DEV-497.
+#
+# `synchronize` is deliberately in the trigger list: every Renovate rebase
+# force-pushes the PR branch, and without `synchronize` the review would never
+# re-run (the DEV-497 root cause). Cost note: one Bedrock run per PR event
+# org-wide is accepted (DEV-499). Secrets are org-level (visibility=all), so no
+# per-repo secret setup is required.
+#
+# Bot handling: the reusable's `allowed_bots: renovate,dependabot` lets those
+# bots' PRs be reviewed. It HARD-FAILS on any other non-human initiator
+# (observed: rosemary-releaser, linear-code). As a *required* check a failure
+# blocks merge, so:
+#   - rosemary-releaser[bot] release PRs are skipped here (a SKIPPED required
+#     job still satisfies the ruleset; there's nothing to review in a version
+#     bump, and failing would deadlock the release loop).
+#   - Other bot-initiated events (e.g. linear-code touching a human PR) remain a
+#     known risk for making Pepper a *required* check org-wide; this is why the
+#     code floor adds Pepper LAST and is tracked with the bot policy in DEV-493.
+#
+# Do NOT add `pull_request_target` — see pepper-self-review.yml for the reason.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  pepper:
+    if: >-
+      github.repository != 'SpiceLabsHQ/.github' &&
+      github.event.pull_request.user.login != 'rosemary-releaser[bot]'
+    uses: SpiceLabsHQ/.github/.github/workflows/pepper-pr-review.yml@pepper-pr-review-v1
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+      actions: read
+      issues: read
+    secrets:
+      AWS_CLAUDE_BEDROCK_ROLE_ARN: ${{ secrets.AWS_CLAUDE_BEDROCK_ROLE_ARN }}
+      PEPPER_PR_REVIEW_APP_ID: ${{ secrets.PEPPER_PR_REVIEW_APP_ID }}
+      PEPPER_PR_REVIEW_APP_PRIVATE_KEY: ${{ secrets.PEPPER_PR_REVIEW_APP_PRIVATE_KEY }}
+      LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}

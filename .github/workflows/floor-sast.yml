@@ -1,0 +1,31 @@
+name: CI Floor — SAST & Actions audit
+
+# Central CODE-floor workflow (DEV-499). Referenced by `spice-ci-floor-code`
+# via the "require workflows to pass" rule; runs on every PR in untagged
+# (code-tier) repos with zero per-repo install. See floor-hygiene.yml for the
+# mechanism and the `.github` self-host exclusion.
+#
+# Both scanners upload SARIF to the Security tab on PUBLIC repos only (GHAS is
+# not on the Team plan for private repos); that visibility guard was added to
+# sast.yml / actions-audit.yml as the DEV-499 prerequisite so this floor can run
+# cleanly on the org's private repos.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  sast:
+    if: github.repository != 'SpiceLabsHQ/.github'
+    uses: SpiceLabsHQ/.github/.github/workflows/sast.yml@sast-v1
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+
+  actions-audit:
+    if: github.repository != 'SpiceLabsHQ/.github'
+    uses: SpiceLabsHQ/.github/.github/workflows/actions-audit.yml@actions-audit-v1
+    permissions:
+      contents: read
+      security-events: write

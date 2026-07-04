@@ -1,0 +1,30 @@
+name: CI Floor — PR hygiene
+
+# Central floor workflow (DEV-499). The org rulesets `spice-ci-floor-docs` and
+# `spice-ci-floor-code` reference this file via GitHub's "require workflows to
+# pass" rule, so GitHub runs it on every PR in the targeted repos with ZERO
+# per-repo installation. When run that way, `github.repository` and the tree
+# `pr-hygiene` checks out both resolve to the *target* repo, not `.github`.
+#
+# This file also physically lives in `.github/workflows/`, so it would fire on
+# `.github`'s own PRs too — but `.github` self-hosts hygiene via
+# `self-pr-hygiene.yml`, so the job below is skipped there (the repository
+# guard). `.github` is likewise excluded from the code-floor ruleset target.
+#
+# Do NOT add `pull_request_target` — see pepper-self-review.yml for the reason.
+
+on:
+  pull_request:
+    # `edited` is included so a corrected PR title re-runs the Conventional
+    # Commits check (a required floor check that would otherwise stay red).
+    types: [opened, edited, synchronize, reopened]
+
+jobs:
+  hygiene:
+    # Skip on `.github` itself, which runs hygiene via its self-caller. On every
+    # other (target) repo, github.repository is that repo, so this runs.
+    if: github.repository != 'SpiceLabsHQ/.github'
+    uses: SpiceLabsHQ/.github/.github/workflows/pr-hygiene.yml@pr-hygiene-v1
+    permissions:
+      contents: read
+      pull-requests: write

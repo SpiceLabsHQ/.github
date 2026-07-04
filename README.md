@@ -2,6 +2,44 @@
 
 Organization-level defaults for [SpiceLabsHQ](https://github.com/SpiceLabsHQ). The `profile/README.md` is what shows on the org's GitHub page.
 
+## CI floor & maturity ladder
+
+Every repo in the org is held to a **mechanically enforced minimum CI tier** and guided up a **documented maturity ladder** — floor by enforcement, excellence by paved road (DEV-499). The floor is enforced by **org rulesets**, not by per-repo installation: a ruleset uses GitHub's *"require workflows to pass"* rule to run a central `floor-*.yml` workflow (defined in this repo) on every PR in the targeted repos. A brand-new repo created with zero setup is automatically held to the code floor — nothing to install, nothing to forget. This is the structural fix for the stranded-bot-PR problem (DEV-497): review automation is guaranteed to exist wherever bots open PRs.
+
+### Enforcement matrix
+
+| Level | Applies to | Contents | Enforced by |
+|---|---|---|---|
+| **Docs floor** | repos tagged `ci-exception: docs` | `pr-hygiene`, `secret-scan`, seeded `renovate.json` | ruleset `spice-ci-floor-docs` |
+| **Code floor** | all untagged repos (incl. private) | `pr-hygiene`, `secret-scan`, `pepper-pr-review`, `sast`, `actions-audit`, seeded `renovate.json` | ruleset `spice-ci-floor-code` |
+| **Public overlay** | public repos (additive) | `codeql`, `dependency-review`, `scorecard-public` | ruleset `spice-ci-floor-public` |
+| **Silver** (guidance) | code repos | `scorecard` (where supported on private) | audit opens next-rung PRs |
+| **Gold** (guidance) | code repos | `release-please` + `release-artifacts`, SHA-pinned third-party actions | audit opens next-rung PRs |
+
+The floor workflows live in [`.github/workflows/`](.github/workflows/) as `floor-hygiene.yml`, `floor-secret-scan.yml`, `floor-sast.yml`, `floor-pepper.yml`, and `floor-public.yml`. Each is a thin PR-triggered wrapper that calls the corresponding reusable workflow (pinned to its `<workflow>-v1` floating major) in the *target* repo's context — so `secret-scan` scans the target repo, `pepper` reviews the target repo's PR, and so on. They self-skip on this `.github` repo, which dogfoods the same workflows via its own `self-*` / `pepper-self-review` callers.
+
+### The exception model (fail-safe by default)
+
+Targeting is **exception-only**: the default assumption is that *every repo is a code repo*. There is no org-wide classification or backfill — only exceptions get tagged.
+
+- A repo with **no tag** gets the **full code floor**. Forgetting to tag a repo gives it *more* CI, never less, and the miss is loud — this is deliberate (fail-safe).
+- The `ci-exception` [organization custom property](https://github.com/organizations/SpiceLabsHQ/settings/custom-properties) (single-select, allowed value `docs`, **org-owners-only**) is the sole opt-*down*. Its complete value list is the auditable inventory of everything not held to the full standard.
+- Tagging a repo `docs` is a deliberate, admin-only decision for genuinely static/docs repos (no application code). Set it in org settings → Custom properties, or:
+
+  ```bash
+  gh api -X PATCH orgs/SpiceLabsHQ/properties/values \
+    -f 'repository_names[]=<repo>' \
+    -f 'properties[][property_name]=ci-exception' -f 'properties[][value]=docs'
+  ```
+
+> **Known limit:** if a middle tier ever emerges, exception values multiply — at that point switch to a required `ci-tier` property with `default_value: code`; the rulesets carry over.
+
+### Maturity ladder: Floor → Silver → Gold
+
+The floor is the *minimum*; the ladder is the *paved road* up. **Silver** and **Gold** are guidance, not merge-blocking policy — a scheduled org-audit workflow inventories each repo's installed callers and `renovate.json` against its tier, publishes a per-repo scorecard, and **opens a ready-made PR for the next missing rung** (guidance delivered as PRs, not policy docs). It also flags exception-list honesty ("does anything tagged `docs` look like it grew code?").
+
+**Renovate is floor, not Silver** — it's a near-zero-cost JSON file and it's what keeps every other floor workflow current. But a ruleset can't require a *file* to exist, so Renovate's floor status is enforced by the audit + seeder (a missing `renovate.json` is a dashboard violation and an auto-opened PR), not by merge blocking.
+
 ## Versioning & releases
 
 Every reusable workflow in this repo is versioned **independently**, via [release-please](https://github.com/googleapis/release-please) in monorepo mode (one package per workflow under [`workflows/`](workflows/README.md)). A release — or a breaking change — in one workflow never affects consumers of another, and no human ever moves a tag by hand.

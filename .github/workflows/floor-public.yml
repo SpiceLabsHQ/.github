@@ -1,0 +1,44 @@
+name: CI Floor — public overlay
+
+# Central PUBLIC-OVERLAY workflow (DEV-499). Referenced by `spice-ci-floor-public`
+# via the "require workflows to pass" rule, targeting the org's public repos
+# additively on top of the code floor. These checks depend on features that are
+# free on public repos but GHAS-gated on private ones (code scanning / the
+# dependency-review API), which is why they are a public-only overlay rather
+# than part of the code floor. See floor-hygiene.yml for the mechanism and the
+# `.github` self-host exclusion.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  codeql:
+    if: github.repository != 'SpiceLabsHQ/.github'
+    # languages: "" → CodeQL autodetects the target repo's languages.
+    uses: SpiceLabsHQ/.github/.github/workflows/codeql.yml@codeql-v1
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+
+  dependency-review:
+    if: github.repository != 'SpiceLabsHQ/.github'
+    uses: SpiceLabsHQ/.github/.github/workflows/dependency-review.yml@dependency-review-v1
+    permissions:
+      contents: read
+      pull-requests: write
+    with:
+      # Org license policy is "none" (internal-only consumers): don't block on
+      # licenses. The floor value of dependency-review here is vulnerability
+      # blocking (fail_on_severity), not license enforcement.
+      deny_licenses: ""
+
+  scorecard-public:
+    if: github.repository != 'SpiceLabsHQ/.github'
+    uses: SpiceLabsHQ/.github/.github/workflows/scorecard-public.yml@scorecard-public-v1
+    permissions:
+      contents: read
+      security-events: write
+      id-token: write
+      actions: read
