@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.1.0...pepper-pr-review-v1.1.1) (2026-07-04)
+
+
+### Bug Fixes
+
+* **pepper-pr-review:** allow Renovate and Dependabot to trigger reviews [DEV-494] ([#59](https://github.com/SpiceLabsHQ/.github/issues/59)) ([80a01a0](https://github.com/SpiceLabsHQ/.github/commit/80a01a045a6973b75d2d7d87cfdc10aa79a92e3b))
+
 ## [1.1.0](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.0.0...pepper-pr-review-v1.1.0) (2026-07-04)
 
 
