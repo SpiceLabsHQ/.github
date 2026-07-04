@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Migrates SpiceLabsHQ repos off the frozen legacy `@v1` reusable-workflow tag
-# onto per-workflow tags, and seeds Dependabot config so future workflow
+# onto per-workflow tags, and seeds Renovate config so future workflow
 # releases arrive as reviewable update PRs instead of manual sweeps.
 #
 # For each target repo this script will:
