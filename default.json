@@ -1,0 +1,26 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "SpiceLabsHQ shared Renovate preset (DEV-502). Consume from any repo with \"extends\": [\"github>SpiceLabsHQ/.github\"]. Carries the org-wide Pepper-gated auto-merge policy: every update (all types) enables GitHub native auto-merge; Pepper is the review gate, not semver.",
+  "extends": ["config:recommended"],
+  "semanticCommits": "enabled",
+  "semanticCommitType": "fix",
+  "semanticCommitScope": "deps",
+  "minimumReleaseAge": "3 days",
+  "platformAutomerge": true,
+  "automerge": true,
+  "packageRules": [
+    {
+      "description": "Group non-major updates into a single PR — fewer Pepper (Bedrock) runs and no lockfile-conflict cascade (DEV-502). Majors stay separate so Pepper reviews each on its own.",
+      "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
+      "groupName": "all non-major dependencies"
+    },
+    {
+      "description": "SpiceLabsHQ reusable workflows publish release-please monorepo tags like pepper-pr-review-v1.2.3; parse the -vN suffix as the semver. Universal — every repo consumes these workflows.",
+      "matchManagers": ["github-actions"],
+      "matchDatasources": ["github-tags"],
+      "matchPackageNames": ["SpiceLabsHQ/.github**"],
+      "versionCompatibility": "^(?<compatibility>.*)-v(?<version>.*)$",
+      "versioning": "semver"
+    }
+  ]
+}
