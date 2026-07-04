@@ -12,7 +12,7 @@ Every reusable workflow in this repo is versioned **independently**, via [releas
 |---|---|---|
 | `<workflow>-vX.Y.Z` (e.g. `secret-scan-v1.2.3`) | **Immutable** | One specific release of one workflow. Cut automatically when that workflow's release PR merges |
 | `<workflow>-vN` (e.g. `secret-scan-v1`) | Floats **within the major only** | The backward-compatibility line. Advanced automatically (`release-tag-aliases.yml`) to the latest release of major N — never across a breaking change |
-| Commit SHA | Immutable | Strongest pin; pair with Dependabot for reviewable upgrades |
+| Commit SHA | Immutable | Strongest pin; pair with Renovate for reviewable upgrades |
 | `v1`, `v1.0.0` | **Frozen — legacy, deprecated** | The old org-wide shared tags, permanently parked at commit `60a48c1`. They will never move again and receive no fixes. Migrate off them (see below) |
 
 ### Policy
@@ -26,28 +26,39 @@ Every reusable workflow in this repo is versioned **independently**, via [releas
 
 Strongest first:
 
-1. **Commit SHA + Dependabot** — the same rigor these workflows apply to the third-party actions inside them:
+1. **Commit SHA** — the same rigor these workflows apply to the third-party actions inside them:
 
    ```yaml
    uses: SpiceLabsHQ/.github/.github/workflows/secret-scan.yml@a1b2c3… # secret-scan-v1.2.3
    ```
 
-2. **Immutable release tag** — reproducible, human-readable: `@secret-scan-v1.2.3`
-3. **Floating major** — hands-off non-breaking updates, trusting this repo's release process: `@secret-scan-v1`
+   Caveat: automated updates of SHA pins are unproven for this repo's component-prefixed tags (Renovate's digest pinning has open issues with suffixed version tags — [renovate#35789](https://github.com/renovatebot/renovate/issues/35789)); verify before adopting at scale.
 
-Whichever form you choose, add Dependabot so upgrades arrive as reviewable PRs instead of silently:
+2. **Immutable release tag** — reproducible, human-readable, and the form Renovate reliably updates: `@secret-scan-v1.2.3`
+3. **Floating major** (**org default** for internal repos, DEV-494) — hands-off non-breaking updates, trusting this repo's release process: `@secret-scan-v1`. No consumer PRs needed: the alias advances server-side on every non-breaking release; a new major is a deliberate, opt-in edit.
 
-```yaml
-# .github/dependabot.yml
-version: 2
-updates:
-  - package-ecosystem: github-actions
-    directory: /
-    schedule:
-      interval: weekly
+**Update automation is Renovate, not Dependabot** (evaluated in DEV-494). Renovate's github-actions manager [documents](https://docs.renovatebot.com/modules/manager/github-actions/) component-prefixed tags (`prefix-v1.2.3`); seed this config per repo (it cannot be inherited org-wide from this repo, and stays inert until the [Mend Renovate GitHub App](https://github.com/apps/renovate) is installed on the org — install it on the consumer repos *and* this one so it can list tags):
+
+```json
+// .github/renovate.json
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "enabledManagers": ["github-actions"],
+  "packageRules": [
+    {
+      "description": "SpiceLabsHQ reusable workflows: release-please monorepo tags like secret-scan-v1.2.3",
+      "matchManagers": ["github-actions"],
+      "matchDatasources": ["github-tags"],
+      "matchPackageNames": ["SpiceLabsHQ/.github**"],
+      "versionCompatibility": "^(?<compatibility>.*)-v(?<version>.*)$",
+      "versioning": "semver"
+    }
+  ]
+}
 ```
 
-> Dependabot handles `uses:` refs to reusable workflows like action refs. SHA pins with the trailing version comment are the most reliably updated form; its parsing of component-prefixed tags (`secret-scan-v1.2.3`) can lag, so verify the first update PR after adopting.
+> **Why not Dependabot:** it cannot parse `<workflow>-vX.Y.Z` as a version (hyphen-prefixed tags fail its github-actions version class), it silently ignores floating `<workflow>-vN` aliases (no major-bump PRs, ever), and on SHA pins with a tag comment it degrades to bumping the SHA to branch HEAD while leaving the stale comment in place — unreviewed tip-of-main with a lying comment. Details and sources in DEV-494. Don't run it alongside Renovate for `github-actions` either, or the two will fight over third-party action pins.
 
 ### Migrating off the legacy `@v1`
 
