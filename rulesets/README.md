@@ -12,7 +12,7 @@ section for the standard these enforce.
 |---|---|---|---|
 | `spice-ci-floor-docs.json` | `spice-ci-floor-docs` | repos with property `ci-exception = docs` | `floor-hygiene`, `floor-secret-scan` |
 | `spice-ci-floor-code.json` | `spice-ci-floor-code` | all repos **except** `.github` and `docs`-tagged | `floor-hygiene`, `floor-secret-scan`, `floor-sast`, `floor-pepper` |
-| `spice-ci-floor-public.json` | `spice-ci-floor-public` | the public repos (enumerated) | `floor-public` (dependency-review + scorecard-public) |
+| `spice-ci-floor-public.json` | `spice-ci-floor-public` | the public repos (enumerated) | `floor-public` (scorecard-public; codeql + dependency-review are per-repo Silver guidance) |
 
 Each ruleset uses GitHub's **"require workflows to pass"** rule to run the
 central `floor-*.yml` workflows (in this repo, at `refs/heads/main`) on PRs in

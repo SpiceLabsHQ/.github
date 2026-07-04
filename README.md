@@ -12,8 +12,8 @@ Every repo in the org is held to a **mechanically enforced minimum CI tier** and
 |---|---|---|---|
 | **Docs floor** | repos tagged `ci-exception: docs` | `pr-hygiene`, `secret-scan`, seeded `renovate.json` | ruleset `spice-ci-floor-docs` |
 | **Code floor** | all untagged repos (incl. private) | `pr-hygiene`, `secret-scan`, `pepper-pr-review`, `sast`, `actions-audit`, seeded `renovate.json` | ruleset `spice-ci-floor-code` |
-| **Public overlay** | public repos (additive) | `dependency-review`, `scorecard-public` | ruleset `spice-ci-floor-public` |
-| **Silver** (guidance) | code repos | `scorecard` (where supported on private); `codeql` on public repos **with a CodeQL-supported language** (it can't be a blanket check — an empty language matrix startup-fails the run) | audit flags the next rung on the dashboard |
+| **Public overlay** | public repos (additive) | `scorecard-public` | ruleset `spice-ci-floor-public` |
+| **Silver** (guidance) | code repos | `scorecard` (where supported on private); `codeql` on public repos with a CodeQL-supported language; `dependency-review` on public repos with the Dependency Graph enabled — neither can be a blanket gate (an empty language matrix or a missing dependency graph fails the run) | audit flags the next rung on the dashboard |
 | **Gold** (guidance) | code repos | `release-please` + `release-artifacts`, SHA-pinned third-party actions | audit flags the next rung on the dashboard |
 
 The floor workflows live in [`.github/workflows/`](.github/workflows/) as `floor-hygiene.yml`, `floor-secret-scan.yml`, `floor-sast.yml`, `floor-pepper.yml`, and `floor-public.yml`. Each is a thin PR-triggered wrapper that calls the corresponding reusable workflow (pinned to its `<workflow>-v1` floating major) in the *target* repo's context — so `secret-scan` scans the target repo, `pepper` reviews the target repo's PR, and so on. They self-skip on this `.github` repo, which dogfoods the same workflows via its own `self-*` / `pepper-self-review` callers.
