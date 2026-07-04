@@ -28,21 +28,22 @@ on:
       review_model:
         description: |
           Model used in review mode (auto-triggered on pull_request, or `@pepper review` comment).
-          Defaults to the `pepper-pr-review` Application Inference Profile, tagged Mode=review for
-          AWS cost allocation. The profile wraps the same Sonnet 4.5 cross-region inference profile
-          used previously, so behavior is unchanged — only billing attribution changes.
+          Defaults to the `pepper-pr-review-sonnet-5` Application Inference Profile, tagged
+          Mode=review for AWS cost allocation. The profile wraps the `us.anthropic.claude-sonnet-5`
+          cross-region inference profile (DEV-492; Application Inference Profiles are immutable, so
+          a model upgrade means a new profile ARN here, not an edit to the old one).
         required: false
         type: string
-        default: arn:aws:bedrock:us-west-2:618640261060:application-inference-profile/cz21awrop223
+        default: arn:aws:bedrock:us-west-2:618640261060:application-inference-profile/xda66yqkegz4
       on_demand_model:
         description: |
           Model used in on-demand mode (`@pepper <task>` comments with edit/write/push tools).
-          Defaults to the `pepper-on-demand` Application Inference Profile, tagged Mode=on-demand for
-          AWS cost allocation. Same underlying Sonnet 4.5 as review mode; tagged separately so we can
-          see which flow drives spend.
+          Defaults to the `pepper-on-demand-sonnet-5` Application Inference Profile, tagged
+          Mode=on-demand for AWS cost allocation. Same underlying Claude Sonnet 5 as review mode;
+          tagged separately so we can see which flow drives spend.
         required: false
         type: string
-        default: arn:aws:bedrock:us-west-2:618640261060:application-inference-profile/68jw718dw1jv
+        default: arn:aws:bedrock:us-west-2:618640261060:application-inference-profile/lk2br1cu7fkj
       aws_region:
         description: AWS region where the Bedrock role and models live.
         required: false

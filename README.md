@@ -67,7 +67,7 @@ updates:
 
 ### Pepper PR Review (`pepper-pr-review.yml`)
 
-Pepper is the Spice Labs PR review bot, powered by Claude Sonnet 4.5 on AWS Bedrock. The reusable workflow is centrally maintained here; each repo opts in with a ~15-line caller workflow and (optionally) carries its own review standards file.
+Pepper is the Spice Labs PR review bot, powered by Claude Sonnet 5 on AWS Bedrock. The reusable workflow is centrally maintained here; each repo opts in with a ~15-line caller workflow and (optionally) carries its own review standards file.
 
 **Naming legend:** workflow display name is **Pepper PR Review**, status check appears as **Pepper PR Review / Pepper review**, formal approves and request-changes are authored by the **Pepper PR Review** GitHub App (the reviewer name shown on the PR, not the workflow bot account), and humans invoke on-demand mode by typing `@pepper` in a PR comment.
 
@@ -84,8 +84,8 @@ The bot operates in two modes:
 
 | Input | Default | Notes |
 |---|---|---|
-| `review_model` | `arn:…application-inference-profile/cz21awrop223` (`pepper-pr-review`) | Model used in review mode. Default is an AWS Application Inference Profile wrapping Sonnet 4.5, tagged `Product=pepper, Mode=review` for cost allocation |
-| `on_demand_model` | `arn:…application-inference-profile/68jw718dw1jv` (`pepper-on-demand`) | Model used in on-demand mode. Same Sonnet 4.5 underneath, tagged `Mode=on-demand` so AWS Cost Explorer can split spend by flow |
+| `review_model` | `arn:…application-inference-profile/xda66yqkegz4` (`pepper-pr-review-sonnet-5`) | Model used in review mode. Default is an AWS Application Inference Profile wrapping Claude Sonnet 5, tagged `Product=pepper, Mode=review` for cost allocation |
+| `on_demand_model` | `arn:…application-inference-profile/lk2br1cu7fkj` (`pepper-on-demand-sonnet-5`) | Model used in on-demand mode. Same Claude Sonnet 5 underneath, tagged `Mode=on-demand` so AWS Cost Explorer can split spend by flow |
 | `model` | `""` | Override that wins for **both** modes. Set only when testing a different model on a debug branch — bypassing the per-mode profiles forfeits cost attribution |
 | `aws_region` | `us-west-2` | AWS region where the Bedrock role and inference profiles live |
 | `trigger_phrase` | `@pepper` | Comment phrase that triggers on-demand mode |
