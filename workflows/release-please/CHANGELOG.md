@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/SpiceLabsHQ/.github/compare/release-please-v1.0.0...release-please-v1.1.0) (2026-07-04)
+
+
+### Features
+
+* **deps:** update actions/create-github-app-token action to v3.2.0 ([#72](https://github.com/SpiceLabsHQ/.github/issues/72)) ([19450f4](https://github.com/SpiceLabsHQ/.github/commit/19450f4e43dc37ba95b8530322431d15ee5fca5b))
+
 ## 1.0.0 (2026-07-03)
 
 Baseline release establishing per-workflow versioning ([DEV-408]). Functionally
