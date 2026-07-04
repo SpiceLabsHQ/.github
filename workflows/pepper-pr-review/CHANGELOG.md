@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.0](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.1.2...pepper-pr-review-v1.2.0) (2026-07-04)
+
+
+### Features
+
+* **deps:** update actions/create-github-app-token action to v3.2.0 ([#72](https://github.com/SpiceLabsHQ/.github/issues/72)) ([19450f4](https://github.com/SpiceLabsHQ/.github/commit/19450f4e43dc37ba95b8530322431d15ee5fca5b))
+* **deps:** update aws-actions/configure-aws-credentials action to v6 ([#78](https://github.com/SpiceLabsHQ/.github/issues/78)) ([596873b](https://github.com/SpiceLabsHQ/.github/commit/596873ba963ecda6f92a3142dc2a7874d6508a80))
+
 ## [1.1.2](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.1.1...pepper-pr-review-v1.1.2) (2026-07-04)
 
 
