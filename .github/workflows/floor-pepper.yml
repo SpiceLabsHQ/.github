@@ -28,6 +28,11 @@ name: CI Floor — Pepper review
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  # On-demand mode: the reusable keys `@pepper review` / `@pepper <task>` off
+  # `github.event_name == 'issue_comment'`. Every other Pepper caller wires this;
+  # the floor must too, or zero-install repos silently lose on-demand review.
+  issue_comment:
+    types: [created]
 
 jobs:
   pepper:
