@@ -436,6 +436,12 @@ jobs:
           github_token: ${{ steps.app-token.outputs.token }}
           use_bedrock: "true"
           trigger_phrase: ${{ inputs.trigger_phrase }}
+          # Dependency-update bots may trigger reviews (DEV-494; Renovate is
+          # the org's version-update tool, Dependabot still authors security
+          # updates). Named bots only — never '*': this repo is public, and
+          # the allow-list is the only gate on bot-initiated runs that carry
+          # repo secrets. Auto-merge of bot PRs stays off pending DEV-493.
+          allowed_bots: renovate,dependabot
           additional_permissions: |
             actions: read
           show_full_output: ${{ inputs.show_full_output }}
