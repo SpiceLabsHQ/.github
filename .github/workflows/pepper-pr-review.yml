@@ -422,7 +422,7 @@ jobs:
           echo "Wrote MCP config to ${MCP_FILE} (Linear server enabled)"
 
       - name: Configure AWS credentials (Bedrock OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_CLAUDE_BEDROCK_ROLE_ARN }}
           aws-region: ${{ inputs.aws_region }}
