@@ -129,12 +129,25 @@ jobs:
             : > zizmor.sarif
             exit 0
           fi
+          # zizmor exits 3 ("no inputs collected") when the dir exists but holds
+          # no scannable workflows — benign, not an error. Normalize exit 3 to a
+          # clean empty SARIF so the job never *errors*. (SARIF mode doesn't emit
+          # findings exit codes; a real audit error, exit 1, still surfaces.)
+          set +e
           zizmor \
             --config zizmor.config.yml \
             --format sarif \
             --collect=workflows \
             .github/workflows \
             > zizmor.sarif
+          rc=$?
+          set -e
+          if [ "${rc}" -eq 3 ]; then
+            echo "zizmor: no workflow inputs to scan — emitting empty SARIF."
+            : > zizmor.sarif
+            rc=0
+          fi
+          [ "${rc}" -eq 0 ] || exit "${rc}"
 
       - name: Determine repo visibility
         # Code scanning (SARIF upload) is free on public repos; on private/
@@ -176,9 +189,12 @@ jobs:
           # zizmor exit codes:
           #   0     = no findings
           #   11-14 = findings at informational/low/medium/high
-          #   1/2/3 = audit error / bad args / no inputs
-          # `--min-severity` filters which findings count, so any non-zero exit
-          # at this point means "findings at or above the threshold".
+          #   1     = audit error (a real problem — must surface)
+          #   2     = bad args (should never happen now that --collect= is bound)
+          #   3     = no inputs collected (dir exists but no scannable workflows)
+          # Findings (11-14) must fail the gate; an empty-workflows dir (exit 3)
+          # must NOT error the job. Capture the code and normalize exit 3.
+          set +e
           zizmor \
             --config zizmor.config.yml \
             --min-severity "${MIN_SEVERITY}" \
@@ -186,6 +202,13 @@ jobs:
             --format plain \
             --collect=workflows \
             .github/workflows
+          rc=$?
+          set -e
+          if [ "${rc}" -eq 3 ]; then
+            echo "zizmor: no workflow inputs to audit — nothing to gate on, passing."
+            rc=0
+          fi
+          exit "${rc}"
 
   sha-pin:
     name: SHA-pin enforcement
