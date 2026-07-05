@@ -29,3 +29,14 @@ jobs:
     permissions:
       contents: read
       security-events: write
+    with:
+      # First-party SpiceLabsHQ reusable workflows are referenced by floating
+      # per-workflow major tags (e.g. @pepper-pr-review-v1) BY DESIGN — see
+      # migrate-legacy-v1-pins.sh and release-tag-aliases.yml. Allow them tag
+      # refs so actions-audit's SHA-pin enforcement and zizmor's unpinned-uses
+      # audit stop contradicting the org's own release strategy. Third-party
+      # actions still require 40-char SHA pins. Passed explicitly here (rather
+      # than relying on the actions-audit default) so the fix takes effect via
+      # this @main floor immediately, without waiting on an actions-audit-v1
+      # release to advance. (DEV-505 unblock / DEV-503.)
+      allow_tags_for: "actions/*,github/*,SpiceLabsHQ/*"
