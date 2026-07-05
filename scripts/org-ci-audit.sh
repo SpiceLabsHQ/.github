@@ -84,10 +84,13 @@ has_renovate() {
   return 1
 }
 
-# Auto-merge coverage (DEV-505). `allow_auto_merge` is a repo setting absent from
-# the org repos list endpoint, so fetch it per repo.
+# Auto-merge coverage (DEV-505). Read via GraphQL `autoMergeAllowed`, which is
+# exposed with plain repo read (Metadata). REST's `.allow_auto_merge` requires
+# Administration:read — which the scheduled audit App token does NOT have, so
+# REST would report every repo `false` even when auto-merge is enabled.
 allow_auto_merge() {
-  gh api "repos/${ORG}/$1" --jq '.allow_auto_merge // false' 2>/dev/null | grep -q true
+  gh api graphql -f query="{ repository(owner: \"${ORG}\", name: \"$1\") { autoMergeAllowed } }" \
+    --jq '.data.repository.autoMergeAllowed // false' 2>/dev/null | grep -q true
 }
 # A required *test* check is enforced via a repo-level `spice-required-tests`
 # ruleset (per-repo because check-run names differ per repo — see DEV-505). The
