@@ -1,5 +1,9 @@
 # SpiceLabsHQ — Release Artifacts (reusable)
 #
+# Standard: part of the single-artifact release model in the Eng-Cookbook deployment
+#           standard (build once, promote the same artifact) —
+#           https://github.com/SpiceLabsHQ/Eng-Cookbook/blob/main/standards/deployment.md
+#
 # Trigger:   workflow_call only. Callers wire this to `release: types: [published]`
 #            so it runs once per GitHub Release. The companion workflow
 #            release-please.yml cuts the Release; this one attaches the

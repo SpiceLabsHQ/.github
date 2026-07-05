@@ -1,5 +1,9 @@
 name: CI Floor — Auto-merge enable
 
+# Standard: implements the auto-merge path of the Eng-Cookbook deployment standard
+#           (single trunk -> continuous delivery) —
+#           https://github.com/SpiceLabsHQ/Eng-Cookbook/blob/main/standards/deployment.md
+#
 # Central CODE-floor workflow (DEV-502). Registered in `spice-ci-floor-code`
 # via the "require workflows to pass" rule, so it runs on every code-tier PR
 # with zero per-repo install — the same mechanism as floor-pepper (DEV-499).
