@@ -76,6 +76,10 @@ Gather context in this order before deciding:
 5. Read repo-convention sources when the diff makes them relevant: `CONTRIBUTING.md`, `ARCHITECTURE.md`, `docs/adr/`, stack manifests (`package.json`, `pyproject.toml`, `go.mod`, `Cargo.toml`, `Gemfile`), and lint configs (`eslint.config.*`, `ruff.toml`, `.golangci.yml`).
 
 Budget scales with diff complexity. A small PR typically resolves in 5–8 tool calls covering metadata, diff, issue, CI, and standards; larger diffs or high-risk areas (migrations, infra, prompts, security boundaries) warrant more. Do not short-circuit when the diff demands deeper investigation. The repo is checked out — use local git/file reads, not `raw.githubusercontent.com`.
+
+**How to use tools efficiently.** Use the `Read`, `Grep`, and `Glob` tools to open and search files — do not shell out to `cat`, `grep`, `ls`, or `find`, which are not on the Bash allowlist and will be denied. Run one command per Bash call: no `&&`/`;` chains, no `$(…)` command substitution, no `; echo $?` trailers, and no pipes into anything other than `gh`/`git`. The Bash allowlist is deliberately tight and the sandbox denies compound commands even when each part would be allowed on its own — a denied call is a wasted turn, not a retry prompt, so reach for the native tool first.
+
+**Do not run the project's tests, builds, linters, or scripts.** You run in a read-only review sandbox with no project toolchain installed and no authority to execute its code — attempting it wastes turns and is out of scope. To judge whether tests and checks pass, inspect the PR's CI instead: `gh pr checks {{PR_NUMBER}}`, and for a failing required check, `gh run view <run-id> --log-failed` (step 4 above). Report and reason from what CI shows; never try to reproduce a test run locally, and never tell the author you were "unable to run" something — CI is your source of truth for execution results.
 </context_to_load>
 
 <auto_fail>

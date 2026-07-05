@@ -424,26 +424,62 @@ jobs:
           fi
           echo "model=${RESOLVED}" >> "${GITHUB_OUTPUT}"
 
+      # Emits three outputs consumed by the Run Pepper step's claude_args:
+      #   allowed     — the --allowedTools list for this mode
+      #   disallowed  — the --disallowedTools list (review mode only; empty on-demand)
+      #   max_turns   — turn cap so a throttled/looping run can't run away
+      #
+      # Why the review-mode list is shaped this way (DEV-235): the model routes
+      # the large majority of its work through Bash and reaches for grep/sed/ls/
+      # find and compound commands. A tight Bash allowlist denies those, and in
+      # CI there is no human to approve — every denial is a wasted model turn.
+      # A live review burned 56 turns / ~9 min / $1.85 with ~18 denials. So we
+      # grant the NATIVE read/search tools (Read/Grep/Glob/LS), which bypass the
+      # Bash command-parser entirely, plus a set of read-only shell utilities.
+      # Writes stay blocked: bare Bash is never granted (no push/rm/commit), and
+      # Edit/Write/etc. are hard-denied below because built-in tools would
+      # otherwise be auto-included regardless of the allowlist.
       - name: Determine allowed tools for this run
         id: tools
         env:
           MODE: ${{ steps.mode.outputs.mode }}
         run: |
           set -euo pipefail
-          # Review mode is read-only on the filesystem (auto-review on
-          # pull_request, or `@pepper review` comment on a PR).
-          # On-demand mode opens edit/write/push capabilities.
-          AUTO_TOOLS='Bash(gh *),Bash(git log:*),Bash(git diff:*),Bash(git blame:*),Bash(git show:*),Bash(curl *)'
+          # Native read + search tools. These do NOT go through the Bash
+          # command-parser, so the model stops shelling out to grep/ls/cat and
+          # getting denied.
+          READ_TOOLS='Read,Grep,Glob,LS'
+          # Read-only git history for change context.
+          GIT_TOOLS='Bash(git log:*),Bash(git diff:*),Bash(git blame:*),Bash(git show:*),Bash(git rev-parse:*),Bash(git cat-file:*),Bash(git ls-files:*)'
+          # Read-only shell utilities the model still reaches for. Inspection
+          # only — no writers, no `bash <script>`, no execution sinks.
+          SHELL_TOOLS='Bash(cat:*),Bash(sed:*),Bash(jq:*),Bash(awk:*),Bash(head:*),Bash(tail:*),Bash(sort:*),Bash(uniq:*),Bash(wc:*),Bash(find:*),Bash(rg:*)'
+          # gh is the review action surface: read PR/CI context AND post the
+          # review, labels, and reviewer assignment. Broad within gh; file
+          # writes and pushes are blocked because bare Bash is never granted.
+          GH_TOOLS='Bash(gh *)'
+          # Read-only fetch for specs/RFCs linked from PR descriptions
+          # (replaces the old Bash(curl *), which could also POST).
+          FETCH_TOOLS='WebFetch'
+          AUTO_TOOLS="${READ_TOOLS},${GIT_TOOLS},${SHELL_TOOLS},${GH_TOOLS},${FETCH_TOOLS}"
           # Linear MCP read-only tools. The hosted Linear MCP exposes more,
           # but the bot only needs issues/comments/teams/projects/users for
           # PR-review context. List read-only tools explicitly so a write
           # tool can never be invoked even if the API key is later upgraded.
           LINEAR_TOOLS='mcp__linear__get_issue,mcp__linear__list_issues,mcp__linear__list_comments,mcp__linear__get_team,mcp__linear__list_teams,mcp__linear__get_user,mcp__linear__list_users,mcp__linear__get_project,mcp__linear__list_projects,mcp__linear__list_issue_labels,mcp__linear__get_milestone,mcp__linear__list_milestones,mcp__linear__get_initiative,mcp__linear__list_initiatives'
           ON_DEMAND_TOOLS='Edit,Write,Bash'
+          # claude-code-action auto-includes built-in tools (Read, and the file
+          # writers) regardless of --allowedTools. To keep review mode truly
+          # read-only on the filesystem we must DENY the writers explicitly.
+          REVIEW_DISALLOWED='Edit,Write,MultiEdit,NotebookEdit'
           if [ "${MODE}" = "on-demand" ]; then
             echo "allowed=${ON_DEMAND_TOOLS}" >> "${GITHUB_OUTPUT}"
+            echo "disallowed=" >> "${GITHUB_OUTPUT}"
+            echo "max_turns=60" >> "${GITHUB_OUTPUT}"
           else
             echo "allowed=${AUTO_TOOLS},${LINEAR_TOOLS}" >> "${GITHUB_OUTPUT}"
+            echo "disallowed=${REVIEW_DISALLOWED}" >> "${GITHUB_OUTPUT}"
+            echo "max_turns=40" >> "${GITHUB_OUTPUT}"
           fi
 
       # Wire up Linear's hosted MCP server when LINEAR_API_KEY is set. The
@@ -485,8 +521,15 @@ jobs:
           aws-region: ${{ inputs.aws_region }}
           role-session-name: pepper-pr-review-${{ github.run_id }}
 
+      # Hard wall-clock cap so a throttled or looping run fails fast instead of
+      # dangling (a live review sat at 27+ min under a permission-denial loop
+      # plus Bedrock throttling — DEV-235). The `always()` cleanup below still
+      # runs when this step times out, so `pepper-cooking` never gets stuck on.
+      # 20 min covers the slowest healthy runs (~11 min observed) with headroom
+      # for both review and larger on-demand tasks.
       - name: Run Pepper
         uses: anthropics/claude-code-action@v1
+        timeout-minutes: 20
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         with:
@@ -505,14 +548,18 @@ jobs:
             actions: read
           show_full_output: ${{ inputs.show_full_output }}
           prompt: ${{ steps.prompt.outputs.prompt }}
-          # `model` and `--allowedTools` aren't top-level inputs on
-          # claude-code-action@v1; they go through `claude_args` (CLI flags
-          # passed to the underlying Claude Code SDK). Without these,
-          # the action silently uses defaults, which results in permission
-          # denials when Pepper tries to run gh / git / curl from the prompt.
+          # `model`, `--allowedTools`, `--disallowedTools`, and `--max-turns`
+          # aren't top-level inputs on claude-code-action@v1; they go through
+          # `claude_args` (CLI flags passed to the underlying Claude Code SDK).
+          # Without these, the action silently uses defaults, which results in
+          # permission denials when Pepper runs gh / git from the prompt.
+          # --disallowedTools is omitted for on-demand (empty output) so its
+          # Edit/Write grant survives; --max-turns caps runaway loops per mode.
           claude_args: >-
             --model ${{ steps.model.outputs.model }}
             --allowedTools "${{ steps.tools.outputs.allowed }}"
+            --max-turns ${{ steps.tools.outputs.max_turns }}
+            ${{ steps.tools.outputs.disallowed != '' && format('--disallowedTools "{0}"', steps.tools.outputs.disallowed) || '' }}
             ${{ steps.mcp.outputs.path != '' && format('--mcp-config {0}', steps.mcp.outputs.path) || '' }}
 
       # Always-on cleanup — `pepper-cooking` is purely a "currently being
