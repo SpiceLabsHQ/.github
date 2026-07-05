@@ -99,19 +99,66 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Bot-initiator gate (DEV-504). claude-code-action HARD-FAILS when the event's
+  # triggering actor is a bot not in `allowed_bots` — even on a human-authored PR.
+  # Observed: linear-code[bot] firing `ready_for_review` re-triggered Pepper and
+  # failed it; because floor-pepper is a REQUIRED check org-wide, that failure
+  # deadlocks auto-merge (DEV-502). This job decides whether the review should run
+  # so a non-allowlisted bot initiator SKIPS the review cleanly (a skipped required
+  # job satisfies the ruleset, and the PR author's prior review state is untouched)
+  # instead of hard-failing. Human and allowlisted-bot initiators run as before.
+  gate:
+    name: Bot-initiator gate
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - name: Decide whether to run the review
+        id: decide
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          ACTOR: ${{ github.actor }}
+          ALLOWED_BOTS: ${{ inputs.allowed_bots }}
+        run: |
+          set -euo pipefail
+          run=true
+          # Only pull_request events carry the triggering actor that
+          # claude-code-action gates on. If that actor is a bot NOT on the
+          # allow-list, skip rather than let the action hard-fail.
+          if [ "${EVENT_NAME}" = "pull_request" ] && printf '%s' "${ACTOR}" | grep -q '\[bot\]$'; then
+            bot="${ACTOR%\[bot\]}"
+            allowed=false
+            IFS=',' read -ra _list <<< "${ALLOWED_BOTS}"
+            for b in "${_list[@]:-}"; do
+              b="$(printf '%s' "${b}" | tr -d '[:space:]')"
+              [ -n "${b}" ] && [ "${b}" = "${bot}" ] && allowed=true
+            done
+            if [ "${allowed}" != true ]; then
+              run=false
+              echo "::notice::Triggering actor '${ACTOR}' is a non-allowlisted bot on a pull_request event — skipping Pepper review to avoid a hard-fail (DEV-504). The PR author's prior review state is unaffected."
+            fi
+          fi
+          echo "run=${run}" >> "${GITHUB_OUTPUT}"
+
   review:
     name: Pepper review
+    needs: gate
     runs-on: ubuntu-latest
     # See "Security model" comment at top of file.
     # `issue_comment` is gated to org members so non-members can't trigger
     # secret-bearing runs by typing the trigger phrase on a public PR.
+    # `needs.gate` skips runs whose pull_request initiator is a non-allowlisted
+    # bot (DEV-504) before claude-code-action can hard-fail on them.
     if: >-
-      github.event_name == 'pull_request' ||
-      (github.event_name == 'issue_comment' &&
-       github.event.issue.pull_request != null &&
-       contains(github.event.comment.body, inputs.trigger_phrase) &&
-       contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'),
-                github.event.comment.author_association))
+      needs.gate.outputs.run == 'true' &&
+      (
+        github.event_name == 'pull_request' ||
+        (github.event_name == 'issue_comment' &&
+         github.event.issue.pull_request != null &&
+         contains(github.event.comment.body, inputs.trigger_phrase) &&
+         contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'),
+                  github.event.comment.author_association))
+      )
     steps:
       - name: Generate App installation token
         id: app-token
