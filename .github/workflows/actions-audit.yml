@@ -91,6 +91,31 @@ jobs:
           uv tool install "zizmor==${ZIZMOR_VERSION}"
           zizmor --version
 
+      - name: Build zizmor config (align unpinned-uses with the SHA-pin allowlist)
+        env:
+          ALLOW_TAGS_FOR: ${{ inputs.allow_tags_for }}
+        run: |
+          set -euo pipefail
+          # zizmor's unpinned-uses audit otherwise demands a hash pin for EVERY
+          # action, which contradicts the sha-pin job below: that job permits
+          # version tags for the `allow_tags_for` patterns (first-party actions).
+          # Emit a matching policy so the two audits agree — allowlisted patterns
+          # may ref-pin (tags OK); everything else must hash-pin. Single source of
+          # truth: the same `allow_tags_for` input drives both audits.
+          {
+            echo "rules:"
+            echo "  unpinned-uses:"
+            echo "    config:"
+            echo "      policies:"
+            IFS=',' read -ra _pats <<< "${ALLOW_TAGS_FOR}" || true
+            for _p in "${_pats[@]:-}"; do
+              _p="$(printf '%s' "${_p}" | tr -d '[:space:]')"
+              [ -n "${_p}" ] && printf '        "%s": ref-pin\n' "${_p}"
+            done
+            printf '        "%s": hash-pin\n' '*'
+          } > zizmor.config.yml
+          echo "--- generated zizmor.config.yml ---"; cat zizmor.config.yml
+
       # zizmor's SARIF mode disables severity-based exit codes (it always exits
       # 0 unless the run itself errors), so the SARIF run can't gate the job.
       # Run twice: first for SARIF (always succeeds → upload), then again with
@@ -105,8 +130,9 @@ jobs:
             exit 0
           fi
           zizmor \
+            --config zizmor.config.yml \
             --format sarif \
-            --collect workflows \
+            --collect=workflows \
             .github/workflows \
             > zizmor.sarif
 
@@ -154,10 +180,11 @@ jobs:
           # `--min-severity` filters which findings count, so any non-zero exit
           # at this point means "findings at or above the threshold".
           zizmor \
+            --config zizmor.config.yml \
             --min-severity "${MIN_SEVERITY}" \
             --min-confidence medium \
             --format plain \
-            --collect workflows \
+            --collect=workflows \
             .github/workflows
 
   sha-pin:
