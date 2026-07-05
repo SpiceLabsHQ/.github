@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/SpiceLabsHQ/.github/compare/markdownlint-v1.0.0...markdownlint-v1.1.0) (2026-07-05)
+
+
+### Features
+
+* **markdownlint:** add reusable org-wide markdownlint workflow (DEV-517) ([#109](https://github.com/SpiceLabsHQ/.github/issues/109)) ([e6abd7b](https://github.com/SpiceLabsHQ/.github/commit/e6abd7bad63de54f02b5c0333e0ce1c5cdc34ce5))
+
 ## 1.0.0 (2026-07-05)
 
 Initial release of the reusable `markdownlint` workflow ([DEV-517]). Extracted
