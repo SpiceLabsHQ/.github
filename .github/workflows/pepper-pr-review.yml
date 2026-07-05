@@ -528,6 +528,7 @@ jobs:
       # 20 min covers the slowest healthy runs (~11 min observed) with headroom
       # for both review and larger on-demand tasks.
       - name: Run Pepper
+        id: pepper
         uses: anthropics/claude-code-action@v1
         timeout-minutes: 20
         env:
@@ -561,6 +562,44 @@ jobs:
             --max-turns ${{ steps.tools.outputs.max_turns }}
             ${{ steps.tools.outputs.disallowed != '' && format('--disallowedTools "{0}"', steps.tools.outputs.disallowed) || '' }}
             ${{ steps.mcp.outputs.path != '' && format('--mcp-config {0}', steps.mcp.outputs.path) || '' }}
+
+      # Failure/timeout escalation (DEV-235). If Run Pepper timed out
+      # (`timeout-minutes` above) or errored before it could post a verdict,
+      # the PR would otherwise be left with no review AND no outcome label —
+      # on the PR surface, indistinguishable from "Pepper never ran". Swap the
+      # cooking marker for `pepper-needs-review`, tell the author, and assign a
+      # human so the PR doesn't sit in limbo. Mirrors the prompt's own
+      # halt/escalation path (cannot verify -> defer to a human). Gated on the
+      # Run Pepper step's OWN outcome: a clean review already posted its verdict
+      # and swapped its own label, so it is never touched here. Timeout yields
+      # outcome `failure`; a manual job cancellation yields `cancelled`.
+      - name: Escalate on Pepper failure (review mode only)
+        if: >-
+          always() && steps.mode.outputs.mode == 'review' &&
+          (steps.pepper.outcome == 'failure' || steps.pepper.outcome == 'cancelled')
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          DEFAULT_REVIEWER: ${{ inputs.default_reviewer }}
+        run: |
+          set -uo pipefail
+          # Swap cooking -> needs-review in one edit. The remove side is gated on
+          # the label actually being present so a cold-start PR (cooking never
+          # applied) doesn't error on --remove-label.
+          ARGS=(--add-label "pepper-needs-review")
+          if gh pr view "${PR_NUMBER}" --json labels --jq '.labels[].name' 2>/dev/null | grep -Fxq "pepper-cooking"; then
+            ARGS+=(--remove-label "pepper-cooking")
+          fi
+          gh pr edit "${PR_NUMBER}" "${ARGS[@]}" || true
+
+          gh pr comment "${PR_NUMBER}" --body 'Pepper did not finish this review — the run timed out or errored before a verdict was posted, so no approval or change request was recorded. Flagging for a human set of eyes. When the PR is ready, comment `@pepper review` to run me again. — Pepper' || true
+
+          # Best-effort human assignment. Tolerate GitHub rejecting the default
+          # reviewer (e.g., they authored the PR) — the label and comment already
+          # carry the signal, so a failed assignment must not fail the job.
+          if [ -n "${DEFAULT_REVIEWER}" ]; then
+            gh pr edit "${PR_NUMBER}" --add-reviewer "${DEFAULT_REVIEWER}" || true
+          fi
 
       # Always-on cleanup — `pepper-cooking` is purely a "currently being
       # reviewed" marker, so it must come off no matter how this job ended
