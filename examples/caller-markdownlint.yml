@@ -1,0 +1,48 @@
+# Drop this file into each SpiceLabsHQ repo as `.github/workflows/markdownlint.yml`.
+# It calls the centrally maintained reusable workflow in SpiceLabsHQ/.github,
+# which runs markdownlint-cli2 over your Markdown so lint rules live once
+# org-wide instead of being copy-pasted per repo.
+#
+# What this catches:
+#   - Markdown that violates the repo's markdownlint-cli2 rule set (broken list
+#     nesting, bad heading increments, hard tabs, etc.). Fails the check so a
+#     lint regression can't merge.
+#
+# Companion config: add `.markdownlint-cli2.jsonc` at the repo root with your
+# rules ONLY (no `globs` key — scope is set by this caller's `globs` input, so
+# the same rules apply identically to the workflow, pre-commit hooks, and local
+# runs). A rules-only starter:
+#
+#   {
+#     "config": { "default": true, "MD013": false, "MD033": false },
+#     "ignores": ["node_modules", ".git"]
+#   }
+#
+# The config is tolerated absent — without it, markdownlint-cli2 lints on its
+# built-in defaults rather than failing.
+#
+# No secrets required.
+
+name: markdownlint
+
+on:
+  pull_request:
+    # Only re-run when Markdown or the rule set changes — keeps the check off
+    # the critical path for code-only PRs.
+    paths: ["**/*.md", ".markdownlint-cli2.jsonc"]
+
+permissions:
+  contents: read
+
+jobs:
+  markdownlint:
+    # @markdownlint-v1 floats within major 1 (non-breaking updates only). To harden, pin an
+    # immutable @markdownlint-vX.Y.Z tag or a commit SHA — see README → "Versioning & releases".
+    uses: SpiceLabsHQ/.github/.github/workflows/markdownlint.yml@markdownlint-v1
+    permissions:
+      contents: read
+    # with:
+    #   # Narrow the lint scope (default `**/*.md` lints every Markdown file):
+    #   globs: "docs/**/*.md"
+    #   # Point at a config stored somewhere other than the repo root:
+    #   config_path: .config/.markdownlint-cli2.jsonc
