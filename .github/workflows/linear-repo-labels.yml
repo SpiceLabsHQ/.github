@@ -1,0 +1,93 @@
+name: Linear repo labels
+
+# Nightly: keep a Linear label group in sync with every repo in the org, so the
+# `repo` group always mirrors the current repository set. Renames are tracked by
+# each repo's immutable GitHub ID (stored in the label description), so a rename
+# updates the existing label in place and no issue associations are lost. The
+# reconciliation logic lives in the reusable composite action at
+# .github/actions/linear-repo-labels (publishable for other orgs/users too).
+#
+# TOKEN SETUP:
+#   LINEAR_API_KEY  (repo secret) — a Linear personal API key with label
+#                   read/write. Create it in Linear → Settings → Security &
+#                   access → Personal API keys.
+#   Repo enumeration reuses the org-owned GitHub App from the CI Floor Audit
+#   (Metadata: read org-wide is enough to list repos), via the existing
+#   ORG_CI_AUDIT_APP_ID / ORG_CI_AUDIT_APP_PRIVATE_KEY secrets. The default
+#   GITHUB_TOKEN only sees this repo, so it cannot enumerate the org.
+# Until LINEAR_API_KEY and the App secrets exist the workflow no-ops with a
+# warning (no red schedule).
+
+on:
+  schedule:
+    - cron: "37 6 * * *"   # nightly, 06:37 UTC
+  workflow_dispatch:
+    inputs:
+      group-name:
+        description: "Linear label group to maintain"
+        type: string
+        default: "repo"
+      prune:
+        description: "Handling for labels whose repo is gone"
+        type: choice
+        options: [report, archive, delete]
+        default: report
+      dry-run:
+        description: "Log the plan without mutating Linear"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linear-repo-labels
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    name: Sync Linear ${{ inputs.group-name || 'repo' }} labels
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Guard on required secrets
+        id: guard
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          APP_ID: ${{ secrets.ORG_CI_AUDIT_APP_ID }}
+          APP_KEY: ${{ secrets.ORG_CI_AUDIT_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${LINEAR_API_KEY}" ]; then
+            echo "::warning::LINEAR_API_KEY is not set — skipping the Linear repo-label sync. See this workflow's header."
+            echo "ok=false" >> "${GITHUB_OUTPUT}"
+          elif [ -z "${APP_ID}" ] || [ -z "${APP_KEY}" ]; then
+            echo "::warning::ORG_CI_AUDIT_APP_ID / ORG_CI_AUDIT_APP_PRIVATE_KEY are not set — cannot enumerate org repos. Skipping."
+            echo "ok=false" >> "${GITHUB_OUTPUT}"
+          else
+            echo "ok=true" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Mint org-scoped installation token
+        id: app-token
+        if: steps.guard.outputs.ok == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.ORG_CI_AUDIT_APP_ID }}
+          private-key: ${{ secrets.ORG_CI_AUDIT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Sync labels
+        if: steps.guard.outputs.ok == 'true'
+        uses: ./.github/actions/linear-repo-labels
+        with:
+          linear-api-key: ${{ secrets.LINEAR_API_KEY }}
+          github-token: ${{ steps.app-token.outputs.token }}
+          owner: ${{ github.repository_owner }}
+          group-name: ${{ inputs.group-name || 'repo' }}
+          prune: ${{ inputs.prune || 'report' }}
+          dry-run: ${{ inputs.dry-run || 'false' }}
