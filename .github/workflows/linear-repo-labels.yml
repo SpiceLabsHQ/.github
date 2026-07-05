@@ -27,6 +27,10 @@ on:
         description: "Linear label group to maintain"
         type: string
         default: "repo"
+      team:
+        description: "Linear team to scope the group to (empty = workspace-level)"
+        type: string
+        default: "DevOps"
       prune:
         description: "Handling for labels whose repo is gone"
         type: choice
@@ -89,5 +93,10 @@ jobs:
           github-token: ${{ steps.app-token.outputs.token }}
           owner: ${{ github.repository_owner }}
           group-name: ${{ inputs.group-name || 'repo' }}
+          # Scheduled runs get no dispatch inputs, so the scope for the nightly is
+          # set here: the `repo` group lives in the DevOps team. Set empty for a
+          # workspace-level group instead. Names may overlap across teams — the
+          # action disambiguates the group by (name, team).
+          team: ${{ inputs.team || 'DevOps' }}
           prune: ${{ inputs.prune || 'report' }}
           dry-run: ${{ inputs.dry-run || 'false' }}
