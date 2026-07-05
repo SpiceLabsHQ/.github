@@ -36,10 +36,12 @@ on:
             - `actions/*`            — any repo under the `actions` org
             - `actions/checkout`     — only that one repo
             - `aws-actions/*`        — trust all of AWS's published actions
-          The default trusts GitHub-published actions only.
+          The default trusts GitHub-published actions and SpiceLabsHQ's own
+          first-party reusable workflows (referenced by floating `-vN` tags per
+          release-tag-aliases.yml / migrate-legacy-v1-pins.sh).
         required: false
         type: string
-        default: "actions/*,github/*"
+        default: "actions/*,github/*,SpiceLabsHQ/*"
 
 permissions:
   contents: read
