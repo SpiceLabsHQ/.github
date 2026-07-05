@@ -129,6 +129,9 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           ACTOR: ${{ github.actor }}
           ALLOWED_BOTS: ${{ inputs.allowed_bots }}
+          # Empty for issue_comment events (payload carries no pull_request), so
+          # the draft guard below is pull_request-only by construction.
+          IS_DRAFT: ${{ github.event.pull_request.draft }}
         run: |
           set -euo pipefail
           run=true
@@ -147,6 +150,18 @@ jobs:
               run=false
               echo "::notice::Triggering actor '${ACTOR}' is a non-allowlisted bot on a pull_request event — skipping Pepper review to avoid a hard-fail (DEV-504). The PR author's prior review state is unaffected."
             fi
+          fi
+          # Skip auto-review of draft PRs. GitHub fires `opened` on draft
+          # creation, but a draft is WIP the author hasn't submitted for review —
+          # reviewing it wastes a run (and, when a run stalls, a full timeout).
+          # The caller's `ready_for_review` trigger re-runs Pepper once the author
+          # marks it ready, and an explicit `@pepper review` comment still works
+          # (issue_comment payloads carry no draft flag, so IS_DRAFT is empty and
+          # this guard never fires for them). A skipped required check satisfies
+          # branch protection, same as the bot-initiator skip above. DEV-235.
+          if [ "${EVENT_NAME}" = "pull_request" ] && [ "${IS_DRAFT}" = "true" ]; then
+            run=false
+            echo "::notice::PR is a draft — skipping auto-review until it's marked ready for review (or you comment @pepper review). DEV-235."
           fi
           echo "run=${run}" >> "${GITHUB_OUTPUT}"
 
