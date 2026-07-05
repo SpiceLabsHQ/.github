@@ -73,6 +73,16 @@ on:
         required: false
         type: boolean
         default: false
+      allowed_bots:
+        description: |
+          Comma-separated bot logins (without the `[bot]` suffix) whose PRs Pepper
+          reviews and whose events may trigger a review. Any OTHER bot initiator on
+          a pull_request event is skipped by the `gate` job (DEV-504) instead of
+          hard-failing claude-code-action. Single source of truth for both the gate
+          job and the action's own `allowed_bots` parameter below.
+        required: false
+        type: string
+        default: renovate,dependabot
     secrets:
       AWS_CLAUDE_BEDROCK_ROLE_ARN:
         description: ARN of the AWS role to assume via OIDC for Bedrock access.
@@ -488,7 +498,9 @@ jobs:
           # updates). Named bots only — never '*': this repo is public, and
           # the allow-list is the only gate on bot-initiated runs that carry
           # repo secrets. Auto-merge of bot PRs stays off pending DEV-493.
-          allowed_bots: renovate,dependabot
+          # Sourced from the `allowed_bots` input (default renovate,dependabot) so
+          # the DEV-504 gate job and this parameter share one source of truth.
+          allowed_bots: ${{ inputs.allowed_bots }}
           additional_permissions: |
             actions: read
           show_full_output: ${{ inputs.show_full_output }}
