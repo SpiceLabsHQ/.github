@@ -1,0 +1,98 @@
+name: Org Repo-Settings Reconcile
+
+# General-purpose declarative repo-settings reconciler (DEV-519). Reconciles
+# every non-archived org repo to the desired-state in repo-settings.yml via
+# scripts/org-repo-settings-reconcile.sh. First policy: squash-only merge.
+#
+# WHY A WORKFLOW, NOT A RULESET: rulesets have no merge-method rule, and the
+# per-repo merge flags (allow_squash_merge / allow_merge_commit /
+# allow_rebase_merge) can only be set through the repo API — so a scheduled
+# reconciler is the enforcement lever. This is the enforce/apply counterpart to
+# org-ci-audit.yml (which reports the CI-floor maturity ladder).
+#
+# MODES:
+#   * schedule (nightly)  → apply: reconcile drift org-wide.
+#   * workflow_dispatch   → choose audit (dry-run, default) or apply.
+# The reconcile is idempotent: no-op when a repo is already conformant.
+#
+# TOKEN SETUP (one-time): the repo's default GITHUB_TOKEN is scoped to this repo
+# only and cannot read other repos' settings, the org custom-property values, or
+# PATCH other repos. We mint a short-lived org-scoped installation token at
+# runtime from a GitHub App (org-owned), so there is no long-lived PAT to rotate.
+# The App must be granted, org-wide:
+#       Repository: Administration = read/write, Metadata = read
+#       Organization: Custom properties = read
+# (Administration:write is what lets it PATCH merge settings; it is broader than
+# the read-only org-ci-audit App, so this uses its OWN dedicated App + secrets.)
+# Store the App's credentials as two secrets on THIS repo:
+#       ORG_REPO_SETTINGS_APP_ID           = the App's numeric App ID
+#       ORG_REPO_SETTINGS_APP_PRIVATE_KEY  = the App's private-key .pem contents
+# Until those secrets exist the workflow no-ops with a warning (no red schedule).
+#
+# STAGED ROLLOUT: after configuring the App, run this via workflow_dispatch in
+# `audit` mode first, review the drift report in the job summary, then let the
+# nightly `apply` take over (or dispatch `apply` on demand).
+
+on:
+  schedule:
+    - cron: "41 6 * * *"   # nightly 06:41 UTC
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "audit (dry-run) or apply (reconcile)"
+        type: choice
+        default: audit
+        options: [audit, apply]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: org-repo-settings-reconcile
+  cancel-in-progress: true
+
+jobs:
+  reconcile:
+    name: Reconcile org repo settings
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Guard on App credentials presence
+        id: guard
+        env:
+          APP_ID: ${{ secrets.ORG_REPO_SETTINGS_APP_ID }}
+          APP_KEY: ${{ secrets.ORG_REPO_SETTINGS_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APP_ID}" ] || [ -z "${APP_KEY}" ]; then
+            echo "::warning::ORG_REPO_SETTINGS_APP_ID / ORG_REPO_SETTINGS_APP_PRIVATE_KEY are not set — skipping the repo-settings reconcile. See this workflow's header for the one-time setup."
+            echo "ok=false" >> "${GITHUB_OUTPUT}"
+          else
+            echo "ok=true" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Mint org-scoped installation token
+        id: app-token
+        if: steps.guard.outputs.ok == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.ORG_REPO_SETTINGS_APP_ID }}
+          private-key: ${{ secrets.ORG_REPO_SETTINGS_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Reconcile
+        if: steps.guard.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          # Schedule runs apply; manual dispatch honors the chosen mode (default audit).
+          MODE: ${{ github.event_name == 'schedule' && 'apply' || inputs.mode }}
+        run: |
+          set -euo pipefail
+          bash scripts/org-repo-settings-reconcile.sh \
+            --org "${GITHUB_REPOSITORY_OWNER}" \
+            --mode "${MODE}" \
+            --config repo-settings.yml | tee "${GITHUB_STEP_SUMMARY}"

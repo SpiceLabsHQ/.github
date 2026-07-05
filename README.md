@@ -55,6 +55,19 @@ How the pieces fit:
 
 > **Trust boundary:** Pepper's approve-vs-defer calibration is load-bearing. Monitor its precision over time (the AI-first equivalent of "review quality"); required test CI + the release-age soak are the objective backstops. See [`rulesets/README.md`](rulesets/README.md#auto-merge-rollout-dev-502) for the staged rollout (pilot on `Reaper` first) and the exact `spice-branch-protection` change.
 
+## Repo-settings reconciler (DEV-519)
+
+Some per-repo settings **can't be enforced by org rulesets** — there is no ruleset rule for merge method, and the flags (`allow_squash_merge` / `allow_merge_commit` / `allow_rebase_merge`) are per-repo. The org-wide `required_linear_history` (in `spice-branch-protection`) forbids *merge commits* but still allows **rebase-merge**, which preserves per-commit messages and bypasses the Conventional-Commits PR-title check. So **squash-only genuinely needs API-level enforcement** — a scheduled reconciler, not a ruleset.
+
+[`org-repo-settings-reconcile.yml`](.github/workflows/org-repo-settings-reconcile.yml) (running [`scripts/org-repo-settings-reconcile.sh`](scripts/org-repo-settings-reconcile.sh)) reconciles every non-archived org repo to a **declarative desired-state**, [`repo-settings.yml`](repo-settings.yml). It is general-purpose: each leaf key under `policies.<group>` is a literal field of GitHub's [update-a-repository](https://docs.github.com/en/rest/repos/repos#update-a-repository) API, so **adding a new enforced setting is a config edit, not code**. The reconciler flattens every group, diffs each field against the live repo, and PATCHes only the drifted fields in one atomic call (idempotent — a no-op when a repo is already conformant).
+
+- **First policy — squash-only merge.** `allow_squash_merge=true`, `allow_merge_commit=false`, `allow_rebase_merge=false`, `squash_merge_commit_title=PR_TITLE`, `squash_merge_commit_message=PR_BODY`. This is what makes the native squash [auto-merge](#auto-merge-policy-pepper-gated-dev-502) coherent org-wide. `Eng-Cookbook` (DEV-515) was set to this state by hand as the reference.
+- **Two modes** — `audit` (dry-run: report drift) and `apply` (reconcile). Manual `workflow_dispatch` defaults to `audit`; the nightly `schedule` runs `apply`. The drift/apply report lands in the run's job summary.
+- **Exceptions** follow the same custom-property model as the [CI-floor exception](#the-exception-model-fail-safe-by-default): the `repo-settings-exception` property opts a repo out — value `all`/`*` skips the whole repo, a group name (e.g. `merge`) skips just that policy group, comma-separated lists skip several. `options.exclude_forks` additionally excludes every fork.
+- **Auth** — mints a short-lived org-scoped **GitHub App** token at runtime (same pattern as [`org-ci-audit.yml`](#ci-floor--maturity-ladder)), so there's no long-lived PAT. Its App needs `Administration: write` (to PATCH settings), `Metadata: read`, and org `Custom properties: read`; store `ORG_REPO_SETTINGS_APP_ID` / `ORG_REPO_SETTINGS_APP_PRIVATE_KEY` on this repo. The workflow no-ops with a warning until those secrets exist. See the workflow header for the one-time setup and staged rollout.
+
+> The *written* policy (why squash-only) lives as a repo-configuration **standard** in `Eng-Cookbook` (DEV-515); this reconciler is that standard's **enforcement** — the standard↔enforcement pair. Keep the cookbook's enforcement link pointed here.
+
 ## Versioning & releases
 
 Every reusable workflow in this repo is versioned **independently**, via [release-please](https://github.com/googleapis/release-please) in monorepo mode (one package per workflow under [`workflows/`](workflows/README.md)). A release — or a breaking change — in one workflow never affects consumers of another, and no human ever moves a tag by hand.

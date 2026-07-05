@@ -1,0 +1,45 @@
+# Declarative org repo-settings desired-state (DEV-519).
+#
+# Enforced across every non-archived repo in the org by the reconciler:
+#   .github/workflows/org-repo-settings-reconcile.yml → scripts/org-repo-settings-reconcile.sh
+#
+# WHY THIS EXISTS: some per-repo settings can't be enforced by org rulesets —
+# there is no ruleset rule for merge method, and the flags are per-repo. The
+# org-wide `required_linear_history` (in `spice-branch-protection`) forbids merge
+# *commits* but still allows rebase-merge, which bypasses the squash-only policy
+# and the Conventional-Commits PR-title check. API-level reconciliation is the
+# only lever, so this file is the desired-state and the workflow reconciles to it.
+#
+# HOW TO ADD A NEW ENFORCED SETTING: add a key under `policies`. Each leaf key is
+# a literal field of GitHub's "Update a repository" REST API
+# (PATCH /repos/{owner}/{repo} — https://docs.github.com/en/rest/repos/repos#update-a-repository).
+# No code change is needed — the reconciler flattens every group and diffs each
+# field against the live repo, PATCHing only on drift (idempotent).
+#
+# The top-level group names (e.g. `merge`) are for human organization and for
+# per-group exceptions only; they are not sent to the API.
+
+# Reconciler behavior knobs (not repo settings).
+options:
+  # Skip forks entirely. Forks can still be reconciled by default; flip this to
+  # true to exclude all forks, or opt out individual forks via the exception
+  # property below (which is finer-grained).
+  exclude_forks: false
+
+  # Custom-property opt-out, following the `ci-exception` model used by the CI
+  # floor rulesets. Set this property on a repo to exclude it:
+  #   value "all" or "*"      → skip the repo entirely
+  #   value "merge" (a group) → skip only that policy group; reconcile the rest
+  #   comma-separated groups  → skip each listed group
+  #   unset / empty           → fully reconciled
+  exception_property: repo-settings-exception
+
+# Desired repo settings. First policy: squash-only merge (org standard).
+# Eng-Cookbook (DEV-515) was set to this state by hand as the reference.
+policies:
+  merge:
+    allow_squash_merge: true
+    allow_merge_commit: false
+    allow_rebase_merge: false
+    squash_merge_commit_title: PR_TITLE
+    squash_merge_commit_message: PR_BODY
