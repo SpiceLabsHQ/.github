@@ -129,6 +129,9 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           ACTOR: ${{ github.actor }}
           ALLOWED_BOTS: ${{ inputs.allowed_bots }}
+          # Empty for issue_comment events (payload carries no pull_request), so
+          # the draft guard below is pull_request-only by construction.
+          IS_DRAFT: ${{ github.event.pull_request.draft }}
         run: |
           set -euo pipefail
           run=true
@@ -147,6 +150,18 @@ jobs:
               run=false
               echo "::notice::Triggering actor '${ACTOR}' is a non-allowlisted bot on a pull_request event — skipping Pepper review to avoid a hard-fail (DEV-504). The PR author's prior review state is unaffected."
             fi
+          fi
+          # Skip auto-review of draft PRs. GitHub fires `opened` on draft
+          # creation, but a draft is WIP the author hasn't submitted for review —
+          # reviewing it wastes a run (and, when a run stalls, a full timeout).
+          # The caller's `ready_for_review` trigger re-runs Pepper once the author
+          # marks it ready, and an explicit `@pepper review` comment still works
+          # (issue_comment payloads carry no draft flag, so IS_DRAFT is empty and
+          # this guard never fires for them). A skipped required check satisfies
+          # branch protection, same as the bot-initiator skip above. DEV-235.
+          if [ "${EVENT_NAME}" = "pull_request" ] && [ "${IS_DRAFT}" = "true" ]; then
+            run=false
+            echo "::notice::PR is a draft — skipping auto-review until it's marked ready for review (or you comment @pepper review). DEV-235."
           fi
           echo "run=${run}" >> "${GITHUB_OUTPUT}"
 
@@ -424,26 +439,74 @@ jobs:
           fi
           echo "model=${RESOLVED}" >> "${GITHUB_OUTPUT}"
 
+      # Emits four outputs consumed by the Run Pepper step's claude_args:
+      #   allowed     — the --allowedTools list for this mode
+      #   disallowed  — the --disallowedTools list (review mode only; empty on-demand)
+      #   max_turns   — turn cap so a looping run can't run away
+      #   effort      — reasoning effort (--effort); `high` for both modes
+      #
+      # Why the review-mode list is shaped this way (DEV-235): the model routes
+      # the large majority of its work through Bash and reaches for grep/sed/ls/
+      # find and compound commands. A tight Bash allowlist denies those, and in
+      # CI there is no human to approve — every denial is a wasted model turn.
+      # A live review burned 56 turns / ~9 min / $1.85 with ~18 denials. So we
+      # grant the NATIVE read/search tools (Read/Grep/Glob/LS), which bypass the
+      # Bash command-parser entirely, plus a set of read-only shell utilities.
+      # Writes stay blocked: bare Bash is never granted (no push/rm/commit), and
+      # Edit/Write/etc. are hard-denied below because built-in tools would
+      # otherwise be auto-included regardless of the allowlist.
       - name: Determine allowed tools for this run
         id: tools
         env:
           MODE: ${{ steps.mode.outputs.mode }}
         run: |
           set -euo pipefail
-          # Review mode is read-only on the filesystem (auto-review on
-          # pull_request, or `@pepper review` comment on a PR).
-          # On-demand mode opens edit/write/push capabilities.
-          AUTO_TOOLS='Bash(gh *),Bash(git log:*),Bash(git diff:*),Bash(git blame:*),Bash(git show:*),Bash(curl *)'
+          # Native read + search tools. These do NOT go through the Bash
+          # command-parser, so the model stops shelling out to grep/ls/cat and
+          # getting denied.
+          READ_TOOLS='Read,Grep,Glob,LS'
+          # Read-only git history for change context.
+          GIT_TOOLS='Bash(git log:*),Bash(git diff:*),Bash(git blame:*),Bash(git show:*),Bash(git rev-parse:*),Bash(git cat-file:*),Bash(git ls-files:*)'
+          # Read-only shell utilities the model still reaches for. Inspection
+          # only — no writers, no `bash <script>`, no execution sinks.
+          SHELL_TOOLS='Bash(cat:*),Bash(sed:*),Bash(jq:*),Bash(awk:*),Bash(head:*),Bash(tail:*),Bash(sort:*),Bash(uniq:*),Bash(wc:*),Bash(find:*),Bash(rg:*)'
+          # gh is the review action surface: read PR/CI context AND post the
+          # review, labels, and reviewer assignment. Broad within gh; file
+          # writes and pushes are blocked because bare Bash is never granted.
+          GH_TOOLS='Bash(gh *)'
+          # Read-only fetch for specs/RFCs linked from PR descriptions
+          # (replaces the old Bash(curl *), which could also POST).
+          FETCH_TOOLS='WebFetch'
+          AUTO_TOOLS="${READ_TOOLS},${GIT_TOOLS},${SHELL_TOOLS},${GH_TOOLS},${FETCH_TOOLS}"
           # Linear MCP read-only tools. The hosted Linear MCP exposes more,
           # but the bot only needs issues/comments/teams/projects/users for
           # PR-review context. List read-only tools explicitly so a write
           # tool can never be invoked even if the API key is later upgraded.
           LINEAR_TOOLS='mcp__linear__get_issue,mcp__linear__list_issues,mcp__linear__list_comments,mcp__linear__get_team,mcp__linear__list_teams,mcp__linear__get_user,mcp__linear__list_users,mcp__linear__get_project,mcp__linear__list_projects,mcp__linear__list_issue_labels,mcp__linear__get_milestone,mcp__linear__list_milestones,mcp__linear__get_initiative,mcp__linear__list_initiatives'
           ON_DEMAND_TOOLS='Edit,Write,Bash'
+          # claude-code-action auto-includes built-in tools (Read, and the file
+          # writers) regardless of --allowedTools. To keep review mode truly
+          # read-only on the filesystem we must DENY the writers explicitly.
+          REVIEW_DISALLOWED='Edit,Write,MultiEdit,NotebookEdit'
+          # Reasoning effort. Claude Code's agentic default is `xhigh`, which is
+          # tuned for the hardest coding tasks and pays a per-turn latency tax on
+          # every one of a review's ~26 turns. A PR review is analytically demanding
+          # but bounded (read a diff, pull CI, form a verdict), so `high` is the
+          # sweet spot: strong recall, meaningfully faster turns than xhigh. Not
+          # lower — `medium`/`low` cut tool calls and investigation depth, which is
+          # exactly the recall a review depends on. Per-invocation latency x turn
+          # count is the real wall-clock cost (DEV-235), and this is the one safe
+          # lever on it. Passed via `--effort` in claude_args below.
           if [ "${MODE}" = "on-demand" ]; then
             echo "allowed=${ON_DEMAND_TOOLS}" >> "${GITHUB_OUTPUT}"
+            echo "disallowed=" >> "${GITHUB_OUTPUT}"
+            echo "max_turns=60" >> "${GITHUB_OUTPUT}"
+            echo "effort=high" >> "${GITHUB_OUTPUT}"
           else
             echo "allowed=${AUTO_TOOLS},${LINEAR_TOOLS}" >> "${GITHUB_OUTPUT}"
+            echo "disallowed=${REVIEW_DISALLOWED}" >> "${GITHUB_OUTPUT}"
+            echo "max_turns=40" >> "${GITHUB_OUTPUT}"
+            echo "effort=high" >> "${GITHUB_OUTPUT}"
           fi
 
       # Wire up Linear's hosted MCP server when LINEAR_API_KEY is set. The
@@ -485,8 +548,27 @@ jobs:
           aws-region: ${{ inputs.aws_region }}
           role-session-name: pepper-pr-review-${{ github.run_id }}
 
+      # Hard wall-clock cap so a looping or pathologically slow run fails fast
+      # instead of dangling (a live review sat at 27+ min under a permission-
+      # denial loop — DEV-235; that was the tool-allowlist bug, since fixed, not
+      # Bedrock throttling: CloudWatch showed 0 InvocationThrottles across the
+      # day's invocations, and the SDK logged no 429/529/retry lines). The real
+      # wall-clock cost is per-invocation inference latency (~29s avg, ~166s
+      # tail) multiplied by turn count. The `always()` cleanup below still runs
+      # when this step times out, so `pepper-cooking` never gets stuck on.
+      #
+      # `--max-turns` (40 review / 60 on-demand) is the PRIMARY stop and it is
+      # graceful: the agent loop ends cleanly and Pepper can still post its
+      # verdict. This timeout is only a hang-catcher for a genuinely wedged run.
+      # It is deliberately generous so it does NOT trip before max-turns — 40
+      # turns x ~29s avg is ~19 min and the latency tail can push past 20, so a
+      # 20 min cap would SIGKILL a slow-but-healthy review (no verdict) instead
+      # of letting max-turns stop it cleanly. 30 min clears that worst case with
+      # headroom; the verdict-signal escalation below covers whichever cap trips.
       - name: Run Pepper
+        id: pepper
         uses: anthropics/claude-code-action@v1
+        timeout-minutes: 30
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         with:
@@ -505,15 +587,65 @@ jobs:
             actions: read
           show_full_output: ${{ inputs.show_full_output }}
           prompt: ${{ steps.prompt.outputs.prompt }}
-          # `model` and `--allowedTools` aren't top-level inputs on
-          # claude-code-action@v1; they go through `claude_args` (CLI flags
-          # passed to the underlying Claude Code SDK). Without these,
-          # the action silently uses defaults, which results in permission
-          # denials when Pepper tries to run gh / git / curl from the prompt.
+          # `model`, `--allowedTools`, `--disallowedTools`, and `--max-turns`
+          # aren't top-level inputs on claude-code-action@v1; they go through
+          # `claude_args` (CLI flags passed to the underlying Claude Code SDK).
+          # Without these, the action silently uses defaults, which results in
+          # permission denials when Pepper runs gh / git from the prompt.
+          # --disallowedTools is omitted for on-demand (empty output) so its
+          # Edit/Write grant survives; --max-turns caps runaway loops per mode.
           claude_args: >-
             --model ${{ steps.model.outputs.model }}
+            --effort ${{ steps.tools.outputs.effort }}
             --allowedTools "${{ steps.tools.outputs.allowed }}"
+            --max-turns ${{ steps.tools.outputs.max_turns }}
+            ${{ steps.tools.outputs.disallowed != '' && format('--disallowedTools "{0}"', steps.tools.outputs.disallowed) || '' }}
             ${{ steps.mcp.outputs.path != '' && format('--mcp-config {0}', steps.mcp.outputs.path) || '' }}
+
+      # No-verdict escalation (DEV-235). If Run Pepper ended without posting a
+      # verdict, the PR would otherwise be left with no review AND no outcome
+      # label — on the PR surface, indistinguishable from "Pepper never ran".
+      # Swap the cooking marker for `pepper-needs-review`, tell the author, and
+      # assign a human so the PR doesn't sit in limbo. Mirrors the prompt's own
+      # halt/escalation path (cannot verify -> defer to a human).
+      #
+      # Keyed off the VERDICT SIGNAL, not the step's exit code: Pepper swaps
+      # `pepper-cooking` for an outcome label when it posts a verdict, so if
+      # cooking is still present here, Pepper never finished. This is deliberate
+      # — the earlier exit-code gate (failure/cancelled only) missed a graceful
+      # `--max-turns` exhaustion, which stops the loop cleanly and exits SUCCESS
+      # yet may not have formed a verdict, silently re-creating the limbo this
+      # step exists to prevent. Cooking-still-present catches every no-verdict
+      # ending at once: timeout SIGKILL, cancellation, mid-run error, AND a clean
+      # out-of-turns stop. This runs before the always-on cooking cleanup below,
+      # so the marker is still readable at decision time.
+      - name: Escalate if Pepper posted no verdict (review mode only)
+        if: always() && steps.mode.outputs.mode == 'review'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          DEFAULT_REVIEWER: ${{ inputs.default_reviewer }}
+        run: |
+          set -uo pipefail
+          # A clean review swapped cooking -> pepper-approved/changes-requested
+          # itself, so cooking is already gone: nothing to escalate. (A cold-start
+          # PR where the cooking step never ran also lands here — also nothing to
+          # do.) Only escalate when cooking is still on, i.e. no verdict posted.
+          if ! gh pr view "${PR_NUMBER}" --json labels --jq '.labels[].name' 2>/dev/null | grep -Fxq "pepper-cooking"; then
+            echo "Pepper posted a verdict (pepper-cooking already cleared) — no escalation needed."
+            exit 0
+          fi
+
+          gh pr edit "${PR_NUMBER}" --add-label "pepper-needs-review" --remove-label "pepper-cooking" || true
+
+          gh pr comment "${PR_NUMBER}" --body 'Pepper did not finish this review — the run stopped (timeout, error, or hit its turn limit) before a verdict was posted, so no approval or change request was recorded. Flagging for a human set of eyes. When the PR is ready, comment `@pepper review` to run me again. — Pepper' || true
+
+          # Best-effort human assignment. Tolerate GitHub rejecting the default
+          # reviewer (e.g., they authored the PR) — the label and comment already
+          # carry the signal, so a failed assignment must not fail the job.
+          if [ -n "${DEFAULT_REVIEWER}" ]; then
+            gh pr edit "${PR_NUMBER}" --add-reviewer "${DEFAULT_REVIEWER}" || true
+          fi
 
       # Always-on cleanup — `pepper-cooking` is purely a "currently being
       # reviewed" marker, so it must come off no matter how this job ended
