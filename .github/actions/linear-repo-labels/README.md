@@ -17,8 +17,8 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4        # only needed if you pin to a local path
-      - uses: SpiceLabsHQ/.github/actions/linear-repo-labels@v1
+      # Pin to a commit SHA (see "Versioning" below — there is no `@v1` for this action).
+      - uses: SpiceLabsHQ/.github/actions/linear-repo-labels@<commit-sha>
         with:
           linear-api-key: ${{ secrets.LINEAR_API_KEY }}
           github-token: ${{ secrets.ORG_REPO_READ_TOKEN }}   # see "Tokens" below
@@ -27,8 +27,25 @@ jobs:
 ```
 
 Because `SpiceLabsHQ/.github` is public, any org or user can consume the action
-via that `uses:` path — no install, no separate infrastructure. Pin to a tag
-(`@v1`) or a commit SHA.
+via that `uses:` path — no install, no separate infrastructure.
+
+## Versioning
+
+**Pin to a commit SHA.** This action is not (yet) wired into the repo's
+component release pipeline — [release-please + the `<name>-vN` tag aliases](../../../README.md#versioning--releases)
+cover only the reusable workflows under `workflows/`, so **no tag is ever cut
+for anything under `.github/actions/`**. In particular the bare `@v1` tag is
+frozen legacy (DEV-404) and does **not** contain this action — it will 404.
+
+Until per-action release tags exist (tracked as a follow-up on
+[DEV-518](https://linear.app/spicelabshq/issue/DEV-518)):
+
+```yaml
+- uses: SpiceLabsHQ/.github/actions/linear-repo-labels@<full-commit-sha>
+```
+
+A commit SHA is the repo's strongest, recommended pin anyway. Internal callers
+may use `@main` for hands-off updates, accepting that it moves.
 
 ## Inputs
 
