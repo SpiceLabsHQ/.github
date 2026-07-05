@@ -228,6 +228,32 @@ Two PR checks bundled into one reusable workflow. Drop the [caller workflow](exa
 
 No secrets needed. The caller passes `permissions: { contents: read, pull-requests: write }` so the workflow can read the PR payload and post the sticky comments.
 
+### Markdown Lint (`markdownlint.yml`)
+
+Runs [`markdownlint-cli2`](https://github.com/DavidAnson/markdownlint-cli2) over a repo's Markdown so the lint definition lives once org-wide instead of being copy-pasted per repo. The reusable workflow is deliberately **policy-free** — it ships no rules of its own. Each consuming repo keeps its own `.markdownlint-cli2.jsonc` (rules only, no `globs` key) and sets its own file scope via the `globs` input, so the caller, pre-commit hooks, and this workflow can each target a different surface without the rule set drifting between them.
+
+**1. Add the caller workflow** to each repo at `.github/workflows/markdownlint.yml`. Copy-paste-ready version at [`examples/caller-markdownlint.yml`](examples/caller-markdownlint.yml). The example scopes the trigger to Markdown/config changes so it stays off the critical path for code-only PRs.
+
+**2. Add the rule set** at `.markdownlint-cli2.jsonc` (repo root, or wherever `config_path` points). Rules only — omit `globs` so scope stays caller-controlled. Rules-only starter:
+
+```jsonc
+{
+  "config": { "default": true, "MD013": false, "MD033": false },
+  "ignores": ["node_modules", ".git"]
+}
+```
+
+**3. Inputs** (all optional, override via `with:`):
+
+| Input | Default | Notes |
+|---|---|---|
+| `globs` | `**/*.md` | Glob(s) of Markdown files to lint, passed straight to `markdownlint-cli2`. Narrow e.g. to `docs/**/*.md` for docs-only repos |
+| `config_path` | `.markdownlint-cli2.jsonc` | Path to the markdownlint-cli2 config. Tolerated absent — falls back to auto-discovery / built-in defaults rather than failing |
+
+No secrets required. The caller passes `permissions: { contents: read }`; the workflow only reads the checked-out tree.
+
+**Versioning:** Callers pin with `@markdownlint-v1` (or harden with an immutable `markdownlint-vX.Y.Z` tag / commit SHA — see [Versioning & releases](#versioning--releases)); the reusable workflow SHA-pins the underlying `markdownlint-cli2-action`, so linter upgrades happen in one place. Keep the caller's job name `markdownlint` so repos requiring the status check by name don't drift.
+
 ### Secret Scan (`secret-scan.yml`)
 
 Gitleaks-based scanner for repo secrets, layered to catch what GitHub's native push-protection misses (custom token formats, secrets that already landed in history). The reusable workflow runs the open-source **gitleaks CLI** directly in two complementary modes; callers wire each mode to the appropriate triggers. It does **not** use the paid `gitleaks-action` — there is **no license and no org secret to provision** (the CLI is free for organization accounts too).
