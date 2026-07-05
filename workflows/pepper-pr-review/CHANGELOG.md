@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.1](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.2.0...pepper-pr-review-v1.2.1) (2026-07-05)
+
+
+### Bug Fixes
+
+* **pepper-pr-review:** skip cleanly on non-allowlisted bot initiators (DEV-504) ([#103](https://github.com/SpiceLabsHQ/.github/issues/103)) ([dce0ab2](https://github.com/SpiceLabsHQ/.github/commit/dce0ab2df53ff092538c55d9dc14a4112c1cf328))
+
 ## [1.2.0](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.1.2...pepper-pr-review-v1.2.0) (2026-07-04)
 
 
