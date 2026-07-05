@@ -424,10 +424,11 @@ jobs:
           fi
           echo "model=${RESOLVED}" >> "${GITHUB_OUTPUT}"
 
-      # Emits three outputs consumed by the Run Pepper step's claude_args:
+      # Emits four outputs consumed by the Run Pepper step's claude_args:
       #   allowed     — the --allowedTools list for this mode
       #   disallowed  — the --disallowedTools list (review mode only; empty on-demand)
-      #   max_turns   — turn cap so a throttled/looping run can't run away
+      #   max_turns   — turn cap so a looping run can't run away
+      #   effort      — reasoning effort (--effort); `high` for both modes
       #
       # Why the review-mode list is shaped this way (DEV-235): the model routes
       # the large majority of its work through Bash and reaches for grep/sed/ls/
@@ -472,14 +473,25 @@ jobs:
           # writers) regardless of --allowedTools. To keep review mode truly
           # read-only on the filesystem we must DENY the writers explicitly.
           REVIEW_DISALLOWED='Edit,Write,MultiEdit,NotebookEdit'
+          # Reasoning effort. Claude Code's agentic default is `xhigh`, which is
+          # tuned for the hardest coding tasks and pays a per-turn latency tax on
+          # every one of a review's ~26 turns. A PR review is analytically demanding
+          # but bounded (read a diff, pull CI, form a verdict), so `high` is the
+          # sweet spot: strong recall, meaningfully faster turns than xhigh. Not
+          # lower — `medium`/`low` cut tool calls and investigation depth, which is
+          # exactly the recall a review depends on. Per-invocation latency x turn
+          # count is the real wall-clock cost (DEV-235), and this is the one safe
+          # lever on it. Passed via `--effort` in claude_args below.
           if [ "${MODE}" = "on-demand" ]; then
             echo "allowed=${ON_DEMAND_TOOLS}" >> "${GITHUB_OUTPUT}"
             echo "disallowed=" >> "${GITHUB_OUTPUT}"
             echo "max_turns=60" >> "${GITHUB_OUTPUT}"
+            echo "effort=high" >> "${GITHUB_OUTPUT}"
           else
             echo "allowed=${AUTO_TOOLS},${LINEAR_TOOLS}" >> "${GITHUB_OUTPUT}"
             echo "disallowed=${REVIEW_DISALLOWED}" >> "${GITHUB_OUTPUT}"
             echo "max_turns=40" >> "${GITHUB_OUTPUT}"
+            echo "effort=high" >> "${GITHUB_OUTPUT}"
           fi
 
       # Wire up Linear's hosted MCP server when LINEAR_API_KEY is set. The
@@ -521,16 +533,27 @@ jobs:
           aws-region: ${{ inputs.aws_region }}
           role-session-name: pepper-pr-review-${{ github.run_id }}
 
-      # Hard wall-clock cap so a throttled or looping run fails fast instead of
-      # dangling (a live review sat at 27+ min under a permission-denial loop
-      # plus Bedrock throttling — DEV-235). The `always()` cleanup below still
-      # runs when this step times out, so `pepper-cooking` never gets stuck on.
-      # 20 min covers the slowest healthy runs (~11 min observed) with headroom
-      # for both review and larger on-demand tasks.
+      # Hard wall-clock cap so a looping or pathologically slow run fails fast
+      # instead of dangling (a live review sat at 27+ min under a permission-
+      # denial loop — DEV-235; that was the tool-allowlist bug, since fixed, not
+      # Bedrock throttling: CloudWatch showed 0 InvocationThrottles across the
+      # day's invocations, and the SDK logged no 429/529/retry lines). The real
+      # wall-clock cost is per-invocation inference latency (~29s avg, ~166s
+      # tail) multiplied by turn count. The `always()` cleanup below still runs
+      # when this step times out, so `pepper-cooking` never gets stuck on.
+      #
+      # `--max-turns` (40 review / 60 on-demand) is the PRIMARY stop and it is
+      # graceful: the agent loop ends cleanly and Pepper can still post its
+      # verdict. This timeout is only a hang-catcher for a genuinely wedged run.
+      # It is deliberately generous so it does NOT trip before max-turns — 40
+      # turns x ~29s avg is ~19 min and the latency tail can push past 20, so a
+      # 20 min cap would SIGKILL a slow-but-healthy review (no verdict) instead
+      # of letting max-turns stop it cleanly. 30 min clears that worst case with
+      # headroom; the verdict-signal escalation below covers whichever cap trips.
       - name: Run Pepper
         id: pepper
         uses: anthropics/claude-code-action@v1
-        timeout-minutes: 20
+        timeout-minutes: 30
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         with:
@@ -558,41 +581,49 @@ jobs:
           # Edit/Write grant survives; --max-turns caps runaway loops per mode.
           claude_args: >-
             --model ${{ steps.model.outputs.model }}
+            --effort ${{ steps.tools.outputs.effort }}
             --allowedTools "${{ steps.tools.outputs.allowed }}"
             --max-turns ${{ steps.tools.outputs.max_turns }}
             ${{ steps.tools.outputs.disallowed != '' && format('--disallowedTools "{0}"', steps.tools.outputs.disallowed) || '' }}
             ${{ steps.mcp.outputs.path != '' && format('--mcp-config {0}', steps.mcp.outputs.path) || '' }}
 
-      # Failure/timeout escalation (DEV-235). If Run Pepper timed out
-      # (`timeout-minutes` above) or errored before it could post a verdict,
-      # the PR would otherwise be left with no review AND no outcome label —
-      # on the PR surface, indistinguishable from "Pepper never ran". Swap the
-      # cooking marker for `pepper-needs-review`, tell the author, and assign a
-      # human so the PR doesn't sit in limbo. Mirrors the prompt's own
-      # halt/escalation path (cannot verify -> defer to a human). Gated on the
-      # Run Pepper step's OWN outcome: a clean review already posted its verdict
-      # and swapped its own label, so it is never touched here. Timeout yields
-      # outcome `failure`; a manual job cancellation yields `cancelled`.
-      - name: Escalate on Pepper failure (review mode only)
-        if: >-
-          always() && steps.mode.outputs.mode == 'review' &&
-          (steps.pepper.outcome == 'failure' || steps.pepper.outcome == 'cancelled')
+      # No-verdict escalation (DEV-235). If Run Pepper ended without posting a
+      # verdict, the PR would otherwise be left with no review AND no outcome
+      # label — on the PR surface, indistinguishable from "Pepper never ran".
+      # Swap the cooking marker for `pepper-needs-review`, tell the author, and
+      # assign a human so the PR doesn't sit in limbo. Mirrors the prompt's own
+      # halt/escalation path (cannot verify -> defer to a human).
+      #
+      # Keyed off the VERDICT SIGNAL, not the step's exit code: Pepper swaps
+      # `pepper-cooking` for an outcome label when it posts a verdict, so if
+      # cooking is still present here, Pepper never finished. This is deliberate
+      # — the earlier exit-code gate (failure/cancelled only) missed a graceful
+      # `--max-turns` exhaustion, which stops the loop cleanly and exits SUCCESS
+      # yet may not have formed a verdict, silently re-creating the limbo this
+      # step exists to prevent. Cooking-still-present catches every no-verdict
+      # ending at once: timeout SIGKILL, cancellation, mid-run error, AND a clean
+      # out-of-turns stop. This runs before the always-on cooking cleanup below,
+      # so the marker is still readable at decision time.
+      - name: Escalate if Pepper posted no verdict (review mode only)
+        if: always() && steps.mode.outputs.mode == 'review'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
           DEFAULT_REVIEWER: ${{ inputs.default_reviewer }}
         run: |
           set -uo pipefail
-          # Swap cooking -> needs-review in one edit. The remove side is gated on
-          # the label actually being present so a cold-start PR (cooking never
-          # applied) doesn't error on --remove-label.
-          ARGS=(--add-label "pepper-needs-review")
-          if gh pr view "${PR_NUMBER}" --json labels --jq '.labels[].name' 2>/dev/null | grep -Fxq "pepper-cooking"; then
-            ARGS+=(--remove-label "pepper-cooking")
+          # A clean review swapped cooking -> pepper-approved/changes-requested
+          # itself, so cooking is already gone: nothing to escalate. (A cold-start
+          # PR where the cooking step never ran also lands here — also nothing to
+          # do.) Only escalate when cooking is still on, i.e. no verdict posted.
+          if ! gh pr view "${PR_NUMBER}" --json labels --jq '.labels[].name' 2>/dev/null | grep -Fxq "pepper-cooking"; then
+            echo "Pepper posted a verdict (pepper-cooking already cleared) — no escalation needed."
+            exit 0
           fi
-          gh pr edit "${PR_NUMBER}" "${ARGS[@]}" || true
 
-          gh pr comment "${PR_NUMBER}" --body 'Pepper did not finish this review — the run timed out or errored before a verdict was posted, so no approval or change request was recorded. Flagging for a human set of eyes. When the PR is ready, comment `@pepper review` to run me again. — Pepper' || true
+          gh pr edit "${PR_NUMBER}" --add-label "pepper-needs-review" --remove-label "pepper-cooking" || true
+
+          gh pr comment "${PR_NUMBER}" --body 'Pepper did not finish this review — the run stopped (timeout, error, or hit its turn limit) before a verdict was posted, so no approval or change request was recorded. Flagging for a human set of eyes. When the PR is ready, comment `@pepper review` to run me again. — Pepper' || true
 
           # Best-effort human assignment. Tolerate GitHub rejecting the default
           # reviewer (e.g., they authored the PR) — the label and comment already
