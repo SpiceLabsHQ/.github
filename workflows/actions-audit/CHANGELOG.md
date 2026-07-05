@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.2](https://github.com/SpiceLabsHQ/.github/compare/actions-audit-v1.1.1...actions-audit-v1.1.2) (2026-07-05)
+
+
+### Bug Fixes
+
+* **actions-audit:** repair broken zizmor invocation + align pinning policy (DEV-503) ([#101](https://github.com/SpiceLabsHQ/.github/issues/101)) ([d531b0c](https://github.com/SpiceLabsHQ/.github/commit/d531b0c2ebe5d3782b5baed7748129312dcfca9b))
+
 ## [1.1.1](https://github.com/SpiceLabsHQ/.github/compare/actions-audit-v1.1.0...actions-audit-v1.1.1) (2026-07-04)
 
 
