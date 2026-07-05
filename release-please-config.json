@@ -18,6 +18,11 @@
       "package-name": "dependency-review",
       "component": "dependency-review"
     },
+    "workflows/markdownlint": {
+      "release-type": "simple",
+      "package-name": "markdownlint",
+      "component": "markdownlint"
+    },
     "workflows/pepper-pr-review": {
       "release-type": "simple",
       "package-name": "pepper-pr-review",

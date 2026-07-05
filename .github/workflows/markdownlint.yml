@@ -1,0 +1,91 @@
+name: Markdown Lint (reusable)
+
+# Markdown linting via markdownlint-cli2, packaged as a reusable workflow so the
+# lint definition lives once org-wide instead of being copy-pasted per repo —
+# the same pattern the org already uses for pr-hygiene.yml, sast.yml, etc.
+#
+# The reusable is deliberately policy-free: it ships no rules of its own. Each
+# consuming repo keeps its own `.markdownlint-cli2.jsonc` (rules only, no
+# `globs` key) and sets its own file scope via the `globs` input, so callers,
+# pre-commit hooks, and this workflow can each target a different surface
+# without the rule set drifting between them.
+#
+# See DEV-517. Future work (that issue's note C) may fold this into the
+# spice-ci-floor-docs ruleset so every docs-tier repo gets it required with
+# zero per-repo install — but only after an org-wide markdown-lint-debt sweep
+# (modeled on the zizmor floor sweep in DEV-511) clears pre-existing
+# violations. Do not assume that promotion has happened yet.
+
+on:
+  workflow_call:
+    inputs:
+      globs:
+        description: |
+          Glob(s) of Markdown files to lint, passed straight through to
+          markdownlint-cli2. Default `**/*.md` lints every Markdown file in the
+          calling repo. The shared `.markdownlint-cli2.jsonc` intentionally omits
+          a `globs` key so scope is owned here by the caller, not the config.
+        required: false
+        type: string
+        default: "**/*.md"
+      config_path:
+        description: |
+          Path (relative to the calling repo) to the markdownlint-cli2 config.
+          Default `.markdownlint-cli2.jsonc`. Tolerated absent — if no file
+          exists at this path the workflow passes no `--config` and lets
+          markdownlint-cli2 fall back to auto-discovery / its built-in defaults,
+          rather than hard-failing the check.
+        required: false
+        type: string
+        default: .markdownlint-cli2.jsonc
+
+# Least privilege: linting only reads the checked-out tree.
+permissions:
+  contents: read
+
+jobs:
+  markdownlint:
+    # Keep this job name stable — consuming repos require the `markdownlint`
+    # status check by name, so renaming it would silently break their required
+    # check (see DEV-517 acceptance criteria).
+    name: markdownlint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout — first-party, allowed to use a major-version tag per
+      # the actions-audit policy. persist-credentials: false because nothing
+      # here touches git remotes; drop the token from the worktree.
+      - name: Checkout caller repo
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Resolve markdownlint config
+        id: cfg
+        env:
+          CONFIG_PATH: ${{ inputs.config_path }}
+        run: |
+          set -euo pipefail
+          # Tolerated absent (see config_path input): only pass a config when the
+          # caller actually ships one. An empty `config` input makes the action
+          # auto-discover, so a repo without the file lints on defaults instead
+          # of erroring on a missing --config path.
+          if [ -n "${CONFIG_PATH}" ] && [ -f "${CONFIG_PATH}" ]; then
+            echo "config=${CONFIG_PATH}" >> "${GITHUB_OUTPUT}"
+            echo "Using markdownlint config: ${CONFIG_PATH}"
+          else
+            echo "config=" >> "${GITHUB_OUTPUT}"
+            echo "No config at '${CONFIG_PATH}' — markdownlint-cli2 will auto-discover / use defaults"
+          fi
+
+      - name: Run markdownlint-cli2
+        # DavidAnson/markdownlint-cli2-action — third-party, SHA-pinned to
+        # v24.0.0 per the actions-audit policy (third-party actions MUST be
+        # 40-char SHAs). Bump by re-running the API tag lookup and updating both
+        # the SHA and the trailing comment.
+        uses: DavidAnson/markdownlint-cli2-action@8de2aa07cae85fd17c0b35642db70cf5495f1d25 # v24.0.0
+        with:
+          globs: ${{ inputs.globs }}
+          config: ${{ steps.cfg.outputs.config }}
