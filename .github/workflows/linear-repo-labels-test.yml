@@ -1,0 +1,25 @@
+name: Linear repo labels — test
+
+# Runs the plan.jq fixture test (the reconciliation logic behind the
+# linear-repo-labels action) on any PR that touches the action, so the six
+# reconciliation branches stay pinned down in CI.
+
+on:
+  pull_request:
+    paths:
+      - ".github/actions/linear-repo-labels/**"
+      - ".github/workflows/linear-repo-labels-test.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  plan-fixtures:
+    name: plan.jq fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Run reconciliation fixture test
+        run: .github/actions/linear-repo-labels/test/plan_test.sh

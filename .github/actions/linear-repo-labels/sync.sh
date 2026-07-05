@@ -11,6 +11,7 @@
 #   Auto-managed by linear-repo-labels • gh-repo-id:123456
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LINEAR_API="https://api.linear.app/graphql"
 TAG_PREFIX="Auto-managed by linear-repo-labels"
 
@@ -161,32 +162,12 @@ children_json="$(jq '[ .[] | . + {
 echo "Group currently has $(jq 'length' <<<"$children_json") child label(s)."
 
 # --- 5. Compute the reconciliation plan (declarative, in jq) -----------------
+# The plan program lives in plan.jq so the fixture test exercises the exact
+# same logic that runs in production (see test/plan_test.sh).
 plan_json="$(jq -n \
   --argjson repos "$repos_json" \
-  --argjson children "$children_json" '
-  ($children | map(select(.managedId != null)) | INDEX(.managedId)) as $byId
-  | ($children | INDEX(.name)) as $byName
-  | ($repos | map(.id | tostring)) as $repoIds
-  | ( [ $repos[]
-        | (.id | tostring) as $rid
-        | .name as $tname
-        | if $byId[$rid] then
-            (if $byId[$rid].name != $tname
-             then {op:"rename", id:$byId[$rid].id, name:$tname, from:$byId[$rid].name, repoId:$rid}
-             else {op:"noop"} end)
-          elif ($byName[$tname] != null and $byName[$tname].managedId == null) then
-            {op:"adopt", id:$byName[$tname].id, name:$tname, repoId:$rid}
-          elif ($byName[$tname] != null and $byName[$tname].managedId != $rid) then
-            {op:"conflict", name:$tname, otherRepoId:$byName[$tname].managedId, repoId:$rid}
-          else
-            {op:"create", name:$tname, repoId:$rid}
-          end
-      ] ) as $repoPlan
-  | ( [ $children[]
-        | select(.managedId != null)
-        | select( (.managedId | IN($repoIds[])) | not )
-        | {op:"prune", id:.id, name:.name, repoId:.managedId} ] ) as $prunePlan
-  | ($repoPlan + $prunePlan) | map(select(.op != "noop")) ')"
+  --argjson children "$children_json" \
+  -f "${SCRIPT_DIR}/plan.jq")"
 
 # --- 6. Execute the plan -----------------------------------------------------
 created=0; renamed=0; adopted=0; pruned=0; conflicts=0; failures=0
@@ -194,7 +175,18 @@ declare -a summary_lines=()
 
 run_mut() { # run_mut <query> <vars-json>; returns non-zero on failure
   if [ "$DRY_RUN" = "true" ]; then return 0; fi
-  linear_gql "$1" "$2" >/dev/null
+  local resp
+  # linear_gql already fails on a top-level GraphQL `errors` array. But Linear's
+  # label mutations also return `success: Boolean!` in the payload, and a
+  # mutation can come back HTTP 200 with errors:null yet success:false — so we
+  # must check that field too, or a real per-label failure slips past the
+  # failures counter and the final exit-code gate.
+  resp="$(linear_gql "$1" "$2")" || return 1
+  if [ "$(jq -r '[.data[]?.success] | any(. == false)' <<<"$resp")" = "true" ]; then
+    echo "::error::Linear mutation returned success=false: $(jq -c '.data' <<<"$resp")" >&2
+    return 1
+  fi
+  return 0
 }
 
 while IFS= read -r item; do
