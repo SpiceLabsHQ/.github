@@ -543,6 +543,20 @@ jobs:
       # artifact arrived, or a "no coverage this run" marker otherwise. The note
       # is folded into the review prompt by the Build prompt step. NON-GATING:
       # nothing here can fail the job (`|| true` / fallbacks throughout).
+      # Fetch the standalone note renderer from .github at this workflow's own
+      # SHA (version-matched, like the prompt) so the next step runs the exact
+      # program the fixture test verifies. Coverage mode only.
+      - name: Fetch coverage note renderer (coverage mode only)
+        if: inputs.coverage_review_enabled && steps.mode.outputs.mode == 'review'
+        uses: actions/checkout@v7
+        with:
+          repository: SpiceLabsHQ/.github
+          ref: ${{ job.workflow_sha }}
+          path: .pepper-coverage-tpl
+          sparse-checkout: .github/actions/coverage-surface/note.jq
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+
       - name: Build coverage note (review mode only)
         id: coverage-note
         if: inputs.coverage_review_enabled && steps.mode.outputs.mode == 'review'
@@ -594,28 +608,17 @@ jobs:
           diff-cover "${COV_FILE}" --compare-branch "origin/${BASE}" --format "json:${JSON_REPORT}" -q 2>/dev/null || \
             fallback "A coverage artifact was present but diff-cover could not read it against origin/${BASE} (unsupported format or diff error)."
 
-          # Render the prompt note from the JSON with jq (no percentage is a
-          # gate; the soft flag only fires on uncovered lines in non-test files).
-          jq -r '
-            (.total_percent_covered) as $pct
-            | (.num_changed_lines) as $changed
-            | (.total_num_violations) as $viol
-            | ([ .src_stats | to_entries[] as $e | ($e.value.violation_lines // [])[] | {file:$e.key, line:.} ]) as $unc
-            | ([ $unc[] | select(.file | test("(/|^)(tests?|spec|__tests__)/|_test\\.|\\.tests?\\.|\\.spec\\.|conftest"; "i") | not) ]) as $nontest
-            | (
-                "- Changed executable lines: \($changed)",
-                "- Changed lines covered: \($pct)% (\($viol) uncovered)",
-                ( if ($unc|length) > 0
-                  then ( "- Uncovered changed lines:",
-                         ( $unc[0:50][] | "  - \(.file):\(.line)" ),
-                         ( if ($unc|length) > 50 then "  - … (truncated, \(($unc|length)-50) more)" else empty end ) )
-                  else "- All changed lines are covered." end ),
-                ( if ($nontest|length) > 0
-                  then ( "",
-                         "> **New-logic-without-a-test flag (soft):** \($nontest|length) uncovered changed line(s) sit in non-test files. Treat this as a test gap under `<test_review>` unless you positively verify the logic is exercised elsewhere, or the change explains why a test is not warranted." )
-                  else empty end )
-              )
-          ' "${JSON_REPORT}" > "${NOTE}" 2>/dev/null || \
+          # Render the prompt note from the JSON with the standalone note.jq
+          # program (fetched from .github at job.workflow_sha into
+          # .pepper-coverage-tpl). Running the FILE — not an inline copy — means
+          # the fixture test in .github/actions/coverage-surface/test/ exercises
+          # the exact production program, so the note logic (test-file
+          # classification, truncation, soft-flag threshold) cannot drift from
+          # what CI verifies. No percentage is ever a gate.
+          NOTE_JQ=".pepper-coverage-tpl/.github/actions/coverage-surface/note.jq"
+          [ -f "${NOTE_JQ}" ] || \
+            fallback "A coverage artifact was present but the note renderer (note.jq) was not found for this workflow version."
+          jq -r -f "${NOTE_JQ}" "${JSON_REPORT}" > "${NOTE}" 2>/dev/null || \
             fallback "A coverage artifact was present but the diff-coverage note could not be rendered."
 
           # Guard against an empty render (jq succeeded but produced nothing).

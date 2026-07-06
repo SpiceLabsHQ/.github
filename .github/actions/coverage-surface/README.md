@@ -80,6 +80,21 @@ today.
 | `uncovered-lines` | Number of changed lines with no coverage.                        |
 | `surfaced`        | `true` when a table was produced, else `false` (clean fallback). |
 
+## Tests
+
+The note-rendering logic — `note.jq` (the Pepper diff-coverage note, including
+the test/non-test classifier and truncation) and `annotate.py` (the `::warning::`
+emitter) — is covered by a self-asserting fixture test that runs the exact
+production programs against known diff-cover JSON:
+
+```
+.github/actions/coverage-surface/test/coverage_surface_test.sh
+```
+
+It runs in CI via [`coverage-surface-test.yml`](../../workflows/coverage-surface-test.yml)
+on any PR touching this action. The Pepper workflow renders its note with
+`jq -rf note.jq`, so the test exercises the same program that ships.
+
 ## Failure behavior
 
 The action is **fail-open by design**. A missing file, an unsupported format, a
