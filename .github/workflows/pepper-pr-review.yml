@@ -86,10 +86,20 @@ on:
         required: false
         type: string
         default: renovate,dependabot
+      coverage_review_enabled:
+        description: |
+          Opt in to the DEV-526 diff-coverage note. OFF by default so a repo that does not publish coverage
+          pays nothing — no poll, no added review latency, no behavior change. Turn it on ONLY in repos that
+          add the `coverage-surface` step to their test job (they upload `coverage_artifact`); leaving it off
+          for everyone else keeps Pepper reviewing immediately as before. When off, the poll and note steps are
+          skipped entirely and Pepper reviews off the diff.
+        required: false
+        type: boolean
+        default: false
       coverage_artifact:
         description: |
-          Name of the artifact carrying a repo's coverage file (DEV-526). In review mode the job polls for
-          this artifact by the PR head SHA, runs `diff-cover` against the base, and folds a NON-GATING
+          Name of the artifact carrying a repo's coverage file (DEV-526). When `coverage_review_enabled` is on,
+          the job polls for this artifact by the PR head SHA, runs `diff-cover` against the base, and folds a NON-GATING
           diff-coverage note into the review prompt. Must match the `artifact-name` on the `coverage-surface`
           composite action the repo adds to its test job. A repo that never uploads it falls back cleanly
           (Pepper reviews off the diff as today). No coverage number ever gates the merge — the note only
@@ -435,7 +445,7 @@ jobs:
       # is a clean fallback (Pepper reviews off the diff, as before).
       - name: Poll for coverage artifact (review mode only)
         id: coverage-poll
-        if: steps.mode.outputs.mode == 'review'
+        if: inputs.coverage_review_enabled && steps.mode.outputs.mode == 'review'
         env:
           # Default job token, not the App token: reading artifacts + run status
           # needs only `actions: read`, which the job's permissions block already
@@ -534,7 +544,7 @@ jobs:
       # nothing here can fail the job (`|| true` / fallbacks throughout).
       - name: Build coverage note (review mode only)
         id: coverage-note
-        if: steps.mode.outputs.mode == 'review'
+        if: inputs.coverage_review_enabled && steps.mode.outputs.mode == 'review'
         env:
           FOUND: ${{ steps.coverage-poll.outputs.found }}
           COV_FILE: ${{ steps.coverage-poll.outputs.file }}
