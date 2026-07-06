@@ -866,7 +866,14 @@ jobs:
           else
             echo "allowed=${AUTO_TOOLS},${LINEAR_TOOLS}" >> "${GITHUB_OUTPUT}"
             echo "disallowed=${REVIEW_DISALLOWED}" >> "${GITHUB_OUTPUT}"
-            echo "max_turns=40" >> "${GITHUB_OUTPUT}"
+            # 80, raised from an initial guess of 40 (DEV-235). A large PR (~700
+            # changed lines) legitimately exhausted 40 turns with ZERO tool
+            # denials — a fast-fail on a healthy review, not a runaway loop. The
+            # cap only spends turns a review actually needs, so small PRs are
+            # unaffected; it just stops cutting large reviews off before a
+            # verdict. Kept below the wall-clock timeout so max-turns stays the
+            # graceful primary stop (see the Run Pepper timeout note).
+            echo "max_turns=80" >> "${GITHUB_OUTPUT}"
             echo "effort=high" >> "${GITHUB_OUTPUT}"
           fi
 
@@ -918,18 +925,21 @@ jobs:
       # tail) multiplied by turn count. The `always()` cleanup below still runs
       # when this step times out, so `pepper-cooking` never gets stuck on.
       #
-      # `--max-turns` (40 review / 60 on-demand) is the PRIMARY stop and it is
+      # `--max-turns` (80 review / 60 on-demand) is the PRIMARY stop and it is
       # graceful: the agent loop ends cleanly and Pepper can still post its
       # verdict. This timeout is only a hang-catcher for a genuinely wedged run.
-      # It is deliberately generous so it does NOT trip before max-turns — 40
-      # turns x ~29s avg is ~19 min and the latency tail can push past 20, so a
-      # 20 min cap would SIGKILL a slow-but-healthy review (no verdict) instead
-      # of letting max-turns stop it cleanly. 30 min clears that worst case with
-      # headroom; the verdict-signal escalation below covers whichever cap trips.
+      # It is sized to NOT trip before max-turns on a healthy review — 80 turns
+      # x ~29s avg is ~39 min, so a 50 min cap leaves headroom for the latency
+      # tail before it would SIGKILL a slow-but-healthy review (no verdict).
+      # Whichever cap trips, the verdict-signal escalation below handles it
+      # gracefully (keyed on the cooking label, not the stop reason). Bumped
+      # from 30 min alongside the review max-turns 40 -> 80 (DEV-526): a real
+      # 700-line review hit 40 turns with zero denials, so the cap, not a loop,
+      # was cutting reviews short.
       - name: Run Pepper
         id: pepper
         uses: anthropics/claude-code-action@v1
-        timeout-minutes: 30
+        timeout-minutes: 50
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         with:
