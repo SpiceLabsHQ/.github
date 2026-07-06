@@ -126,6 +126,22 @@ jobs:
     outputs:
       run: ${{ steps.decide.outputs.run }}
     steps:
+      # Minted only on pull_request events, where the decide step needs the
+      # App's bot login ("<app-slug>[bot]") to pick Pepper's own prior reviews
+      # out of the review list for the DEV-523 unchanged-SHA short-circuit.
+      # issue_comment events never reach that branch, so no token is minted for
+      # them. continue-on-error keeps a token-mint hiccup from FAILING the gate
+      # (which would skip the review via `needs`): an empty app-slug just falls
+      # through to run=true, and the review job mints its own token as before.
+      - name: Generate App installation token
+        id: app-token
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.PEPPER_PR_REVIEW_APP_ID }}
+          private-key: ${{ secrets.PEPPER_PR_REVIEW_APP_PRIVATE_KEY }}
+
       - name: Decide whether to run the review
         id: decide
         env:
@@ -135,6 +151,14 @@ jobs:
           # Empty for issue_comment events (payload carries no pull_request), so
           # the draft guard below is pull_request-only by construction.
           IS_DRAFT: ${{ github.event.pull_request.draft }}
+          # DEV-523 unchanged-SHA short-circuit. All empty on issue_comment
+          # events (no pull_request payload / token not minted), where the
+          # short-circuit deliberately does not apply.
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
         run: |
           set -euo pipefail
           run=true
@@ -165,6 +189,53 @@ jobs:
           if [ "${EVENT_NAME}" = "pull_request" ] && [ "${IS_DRAFT}" = "true" ]; then
             run=false
             echo "::notice::PR is a draft — skipping auto-review until it's marked ready for review (or you comment @pepper review). DEV-235."
+          fi
+          # DEV-523 — short-circuit an automatic re-review when the PR head SHA
+          # is unchanged since Pepper's last review. A pull_request re-trigger
+          # (e.g. the author marking a draft ready-for-review) against a commit
+          # Pepper already reviewed otherwise spends a full Bedrock-billed
+          # invocation just to conclude "nothing new." That determination is
+          # cheap and pre-model: compare the PR head SHA to the commit_id of
+          # Pepper's most recent review on the PR. On a match we skip the whole
+          # review job (a skipped required check still satisfies the ruleset),
+          # leaving the existing verdict and label untouched — a no-op, not a
+          # noise-adding "already reviewed" comment.
+          #
+          # pull_request only: an explicit `@pepper review` comment is a human
+          # deliberately asking for a fresh pass, so it is never short-circuited
+          # (issue_comment doesn't enter this block). The workflow's
+          # `cancel-in-progress: false` concurrency group serializes runs per
+          # PR, so a re-trigger fired while an earlier review is still in flight
+          # waits for it to finish and post — by the time this runs, that
+          # review's commit_id is visible and the duplicate is skipped (the
+          # exact double-review case from DEV-518).
+          #
+          # Fail-open: any inability to identify the bot or read its last
+          # reviewed commit leaves run=true, so at worst we run a review we
+          # could have skipped — never skip one we should have run.
+          if [ "${run}" = true ] && [ "${EVENT_NAME}" = "pull_request" ]; then
+            if [ -z "${APP_SLUG}" ]; then
+              echo "::notice::No app-slug from actions/create-github-app-token — cannot identify Pepper's reviews; running review (DEV-523 short-circuit skipped)."
+            else
+              BOT_LOGIN="${APP_SLUG}[bot]"
+              # Stream "submitted_at commit_id" for every review Pepper authored,
+              # across all pages (a per-element `select` is pagination-safe here,
+              # unlike an aggregating filter such as `last`). Sort by the ISO-8601
+              # timestamp (lexically ordered) and take the newest. `|| ...=""`
+              # keeps a transient API failure fail-open under `set -euo pipefail`.
+              LAST_REVIEWED_SHA=$(gh api --paginate \
+                "repos/${REPO}/pulls/${PR_NUMBER}/reviews?per_page=100" \
+                --jq ".[] | select(.user.login == \"${BOT_LOGIN}\") | \"\(.submitted_at) \(.commit_id)\"" \
+                2>/dev/null | sort | tail -n1 | awk '{print $2}') || LAST_REVIEWED_SHA=""
+              if [ -z "${LAST_REVIEWED_SHA}" ]; then
+                echo "No prior Pepper review on PR #${PR_NUMBER} (or reviews unreadable) — running review."
+              elif [ "${LAST_REVIEWED_SHA}" = "${HEAD_SHA}" ]; then
+                run=false
+                echo "::notice::Head SHA ${HEAD_SHA} was already reviewed by Pepper — skipping this automatic re-review (DEV-523). The existing verdict and label are left intact; comment @pepper review to force a fresh pass."
+              else
+                echo "Head SHA ${HEAD_SHA} differs from Pepper's last-reviewed ${LAST_REVIEWED_SHA} — running review."
+              fi
+            fi
           fi
           echo "run=${run}" >> "${GITHUB_OUTPUT}"
 
