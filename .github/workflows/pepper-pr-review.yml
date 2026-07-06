@@ -809,11 +809,18 @@ jobs:
           # (replaces the old Bash(curl *), which could also POST).
           FETCH_TOOLS='WebFetch'
           AUTO_TOOLS="${READ_TOOLS},${GIT_TOOLS},${SHELL_TOOLS},${GH_TOOLS},${FETCH_TOOLS}"
-          # Linear MCP read-only tools. The hosted Linear MCP exposes more,
-          # but the bot only needs issues/comments/teams/projects/users for
-          # PR-review context. List read-only tools explicitly so a write
-          # tool can never be invoked even if the API key is later upgraded.
-          LINEAR_TOOLS='mcp__linear__get_issue,mcp__linear__list_issues,mcp__linear__list_comments,mcp__linear__get_team,mcp__linear__list_teams,mcp__linear__get_user,mcp__linear__list_users,mcp__linear__get_project,mcp__linear__list_projects,mcp__linear__list_issue_labels,mcp__linear__get_milestone,mcp__linear__list_milestones,mcp__linear__get_initiative,mcp__linear__list_initiatives'
+          # Whole Linear MCP server, not a hand-curated tool list. The read
+          # scope is enforced by the LINEAR_API_KEY itself (a read-only key), so
+          # write/delete tools fail at the API even if the model reaches for one.
+          # An explicit read-only allowlist kept silently denying legitimate read
+          # tools the model wanted (e.g. list_documents / get_document for a
+          # linked ADR), and every denial burns a review turn toward the
+          # max-turns cap — the exact turn-exhaustion that left PRs unreviewed.
+          # SAFETY INVARIANT: this is safe ONLY while LINEAR_API_KEY is
+          # read-scoped. If that key is ever swapped for a write-capable one,
+          # narrow this back to explicit read tools (or add the Linear write/
+          # delete tools to REVIEW_DISALLOWED below) before merging the swap.
+          LINEAR_TOOLS='mcp__linear'
           ON_DEMAND_TOOLS='Edit,Write,Bash'
           # claude-code-action auto-includes built-in tools (Read, and the file
           # writers) regardless of --allowedTools. To keep review mode truly
