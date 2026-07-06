@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/SpiceLabsHQ/.github/compare/actions-audit-v1.1.2...actions-audit-v1.2.0) (2026-07-06)
+
+
+### Features
+
+* **ci:** auto-merge coverage dashboard + first-party allow_tags_for fix (DEV-505) ([#105](https://github.com/SpiceLabsHQ/.github/issues/105)) ([9840c45](https://github.com/SpiceLabsHQ/.github/commit/9840c4521ed77771b8244c5b34d193b49ec7cb8f))
+
 ## [1.1.2](https://github.com/SpiceLabsHQ/.github/compare/actions-audit-v1.1.1...actions-audit-v1.1.2) (2026-07-05)
 
 
