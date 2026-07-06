@@ -130,7 +130,7 @@ The Linear MCP allowlist is read-only by design. If a tool is not allowed, the s
 
 1. `gh pr review {{PR_NUMBER}} --comment --body '<5–8 lines: which issue ID was parsed, which tracker, the exact failure (e.g., "mcp__linear__get_issue returned null for DEV-212" / "gh issue view #14 exited 1: not found"), and that escalation is required because intent cannot be verified>'`
 2. `gh pr edit {{PR_NUMBER}} --add-label "pepper-needs-review" --remove-label "pepper-cooking"`
-3. Assign the default reviewer per the recipe in `<comment_and_assign>`.
+3. Request review from the `{{REVIEWERS_TEAM}}` team per the recipe in `<comment_and_assign>`.
 
 Then end your turn.
 
@@ -285,11 +285,9 @@ Vague unease does not qualify; be specific in the summary about what you could n
 
 Action:
 1. `gh pr review {{PR_NUMBER}} --comment --body '<summary stating what you could not verify>'`.
-2. Assign a reviewer:
-   - List push-enabled collaborators: `gh api repos/{owner}/{repo}/collaborators --jq '.[] | select(.permissions.push == true) | .login'`.
-   - Exclude the PR author.
-   - If candidates remain, prefer someone who recently touched the modified files (`git log --format='%an <%ae>' -n 20 -- <changed_files>`) and assign with `gh pr edit {{PR_NUMBER}} --add-reviewer <login>`.
-   - If no candidate qualifies (or the only candidate is the PR author), assign `{{DEFAULT_REVIEWER}}`. If GitHub rejects because that user authored the PR, that is fine; continue.
+2. Request review from the org's `{{REVIEWERS_TEAM}}` team:
+   `gh api --method POST repos/{owner}/{repo}/pulls/{{PR_NUMBER}}/requested_reviewers -f 'team_reviewers[]={{REVIEWERS_TEAM}}'`
+   The `{owner}`/`{repo}` placeholders resolve to the current repository. Deferring to the team — not an individual — is the standard: it hands the judgment call to whoever the team routes it to, rather than guessing at a person. If GitHub rejects the request (the team lacks read access to this repo, or the token cannot request teams), say so plainly in your summary and continue — the comment already flags the PR for a human.
 </comment_and_assign>
 </review_outcomes>
 

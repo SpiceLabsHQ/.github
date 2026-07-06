@@ -167,7 +167,7 @@ The bot operates in two modes:
 | `aws_region` | `us-west-2` | AWS region where the Bedrock role and inference profiles live |
 | `trigger_phrase` | `@pepper` | Comment phrase that triggers on-demand mode |
 | `standards_path` | `.pepper/pr-review-standards.md` | Override if your repo stores standards elsewhere |
-| `default_reviewer` | `brodkin` | Fallback reviewer login when no other collaborator qualifies for assignment |
+| `reviewers_team` | `reviewers` | Slug of the org team Pepper requests review from on escalation. Must be a team in the repo's own org with read access to the repo; the App token needs org `members: read` to resolve it |
 | `show_full_output` | `false` | When `true`, Pepper's tool calls + reasoning + tool results stream into Actions logs. Useful for diagnosing permission denials or wasted turns. **Public-repo callers: anyone who can see the Actions run sees the full output** — use only on debug branches |
 
 **4. Required secrets** (set once at the org level — they don't auto-inherit, the caller passes them explicitly):

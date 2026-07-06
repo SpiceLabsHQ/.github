@@ -59,11 +59,14 @@ on:
         required: false
         type: string
         default: .pepper/pr-review-standards.md
-      default_reviewer:
-        description: GitHub login to fall back to when no other collaborator qualifies for assignment.
+      reviewers_team:
+        description: |
+          Slug of the org team Pepper requests review from when it escalates (cannot approve or request
+          changes with high confidence). Must be a team in the repo's own org with at least read access
+          to the repo. The App token needs org `members: read` to resolve the team.
         required: false
         type: string
-        default: brodkin
+        default: reviewers
       show_full_output:
         description: |
           When true, claude-code-action streams the full SDK output (tool calls, reasoning, tool results) into the
@@ -346,7 +349,7 @@ jobs:
         id: prompt
         env:
           STANDARDS_PATH: ${{ inputs.standards_path }}
-          DEFAULT_REVIEWER: ${{ inputs.default_reviewer }}
+          REVIEWERS_TEAM: ${{ inputs.reviewers_team }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
           GUIDELINES_MARKER: "<!-- PROJECT_GUIDELINES_PLACEHOLDER -->"
           TASK_MARKER: "<!-- TASK_PLACEHOLDER -->"
@@ -411,10 +414,10 @@ jobs:
             mv "${ASSEMBLED2}" "${ASSEMBLED}"
           fi
 
-          # Substitute scalar placeholders. default_reviewer is a GitHub login,
+          # Substitute scalar placeholders. reviewers_team is a team slug,
           # PR_NUMBER is a positive integer — neither contains characters that
           # would need escaping for sed's replacement.
-          sed -i "s|{{DEFAULT_REVIEWER}}|${DEFAULT_REVIEWER}|g" "${ASSEMBLED}"
+          sed -i "s|{{REVIEWERS_TEAM}}|${REVIEWERS_TEAM}|g" "${ASSEMBLED}"
           sed -i "s|{{PR_NUMBER}}|${PR_NUMBER}|g" "${ASSEMBLED}"
 
           {
@@ -636,7 +639,8 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
-          DEFAULT_REVIEWER: ${{ inputs.default_reviewer }}
+          REVIEWERS_TEAM: ${{ inputs.reviewers_team }}
+          REPO_OWNER: ${{ github.repository_owner }}
         run: |
           set -uo pipefail
           # A clean review swapped cooking -> pepper-approved/changes-requested
@@ -652,11 +656,12 @@ jobs:
 
           gh pr comment "${PR_NUMBER}" --body 'Pepper did not finish this review — the run stopped (timeout, error, or hit its turn limit) before a verdict was posted, so no approval or change request was recorded. Flagging for a human set of eyes. When the PR is ready, comment `@pepper review` to run me again. — Pepper' || true
 
-          # Best-effort human assignment. Tolerate GitHub rejecting the default
-          # reviewer (e.g., they authored the PR) — the label and comment already
-          # carry the signal, so a failed assignment must not fail the job.
-          if [ -n "${DEFAULT_REVIEWER}" ]; then
-            gh pr edit "${PR_NUMBER}" --add-reviewer "${DEFAULT_REVIEWER}" || true
+          # Best-effort team review request. Tolerate GitHub rejecting it (the
+          # team lacks access to this repo, or the token can't request teams) —
+          # the label and comment already carry the signal, so a failed request
+          # must not fail the job.
+          if [ -n "${REVIEWERS_TEAM}" ]; then
+            gh pr edit "${PR_NUMBER}" --add-reviewer "${REPO_OWNER}/${REVIEWERS_TEAM}" || true
           fi
 
       # Always-on cleanup — `pepper-cooking` is purely a "currently being
