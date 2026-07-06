@@ -316,15 +316,27 @@ jobs:
           echo "Switched to PR branch: ${HEAD_REF} (committer: ${BOT_LOGIN})"
 
       - name: Fetch review prompt template
-        # Pin to the v1 tag rather than ${{ github.workflow_sha }}. When this
-        # reusable workflow is called from a PR in the SAME repo, workflow_sha
-        # resolves to the PR head SHA, not the v1 tag's SHA — so prompt updates
-        # land in main but stale PR branches keep using their own (old) copy.
-        # Always tracking v1 means the latest prompt is used for every review.
+        # Pin the prompt to the SHA of THIS reusable workflow file, so every
+        # review uses the prompt that shipped with the workflow version the
+        # caller pinned (version-matched, not floating).
+        #
+        # Use `job.workflow_sha` (the `job` context), which for a workflow_call
+        # job resolves to the REUSABLE workflow file's own commit — a SHA that
+        # always exists in SpiceLabsHQ/.github, whether the caller is this repo
+        # (self-review, local `./` -> the event commit, so main gets the latest
+        # prompt and a PR can dogfood its own prompt edits) or an external repo
+        # pinning `@pepper-pr-review-v1` (-> that release's commit). NOT
+        # `github.workflow_sha`: in a called workflow that is the CALLER's
+        # entry-point SHA, which for a cross-repo consumer is a commit in THEIR
+        # repo and would fail this checkout.
+        #
+        # NOT the legacy `refs/tags/v1` this replaced: it is frozen at 60a48c1
+        # (README "Versioning & releases" — deprecated, never moves), so every
+        # prompt edit since silently never reached any review (DEV-235).
         uses: actions/checkout@v7
         with:
           repository: SpiceLabsHQ/.github
-          ref: refs/tags/v1
+          ref: ${{ job.workflow_sha }}
           path: .pepper-pr-review-tpl
           sparse-checkout: prompts
           sparse-checkout-cone-mode: false
