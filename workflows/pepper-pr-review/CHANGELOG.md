@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.3.0](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.2.1...pepper-pr-review-v1.3.0) (2026-07-06)
+
+
+### Features
+
+* **pepper-pr-review:** short-circuit re-review when head SHA is unchanged (DEV-523) ([#118](https://github.com/SpiceLabsHQ/.github/issues/118)) ([dbeb644](https://github.com/SpiceLabsHQ/.github/commit/dbeb6440149ace79ad7375f1826ec83286949a65))
+* **pepper:** escalate to the `reviewers` team, not an individual (DEV-524) ([#119](https://github.com/SpiceLabsHQ/.github/issues/119)) ([4b72c61](https://github.com/SpiceLabsHQ/.github/commit/4b72c61577cea828b173102566b78497e5a2b882))
+
+
+### Bug Fixes
+
+* **pepper-pr-review:** fetch prompt from workflow's own SHA, not frozen v1 (DEV-235) ([#115](https://github.com/SpiceLabsHQ/.github/issues/115)) ([dcb2e72](https://github.com/SpiceLabsHQ/.github/commit/dcb2e724212e483ba2efa08f27d8280358577230))
+* **pepper-pr-review:** native read/search tools + guardrails for review mode (DEV-235) ([#112](https://github.com/SpiceLabsHQ/.github/issues/112)) ([6d67628](https://github.com/SpiceLabsHQ/.github/commit/6d67628a02eebb14d22599c0439e85830d49259e))
+
 ## [1.2.1](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.2.0...pepper-pr-review-v1.2.1) (2026-07-05)
 
 
