@@ -28,10 +28,11 @@ options:
 
   # Custom-property opt-out, following the `ci-exception` model used by the CI
   # floor rulesets. Set this property on a repo to exclude it:
-  #   value "all" or "*"      → skip the repo entirely
-  #   value "merge" (a group) → skip only that policy group; reconcile the rest
-  #   comma-separated groups  → skip each listed group
-  #   unset / empty           → fully reconciled
+  #   value "all" or "*"        → skip the repo entirely
+  #   value "merge" (a group)   → skip only that policy group; reconcile the rest
+  #   value "team_access"       → skip the team-access pass only (see below)
+  #   comma-separated groups    → skip each listed group / pass
+  #   unset / empty             → fully reconciled
   exception_property: repo-settings-exception
 
 # Desired repo settings. First policy: squash-only merge (org standard).
@@ -43,3 +44,24 @@ policies:
     allow_rebase_merge: false
     squash_merge_commit_title: PR_TITLE
     squash_merge_commit_message: PR_BODY
+
+# Team repo-access desired-state (DEV-525). A SEPARATE concern from `policies`
+# above: granting a team access to a repo is NOT a field of the repo-update API
+# — it is its own endpoint (PUT /orgs/{org}/teams/{slug}/repos/{owner}/{repo}) —
+# so the reconciler handles these in a dedicated pass.
+#
+# FLOOR SEMANTICS (unlike `policies`, which are exact-match): each entry ensures
+# the team has AT LEAST the given permission on every reconciled repo. A higher
+# existing grant is left untouched — the reconciler never downgrades a team.
+#
+# WHY: Pepper escalates low-confidence PRs to the `reviewers` team (DEV-524), and
+# a GitHub team review request only lands if the team has >= read access to the
+# repo. Granting per-repo by hand drifts as repos are added; this makes it an
+# invariant. Forks are included (Pepper reviews them too); archived repos are not
+# scanned. Skippable per-repo via the exception property (value `team_access`).
+#
+# Each key is a team slug in THIS org; `permission` is one of GitHub's team
+# repo-permission levels: pull | triage | push | maintain | admin.
+team_access:
+  reviewers:
+    permission: pull
