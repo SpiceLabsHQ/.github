@@ -55,11 +55,35 @@ jobs:
       github.event.pull_request.user.login != 'rosemary-releaser[bot]'
     runs-on: ubuntu-latest
     steps:
+      # Enable auto-merge as a GitHub App rather than the built-in GITHUB_TOKEN.
+      # WHY: when the PR later merges, GitHub attributes the merge push to
+      # whatever actor enabled auto-merge. A merge pushed by GITHUB_TOKEN does
+      # NOT fire push/workflow_run-triggered workflows, so a staging deploy wired
+      # to trunk pushes silently never runs — the auto-merge<->deploy trigger gap
+      # in the deployment standard (DEV-514). An App-authored merge DOES trigger
+      # those workflows, closing the gap org-wide.
+      #
+      # SAFETY: this is a *required* check that must always go green or it would
+      # deadlock merge. The token mint is therefore best-effort (continue-on-error)
+      # and the enable step falls back to github.token when the App secrets are
+      # absent or minting fails — identical to today's behavior, never a deadlock.
+      # The App must have contents:write + pull-requests:write and be installed on
+      # the repo for the deploy-triggering path to take effect; otherwise it
+      # transparently degrades to the old GITHUB_TOKEN behavior.
+      - name: Mint app token (optional — enables deploy-triggering merges)
+        id: apptoken
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.ORG_CI_AUDIT_APP_ID }}
+          private-key: ${{ secrets.ORG_CI_AUDIT_APP_PRIVATE_KEY }}
       - name: Enable auto-merge (squash)
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.apptoken.outputs.token || github.token }}
+          MERGE_ACTOR: ${{ steps.apptoken.outputs.token && 'github-app (merges trigger deploys)' || 'github-token fallback (merges will NOT trigger deploys)' }}
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
+          echo "::notice::Auto-merge enable actor: ${MERGE_ACTOR}"
           # Best-effort: never fail this (required) check. Already-merged,
           # already-closed, or auto-merge-not-permitted all resolve to a green
           # no-op so merge is never deadlocked by this job.
