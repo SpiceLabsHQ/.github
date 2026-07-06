@@ -977,7 +977,16 @@ jobs:
 
           gh pr edit "${PR_NUMBER}" --add-label "pepper-needs-review" --remove-label "pepper-cooking" || true
 
-          gh pr comment "${PR_NUMBER}" --body 'Pepper did not finish this review — the run stopped (timeout, error, or hit its turn limit) before a verdict was posted, so no approval or change request was recorded. Flagging for a human set of eyes. When the PR is ready, comment `@pepper review` to run me again. — Pepper' || true
+          # This body MUST NOT contain the trigger phrase (default `@pepper`).
+          # It is posted by the Pepper App bot via `gh pr comment`, which fires
+          # an `issue_comment` event; a body matching `contains(body, @pepper)`
+          # would spawn a fresh workflow run every time Pepper escalates. The
+          # review job then skips (the bot's author_association is NONE, failing
+          # the OWNER/MEMBER gate), so it doesn't loop — but each spawned run
+          # churns the `pepper-pr-review-<PR>` concurrency group and can evict a
+          # legitimately pending review. So invite the re-run generically, and
+          # never hardcode the (configurable) trigger phrase here. DEV-526.
+          gh pr comment "${PR_NUMBER}" --body 'Pepper did not finish this review — the run stopped (timeout, error, or hit its turn limit) before a verdict was posted, so no approval or change request was recorded. Flagging for a human set of eyes. Re-request a review from Pepper once the PR is ready and I will take another pass. — Pepper' || true
 
           # Best-effort team review request. Tolerate GitHub rejecting it (the
           # team lacks access to this repo, or the token can't request teams) —
