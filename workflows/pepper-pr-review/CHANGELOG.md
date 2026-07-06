@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.0](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.3.0...pepper-pr-review-v1.4.0) (2026-07-06)
+
+
+### Features
+
+* **pepper-pr-review:** feed diff coverage to review as a non-gating input (DEV-526) ([081b9e2](https://github.com/SpiceLabsHQ/.github/commit/081b9e24ceb48ff73d43481a26db4bdfe9c2fe6e))
+
 ## [1.3.0](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.2.1...pepper-pr-review-v1.3.0) (2026-07-06)
 
 
