@@ -89,10 +89,11 @@ on:
       coverage_review_enabled:
         description: |
           Opt in to the DEV-526 diff-coverage note. OFF by default so a repo that does not publish coverage
-          pays nothing — no poll, no added review latency, no behavior change. Turn it on ONLY in repos that
-          add the `coverage-surface` step to their test job (they upload `coverage_artifact`); leaving it off
-          for everyone else keeps Pepper reviewing immediately as before. When off, the poll and note steps are
-          skipped entirely and Pepper reviews off the diff.
+          pays nothing — no poll and no added review latency. Turn it on ONLY in repos that add the
+          `coverage-surface` step to their test job (they upload `coverage_artifact`); leaving it off for
+          everyone else keeps Pepper reviewing immediately as before. When off, the poll and note steps are
+          skipped entirely; the review prompt still carries the (inert) coverage-signal guidance, which the
+          model is told to ignore when no note is present, so Pepper reviews off the diff exactly as before.
         required: false
         type: boolean
         default: false
@@ -830,12 +831,24 @@ jobs:
           # read-scoped. If that key is ever swapped for a write-capable one,
           # narrow this back to explicit read tools (or add the Linear write/
           # delete tools to REVIEW_DISALLOWED below) before merging the swap.
-          LINEAR_TOOLS='mcp__linear'
+          #
+          # Syntax: `mcp__<server>__*` is the documented glob for "every tool
+          # from this server" (code.claude.com/docs/en/permissions — allow rules
+          # accept a tool glob only after a literal `mcp__<server>__` prefix). A
+          # bare `mcp__linear` is not the validated form.
+          LINEAR_TOOLS='mcp__linear__*'
           ON_DEMAND_TOOLS='Edit,Write,Bash'
           # claude-code-action auto-includes built-in tools (Read, and the file
           # writers) regardless of --allowedTools. To keep review mode truly
           # read-only on the filesystem we must DENY the writers explicitly.
-          REVIEW_DISALLOWED='Edit,Write,MultiEdit,NotebookEdit'
+          # We also deny the Linear MCP MUTATION tools by glob. LINEAR_TOOLS
+          # above grants the whole `mcp__linear__*` server for maintenance-free
+          # reads; these deny globs (deny beats allow) block writes even if a
+          # consumer's LINEAR_API_KEY is ever mis-scoped to allow them — so the
+          # read-only guarantee no longer rests on the key alone. Every Linear
+          # mutation is save_/create_/delete_/prepare_-prefixed; reads (get_/
+          # list_/search_) stay allowed.
+          REVIEW_DISALLOWED='Edit,Write,MultiEdit,NotebookEdit,mcp__linear__save_*,mcp__linear__create_*,mcp__linear__delete_*,mcp__linear__prepare_*'
           # Reasoning effort. Claude Code's agentic default is `xhigh`, which is
           # tuned for the hardest coding tasks and pays a per-turn latency tax on
           # every one of a review's ~26 turns. A PR review is analytically demanding
