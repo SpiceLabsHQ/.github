@@ -98,7 +98,10 @@ second is skipped and logged rather than creating a duplicate.
 - **Listing a personal user's repos** works with a fine-grained PAT
   (Metadata: read) on that account.
 - **Linear:** create a personal API key in Linear → Settings → Security & access →
-  Personal API keys, and store it as a secret.
+  Personal API keys, and store it as a secret. It **must have write scope** — this
+  action creates and updates labels, so a read-only key fails every mutation with
+  `Invalid scope: write required`. Because it needs write access, keep it as a
+  dedicated secret rather than reusing a shared read-only key (least privilege).
 
 ## Requirements
 
