@@ -14,24 +14,35 @@
 # the drifted fields in a single atomic call (so merge-method invariants — GitHub
 # requires >=1 method enabled — never transiently break).
 #
+# Team access (DEV-525) is a SECOND, separate pass. Granting a team access to a
+# repo is not a repo-update field but its own endpoint
+# (PUT /orgs/{org}/teams/{slug}/repos/{owner}/{repo}), so the `team_access`
+# section is reconciled independently with FLOOR semantics: ensure each team has
+# at least the configured permission, never downgrade a higher existing grant.
+# This is what keeps the `reviewers` team's read access (Pepper's escalation
+# target) present on every repo as new repos are added.
+#
 # Two modes:
 #   audit  (default) — dry-run: report drift, make no writes.
-#   apply            — reconcile: PATCH drifted repos.
+#   apply            — reconcile: PATCH drifted repos / grant missing team access.
 #
 # Exceptions follow the `ci-exception` custom-property model (see the CI floor
 # rulesets). The property named by `options.exception_property` opts a repo out:
-#   "all"/"*"             → skip the whole repo
+#   "all"/"*"             → skip the whole repo (both passes)
 #   "<group>"             → skip that policy group only
-#   "<group>,<group>,..." → skip each listed group
+#   "team_access"         → skip the team-access pass only
+#   "<group>,<group>,..." → skip each listed group / pass
 #   unset/empty           → fully reconciled
-# `options.exclude_forks: true` additionally skips every fork.
+# `options.exclude_forks: true` additionally skips every fork (both passes).
 #
 # Output: a Markdown reconciliation report on stdout (drift + actions). The
 # workflow tees it into the job summary.
 #
-# Requires: gh (authenticated with an org-scoped token carrying Administration:
-# write for apply mode, plus Metadata read and org Custom-properties read), jq,
-# and yq (mikefarah) to parse the YAML config. Set GH_TOKEN in the environment.
+# Requires: gh (authenticated with an org-scoped token), jq, and yq (mikefarah)
+# to parse the YAML config. Set GH_TOKEN in the environment. Token permissions:
+# Administration write (policies apply) + Metadata read + org Custom-properties
+# read, and — for the team_access pass — org Members read (audit) / write (apply,
+# to manage a team's repos).
 #
 # Usage:
 #   scripts/org-repo-settings-reconcile.sh [--org SpiceLabsHQ] \
@@ -68,8 +79,13 @@ exc_prop="$(printf '%s' "$cfg" | jq -r '.options.exception_property // "repo-set
 # Group -> {field: value} map, and the flattened field -> value desired map.
 groups_json="$(printf '%s' "$cfg" | jq -c '.policies // {}')"
 group_names="$(printf '%s' "$groups_json" | jq -r 'keys[]')"
-if [ -z "$group_names" ]; then
-  echo "config ${CONFIG} declares no policies — nothing to reconcile" >&2
+
+# team slug -> {permission: level} map for the team-access pass (DEV-525).
+team_access_json="$(printf '%s' "$cfg" | jq -c '.team_access // {}')"
+team_slugs="$(printf '%s' "$team_access_json" | jq -r 'keys[]')"
+
+if [ -z "$group_names" ] && [ -z "$team_slugs" ]; then
+  echo "config ${CONFIG} declares no policies and no team_access — nothing to reconcile" >&2
   exit 2
 fi
 
@@ -107,6 +123,8 @@ applied_report=""   # per-repo apply confirmations
 skip_report=""      # exception/fork skips
 n_scanned=0; n_conformant=0; n_drift=0; n_applied=0; n_skipped=0; n_errors=0
 
+# --- Pass 1: repo-update-field policies (skipped entirely if none declared) -
+if [ -n "$group_names" ]; then
 while IFS= read -r repo; do
   [ -z "$repo" ] && continue
   n_scanned=$((n_scanned + 1))
@@ -165,6 +183,101 @@ while IFS= read -r repo; do
     drift_report="${drift_report}- \`${repo}\` — drift:\n${diff_lines}\n"
   fi
 done < <(printf '%s' "$repos_json" | jq -r '.[].name' | sort)
+fi
+
+# --- Pass 2: team repo-access (DEV-525) -------------------------------------
+# Floor semantics: ensure each configured team has AT LEAST the desired
+# permission on every reconciled repo; never downgrade a higher existing grant.
+# Team access is a different endpoint than repo-update fields
+# (PUT /orgs/{org}/teams/{slug}/repos/{owner}/{repo}), reconciled here as a
+# separate pass sharing the repo inventory + fork/exception skips from above.
+team_report=""
+n_team_scanned=0; n_team_conformant=0; n_team_drift=0; n_team_granted=0; n_team_skipped=0; n_team_errors=0
+
+perm_rank() {
+  case "$1" in
+    pull) echo 1 ;; triage) echo 2 ;; push) echo 3 ;; maintain) echo 4 ;; admin) echo 5 ;;
+    *) echo 0 ;;
+  esac
+}
+
+while IFS= read -r slug; do
+  [ -z "$slug" ] && continue
+  want_perm="$(printf '%s' "$team_access_json" | jq -r --arg s "$slug" '.[$s].permission // "pull"')"
+  want_rank="$(perm_rank "$want_perm")"
+  if [ "$want_rank" -eq 0 ]; then
+    n_team_errors=$((n_team_errors + 1))
+    team_report="${team_report}- team \`${slug}\` — ⚠️ invalid permission \`${want_perm}\` (want pull|triage|push|maintain|admin)\n"
+    continue
+  fi
+
+  # One paginated call per team: the repos it can access, with permission booleans.
+  # Capture gh's exit status explicitly (via `if`, not a pipe): on 404 — team
+  # missing or unreadable — gh emits an error body that must NOT be slurped and
+  # mistaken for a repo list, so blank it and let the not-readable branch handle
+  # it. Empty is otherwise ambiguous (no grants yet vs. missing team), so the
+  # branch confirms the team exists before treating [] as "team has zero repos".
+  if team_repos_pages="$(gh api "orgs/${ORG}/teams/${slug}/repos?per_page=100" --paginate --jq '[.[] | {name, permissions}]' 2>/dev/null)"; then
+    team_repos="$(printf '%s' "$team_repos_pages" | jq -cs 'add // []' 2>/dev/null || true)"
+  else
+    team_repos=""
+  fi
+  if [ -z "$team_repos" ]; then
+    if ! gh api "orgs/${ORG}/teams/${slug}" >/dev/null 2>&1; then
+      # Can't read the team at all — either it doesn't exist, or the token lacks
+      # org Members: read (the team-access feature simply isn't provisioned yet).
+      # Warn and SKIP rather than failing the whole reconcile red — mirrors the
+      # workflow's credential guard, which no-ops with a warning. A real grant
+      # failure in apply mode (below) still counts as an error and goes red.
+      n_team_skipped=$((n_team_skipped + 1))
+      team_report="${team_report}- team \`${slug}\` — ⚠️ not readable in org \`${ORG}\` — skipped (missing team, or token lacks org Members: read)\n"
+      continue
+    fi
+    team_repos='[]'
+  fi
+
+  while IFS= read -r repo; do
+    [ -z "$repo" ] && continue
+    is_fork="$(printf '%s' "$repos_json" | jq -r --arg r "$repo" '.[] | select(.name==$r) | .fork')"
+    exc="$(printf '%s' "$props_json" | jq -r --arg r "$repo" '(.[] | select(.name==$r) | .exc) // ""')"
+    skips="$(skipped_groups "$exc")"
+
+    # Same whole-repo skips as pass 1, plus the `team_access` pass opt-out.
+    [ "$exclude_forks" = "true" ] && [ "$is_fork" = "true" ] && continue
+    printf '%s\n' "$skips" | grep -qx '\*ALL\*' && continue
+    printf '%s\n' "$skips" | grep -qx 'team_access' && continue
+
+    n_team_scanned=$((n_team_scanned + 1))
+    # Highest permission the team currently holds on this repo (0 = no access).
+    cur_rank="$(printf '%s' "$team_repos" | jq -r --arg r "$repo" '
+      (.[] | select(.name==$r) | .permissions) as $p
+      | if   $p == null  then 0
+        elif $p.admin    then 5
+        elif $p.maintain then 4
+        elif $p.push     then 3
+        elif $p.triage   then 2
+        elif $p.pull     then 1
+        else 0 end')"
+    [ -z "$cur_rank" ] && cur_rank=0
+
+    if [ "$cur_rank" -ge "$want_rank" ]; then
+      n_team_conformant=$((n_team_conformant + 1)); continue
+    fi
+    n_team_drift=$((n_team_drift + 1))
+
+    if [ "$MODE" = "apply" ]; then
+      if gh api -X PUT "orgs/${ORG}/teams/${slug}/repos/${ORG}/${repo}" -f permission="${want_perm}" >/dev/null 2>&1; then
+        n_team_granted=$((n_team_granted + 1))
+        team_report="${team_report}- \`${repo}\` — granted team \`${slug}\` = \`${want_perm}\`\n"
+      else
+        n_team_errors=$((n_team_errors + 1))
+        team_report="${team_report}- \`${repo}\` — ⚠️ failed to grant team \`${slug}\` = \`${want_perm}\` (needs org Members: write?)\n"
+      fi
+    else
+      team_report="${team_report}- \`${repo}\` — team \`${slug}\` below \`${want_perm}\` (would grant)\n"
+    fi
+  done < <(printf '%s' "$repos_json" | jq -r '.[].name' | sort)
+done < <(printf '%s\n' "$team_slugs")
 
 # --- 5. Report --------------------------------------------------------------
 printf '## Summary\n\n'
@@ -185,5 +298,15 @@ if [ -n "$drift_report" ]; then printf '%b' "$drift_report"; else printf '_No dr
 printf '\n## Skipped (exceptions)\n\n'
 if [ -n "$skip_report" ]; then printf '%b' "$skip_report"; else printf '_No repos excepted._\n'; fi
 
-# Non-zero exit if apply hit errors, so the scheduled run surfaces red on failure.
-[ "$n_errors" -eq 0 ] || exit 1
+# Team-access pass report (DEV-525). Only shown when team_access is configured.
+if [ -n "$team_slugs" ]; then
+  printf '\n## Team access\n\n'
+  printf '| Scanned | Conformant | Drifted | Granted | Skipped | Errors |\n'
+  printf '|--:|--:|--:|--:|--:|--:|\n'
+  printf '| %d | %d | %d | %d | %d | %d |\n\n' \
+    "$n_team_scanned" "$n_team_conformant" "$n_team_drift" "$n_team_granted" "$n_team_skipped" "$n_team_errors"
+  if [ -n "$team_report" ]; then printf '%b' "$team_report"; else printf '_Every reconciled repo already satisfies the desired team access._\n'; fi
+fi
+
+# Non-zero exit if either pass hit errors, so the scheduled run surfaces red.
+[ $((n_errors + n_team_errors)) -eq 0 ] || exit 1

@@ -2,7 +2,9 @@ name: Org Repo-Settings Reconcile
 
 # General-purpose declarative repo-settings reconciler (DEV-519). Reconciles
 # every non-archived org repo to the desired-state in repo-settings.yml via
-# scripts/org-repo-settings-reconcile.sh. First policy: squash-only merge.
+# scripts/org-repo-settings-reconcile.sh. Policies: squash-only merge, plus a
+# team-access pass (DEV-525) that keeps the `reviewers` team's read access
+# present org-wide (Pepper's escalation target — see prompts/pr-review-default.md).
 #
 # WHY A WORKFLOW, NOT A RULESET: rulesets have no merge-method rule, and the
 # per-repo merge flags (allow_squash_merge / allow_merge_commit /
@@ -21,9 +23,14 @@ name: Org Repo-Settings Reconcile
 # runtime from a GitHub App (org-owned), so there is no long-lived PAT to rotate.
 # The App must be granted, org-wide:
 #       Repository: Administration = read/write, Metadata = read
-#       Organization: Custom properties = read
-# (Administration:write is what lets it PATCH merge settings; it is broader than
-# the read-only org-ci-audit App, so this uses its OWN dedicated App + secrets.)
+#       Organization: Custom properties = read, Members = read/write
+# (Administration:write is what lets it PATCH merge settings; Members:write lets
+# it manage a team's repo access for the team-access pass — DEV-525. Both are
+# broader than the read-only org-ci-audit App, so this uses its OWN dedicated App
+# + secrets.) NOTE: adding Members to an existing install requires the org owner
+# to approve the new permission before the team-access pass can read/grant; until
+# then that pass WARNS AND SKIPS (it does not fail the run red — an unreadable
+# team is counted as skipped, not an error) while the merge policies reconcile.
 # Store the App's credentials as two secrets on THIS repo:
 #       ORG_REPO_SETTINGS_APP_ID           = the App's numeric App ID
 #       ORG_REPO_SETTINGS_APP_PRIVATE_KEY  = the App's private-key .pem contents
