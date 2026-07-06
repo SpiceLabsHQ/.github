@@ -169,6 +169,10 @@ The bot operates in two modes:
 | `standards_path` | `.pepper/pr-review-standards.md` | Override if your repo stores standards elsewhere |
 | `reviewers_team` | `reviewers` | Slug of the org team Pepper requests review from on escalation. Must be a team in the repo's own org with read access to the repo; the App token needs org `members: read` to resolve it |
 | `show_full_output` | `false` | When `true`, Pepper's tool calls + reasoning + tool results stream into Actions logs. Useful for diagnosing permission denials or wasted turns. **Public-repo callers: anyone who can see the Actions run sees the full output** — use only on debug branches |
+| `coverage_artifact` | `coverage-report` | Artifact name Pepper polls for to build its non-gating diff-coverage note (DEV-526). Must match the `artifact-name` on the [`coverage-surface`](#diff-coverage--pepper-coverage-surface) step in the repo's test job. Repos that don't emit it fall back cleanly |
+| `coverage_poll_timeout_seconds` | `1200` | Ceiling on the **shell-only** wait for the coverage artifact (no inference runs during the wait). The poll also gives up early once no CI run for the head SHA is still active, so no-coverage repos resolve fast |
+| `coverage_poll_grace_seconds` | `45` | Minimum wait before the "no active CI runs" early-exit can fire — lets sibling CI register after the PR event |
+| `coverage_poll_interval_seconds` | `15` | Seconds between coverage-artifact poll attempts |
 
 **4. Required secrets** (set once at the org level — they don't auto-inherit, the caller passes them explicitly):
 
@@ -187,6 +191,38 @@ The bot operates in two modes:
 **6. Bulk rollout:** `scripts/rollout-pepper-pr-review.sh` opens an adoption PR in every non-archived org repo. Defaults to dry-run; pass `--apply` to actually create PRs.
 
 **Versioning:** Callers pin with `@pepper-pr-review-v1` (or harden with an immutable `pepper-pr-review-vX.Y.Z` tag / commit SHA — see [Versioning & releases](#versioning--releases)); the reusable workflow pins the underlying `anthropics/claude-code-action` ref. Action upgrades happen in one place.
+
+#### Diff coverage → Pepper (`coverage-surface`)
+
+DEV-526 feeds **diff coverage** into Pepper's review as a **non-gating** input, per [ADR-0004]. No coverage percentage is a required check and no `%`-bar auto-fails CI. Coverage still reaches the verdict: Pepper's review is itself a required gate, and the coverage note is an input to it, so Pepper **may withhold approval** when the signal shows new logic that, in its judgment, should be tested and isn't. The gate is the reviewer's judgment informed by coverage — never a coverage number.
+
+One coverage file produces three surfaces:
+
+| Surface | Where | Runs in |
+|---|---|---|
+| Diff-coverage note in Pepper's review | review prompt | Pepper job (polls the artifact) |
+| Inline `::warning::` annotations on uncovered changed lines | Files-changed tab | test job (local disk) |
+| Diff-coverage table | Actions job summary | test job (local disk) |
+
+**Producer (per repo, one-time):** emit a coverage file in any [`diff-cover`](https://github.com/Bachmann1234/diff_cover)-supported format (LCOV / Cobertura / Clover / JaCoCo), then add the shared [`coverage-surface`](.github/actions/coverage-surface) composite action as one step in your **test job**. Copy-paste-ready: [`examples/caller-coverage-surface.yml`](examples/caller-coverage-surface.yml). Every runner already has the flag — no format conversion, no per-runner parser:
+
+| Runner | Emit flag | Format |
+|---|---|---|
+| Vitest | `--coverage.reporter=lcov` | LCOV |
+| pytest | `--cov-report=xml` | Cobertura |
+| Go | `go test -coverprofile` → gocover-cobertura | Cobertura |
+| PHPUnit | `--coverage-clover clover.xml` | Clover |
+| Pester | `-CodeCoverage` | JaCoCo |
+
+Rollout order is TS / Python / Go first, then PHP and PowerShell — but the action is language-agnostic, so any of the above works today.
+
+**Consumer (already wired):** `pepper-pr-review` polls for the `coverage-report` artifact by the PR head SHA with a **shell-only** loop (no inference runs while waiting — tests are the longest CI task, so Pepper never hard-`needs:` them), then runs `diff-cover` once and folds the note into the review prompt. Missing artifact, timeout, or an unsupported format → Pepper reviews off the diff as before. The poll gives up early once no CI run for the head SHA is still active, so repos without coverage don't burn the full timeout. Tune with the `coverage_poll_*` inputs above.
+
+**Non-gating, enforced by design:** the composite action is fail-open — a missing file, unsupported format, non-PR event, or `diff-cover` error each downgrades to a `::warning::` and exits `0`. A coverage hiccup can never block a merge.
+
+**Versioning:** `coverage-surface` is a composite action (not a reusable workflow), consumed via `uses: SpiceLabsHQ/.github/.github/actions/coverage-surface@<ref>`. Pin it to a commit SHA the same way you pin any third-party action.
+
+[ADR-0004]: https://linear.app/spicelabshq/issue/DEV-526
 
 ### Actions Audit (`actions-audit.yml`)
 

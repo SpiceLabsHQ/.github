@@ -1,0 +1,84 @@
+name: 'Coverage surface'
+description: >-
+  Surface diff coverage without gating (DEV-526, ADR-0004). Runs one step in a
+  repo's test job right after coverage is produced: writes a diff-coverage table
+  to the job summary, emits ::warning:: annotations on uncovered changed lines,
+  and uploads the raw coverage file as an artifact for Pepper's review consumer.
+  No numeric threshold ever fails the build — the artifact feeds the reviewer's
+  judgment, it does not gate the merge.
+author: 'SpiceLabsHQ'
+branding:
+  icon: umbrella
+  color: yellow
+
+inputs:
+  coverage-file:
+    description: >-
+      Path to the coverage report the test run produced. Must be a
+      diff-cover-supported format: LCOV (lcov.info), Cobertura XML, Clover XML,
+      or JaCoCo XML. diff-cover auto-detects the format from the file contents.
+    required: true
+  base-ref:
+    description: >-
+      Branch to compare against for the diff. Defaults to the PR base branch.
+      On non-pull_request events this is empty and the action no-ops the
+      human surfaces (there is no diff to cover).
+    required: false
+    default: ${{ github.event.pull_request.base.ref }}
+  artifact-name:
+    description: >-
+      Name of the uploaded artifact carrying the raw coverage file. Pepper's
+      review consumer polls for this exact name, so keep it aligned with the
+      `coverage_artifact` input on pepper-pr-review (both default to
+      `coverage-report`).
+    required: false
+    default: coverage-report
+  upload-artifact:
+    description: >-
+      Upload the coverage file as an artifact for the Pepper consumer. Set to
+      "false" for runs that should surface to humans only (e.g. non-PR pushes).
+    required: false
+    default: 'true'
+  diff-cover-version:
+    description: 'Pinned diff-cover version installed for the run.'
+    required: false
+    default: '10.3.0'
+
+outputs:
+  percent-covered:
+    description: 'Percent of changed lines covered (100 when there is no diff).'
+    value: ${{ steps.surface.outputs.percent-covered }}
+  changed-lines:
+    description: 'Number of changed executable lines diff-cover considered.'
+    value: ${{ steps.surface.outputs.changed-lines }}
+  uncovered-lines:
+    description: 'Number of changed lines with no coverage.'
+    value: ${{ steps.surface.outputs.uncovered-lines }}
+  surfaced:
+    description: '"true" when a diff-coverage table was produced, else "false".'
+    value: ${{ steps.surface.outputs.surfaced }}
+
+runs:
+  using: composite
+  steps:
+    - id: surface
+      shell: bash
+      env:
+        INPUT_COVERAGE_FILE: ${{ inputs.coverage-file }}
+        INPUT_BASE_REF: ${{ inputs.base-ref }}
+        INPUT_DIFF_COVER_VERSION: ${{ inputs.diff-cover-version }}
+      run: ${{ github.action_path }}/surface.sh
+
+    # Upload the RAW coverage file (not the diff-cover output). Pepper's review
+    # job runs diff-cover itself against origin/<base>, so it needs the source
+    # report, not a pre-rendered table. Only the Pepper consumer needs this
+    # artifact — the summary and annotations above already ran off local disk.
+    - name: Upload coverage report for Pepper
+      if: ${{ inputs.upload-artifact == 'true' && steps.surface.outputs.surfaced == 'true' }}
+      # actions/upload-artifact — first-party, allowed to track a major tag.
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ inputs.coverage-file }}
+        if-no-files-found: warn
+        retention-days: 1

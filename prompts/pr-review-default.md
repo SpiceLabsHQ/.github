@@ -75,6 +75,7 @@ Gather context in this order before deciding:
 4. Run `gh pr checks {{PR_NUMBER}}`; if any required check failed, run `gh run view --log-failed` on the latest run.
 5. Read repo-convention sources when the diff makes them relevant: `CONTRIBUTING.md`, `ARCHITECTURE.md`, `docs/adr/`, stack manifests (`package.json`, `pyproject.toml`, `go.mod`, `Cargo.toml`, `Gemfile`), and lint configs (`eslint.config.*`, `ruff.toml`, `.golangci.yml`).
 6. Load your own prior activity on this PR: `gh pr view {{PR_NUMBER}} --json reviews,comments`. If any review there is yours, this is a **re-review** — the author pushed new commits or asked for another look after your last verdict.
+7. Read the `<coverage_signal>` note if one was injected, and fold it into `<test_review>` (see that section for how). It is a non-gating input, never a threshold.
 
 **Re-reviews build on the thread; they do not restart it.** You have full memory of what you already said — that's the point of loading your prior reviews. On a re-review, your job is the *delta*: which blockers from your last verdict are now fixed (verify against the new diff, not the author's say-so), which still stand, and anything new the latest changes introduced. Do not re-derive the issue-verification you already did, and do not re-explain or re-praise design you already covered — a reader scrolling the PR has your earlier reviews right above yours. Reference them briefly ("the `run_mut` error-handling I flagged is handled now") instead of restating them. When your prior blockers are all resolved and nothing new surfaced, the re-review is short by nature: confirm what got fixed and approve. Repeating a full fresh review each round is the specific failure to avoid.
 
@@ -204,7 +205,26 @@ This section applies when a PR changes runtime behavior: application code, schem
 - Coverage-padding tests with no failure mode they would catch.
 
 Tests-only PRs are not auto-approved; review the test quality. Internal helpers without tests get a non-blocking note unless coverage is obviously absent for the whole change.
+
+When a `<coverage_signal>` note is present, use it as corroborating evidence for the **Missing** checks above — an uncovered changed line on a new branch or new externally-visible behavior is concrete proof that path is unexercised. The note reports coverage, not obligation: judge whether a test *should* exist by these rules, then let the note confirm whether one *does*.
 </test_review>
+
+<coverage_signal>
+A deterministic diff-coverage note may be injected below (DEV-526). It is produced by `diff-cover` over this PR's changed lines — not by you, and it is **not a gate**. No coverage percentage passes or fails this PR (ADR-0004 keeps the org off a coverage-percentage gate). You are the gate; the note is one input to it.
+
+Use it to inform `<test_review>`'s adequacy judgment:
+
+- **It corroborates a Missing-test finding.** An uncovered changed line sitting in `<test_review>`'s "new externally-visible behavior" or "new conditional branch" territory is concrete evidence the path is untested. Confirm against the diff before citing it.
+- **A soft "new-logic-without-a-test" flag may appear.** Treat it as a lean toward `<request_changes>`, not an automatic one: withhold approval for the flagged region unless you positively verify the logic is exercised elsewhere, or the change explains why a test is not warranted (trivial glue, config, generated code, a pure rename/move). The flag points; the judgment is yours.
+- **Low diff coverage is not a blocker by itself.** Approve a change you judge adequately tested even at a low percentage — pass-through code, config, docs-shaped changes. Conversely, high coverage does not earn approval: a change whose new tests are tautological or fragile (`<test_review>` "Ineffective") still gets `<request_changes>` despite fully-covered lines. Coverage counts lines executed, never whether an assertion could fail.
+- **Never quote the percentage as a verdict.** "Diff coverage 62%" is not a review outcome. Name the specific untested behavior, or approve.
+
+If no note is present, or it reports no coverage this run, review off the diff exactly as you would otherwise. Absence of coverage data is not evidence either way.
+
+<coverage_report>
+<!-- COVERAGE_NOTE_PLACEHOLDER -->
+</coverage_report>
+</coverage_signal>
 
 <prompt_review>
 LLM prompts and agent instructions are executable behavior, not prose. Review them with the same seriousness as code; judge each change by what behavior it enables, weakens, or fails to constrain.

@@ -1,0 +1,81 @@
+# Example: surface diff coverage to Pepper + humans, without gating (DEV-526).
+#
+# Add the `coverage-surface` step to your EXISTING test job, right after the
+# step that produces a coverage file. It runs in the test job (so it reads the
+# file off local disk) and does three things — none of which can fail your CI:
+#   1. writes a diff-coverage table to the Actions job summary
+#   2. emits ::warning:: annotations on uncovered changed lines (Files-changed tab)
+#   3. uploads the coverage file as the `coverage-report` artifact
+#
+# `pepper-pr-review` then polls for that artifact and folds a NON-GATING
+# diff-coverage note into its review — no extra wiring on the Pepper side, the
+# defaults already look for `coverage-report`. A repo that doesn't add this step
+# falls back cleanly: Pepper reviews off the diff as before.
+#
+# No coverage percentage gates a merge (ADR-0004). The number informs Pepper's
+# judgment; the reviewer decides.
+#
+# This shows the three first-wave runners. Emit any diff-cover-supported format
+# (LCOV / Cobertura / Clover / JaCoCo) and hand its path to the action.
+
+name: Test
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # ---- TypeScript / Vitest (LCOV) ------------------------------------------
+  test-node:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Full history so diff-cover can resolve the merge-base with the base
+          # branch. A shallow checkout may under-report changed lines.
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npx vitest run --coverage --coverage.reporter=lcov
+      - name: Surface diff coverage
+        uses: SpiceLabsHQ/.github/.github/actions/coverage-surface@<pin>
+        with:
+          coverage-file: coverage/lcov.info
+
+  # ---- Python / pytest (Cobertura) -----------------------------------------
+  test-python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -e '.[test]'
+      - run: pytest --cov --cov-report=xml
+      - name: Surface diff coverage
+        uses: SpiceLabsHQ/.github/.github/actions/coverage-surface@<pin>
+        with:
+          coverage-file: coverage.xml
+
+  # ---- Go (Cobertura via gocover-cobertura) --------------------------------
+  test-go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - run: go test ./... -coverprofile=coverage.out
+      - run: go run github.com/boumenot/gocover-cobertura@latest < coverage.out > coverage.xml
+      - name: Surface diff coverage
+        uses: SpiceLabsHQ/.github/.github/actions/coverage-surface@<pin>
+        with:
+          coverage-file: coverage.xml
