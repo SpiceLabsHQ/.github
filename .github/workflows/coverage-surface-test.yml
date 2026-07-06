@@ -1,0 +1,26 @@
+name: Coverage surface — test
+
+# Runs the coverage-surface fixture tests (the note.jq renderer + annotate.py,
+# the logic behind the DEV-526 diff-coverage note) on any PR that touches the
+# action, so the test-file classifier, truncation, soft-flag threshold, and
+# annotation output stay pinned down in CI.
+
+on:
+  pull_request:
+    paths:
+      - ".github/actions/coverage-surface/**"
+      - ".github/workflows/coverage-surface-test.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  fixtures:
+    name: note.jq + annotate.py fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Run coverage-surface fixture tests
+        run: .github/actions/coverage-surface/test/coverage_surface_test.sh

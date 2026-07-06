@@ -86,6 +86,51 @@ on:
         required: false
         type: string
         default: renovate,dependabot
+      coverage_review_enabled:
+        description: |
+          Opt in to the DEV-526 diff-coverage note. OFF by default so a repo that does not publish coverage
+          pays nothing — no poll and no added review latency. Turn it on ONLY in repos that add the
+          `coverage-surface` step to their test job (they upload `coverage_artifact`); leaving it off for
+          everyone else keeps Pepper reviewing immediately as before. When off, the poll and note steps are
+          skipped entirely; the review prompt still carries the (inert) coverage-signal guidance, which the
+          model is told to ignore when no note is present, so Pepper reviews off the diff exactly as before.
+        required: false
+        type: boolean
+        default: false
+      coverage_artifact:
+        description: |
+          Name of the artifact carrying a repo's coverage file (DEV-526). When `coverage_review_enabled` is on,
+          the job polls for this artifact by the PR head SHA, runs `diff-cover` against the base, and folds a NON-GATING
+          diff-coverage note into the review prompt. Must match the `artifact-name` on the `coverage-surface`
+          composite action the repo adds to its test job. A repo that never uploads it falls back cleanly
+          (Pepper reviews off the diff as today). No coverage number ever gates the merge — the note only
+          informs the reviewer's judgment (ADR-0004).
+        required: false
+        type: string
+        default: coverage-report
+      coverage_poll_timeout_seconds:
+        description: |
+          Absolute ceiling on how long the review job waits for the coverage artifact. The wait is a SHELL
+          poll — no inference is running yet, so this is build minutes, not model time (tests are the longest
+          CI task, so Pepper must not hard-`needs:` them). The poll also gives up early once no CI run for the
+          head SHA is still active, so repos that never emit coverage resolve fast instead of burning the
+          full timeout.
+        required: false
+        type: number
+        default: 1200
+      coverage_poll_grace_seconds:
+        description: |
+          Minimum time to keep polling before the "no active CI runs" early-exit may fire. Gives sibling CI a
+          moment to register after the PR event so the poll doesn't give up in the race window before tests
+          have started.
+        required: false
+        type: number
+        default: 45
+      coverage_poll_interval_seconds:
+        description: Seconds between coverage-artifact poll attempts.
+        required: false
+        type: number
+        default: 15
     secrets:
       AWS_CLAUDE_BEDROCK_ROLE_ARN:
         description: ARN of the AWS role to assume via OIDC for Bedrock access.
@@ -389,6 +434,199 @@ jobs:
           git config user.email "${BOT_USER_ID}+${BOT_LOGIN}@users.noreply.github.com"
           echo "Switched to PR branch: ${HEAD_REF} (committer: ${BOT_LOGIN})"
 
+      # Coverage consumer, part 1 — SHELL-ONLY poll (DEV-526). No inference is
+      # running yet, so waiting here costs build minutes, not model time. Wait
+      # (bounded) for the repo's test job to upload its coverage artifact for
+      # THIS PR's head SHA. The artifacts API lists an artifact as soon as its
+      # upload step finishes — before the producing run completes — so this
+      # resolves the moment tests+coverage are done, not when all of CI is.
+      # Early-exit once no OTHER CI run for the head SHA is still active: nothing
+      # is left to produce the artifact, so a no-coverage repo resolves fast
+      # instead of burning the full timeout. Review mode only; a missing artifact
+      # is a clean fallback (Pepper reviews off the diff, as before).
+      - name: Poll for coverage artifact (review mode only)
+        id: coverage-poll
+        if: inputs.coverage_review_enabled && steps.mode.outputs.mode == 'review'
+        env:
+          # Default job token, not the App token: reading artifacts + run status
+          # needs only `actions: read`, which the job's permissions block already
+          # grants. Using it here keeps the coverage poll working without also
+          # requiring the Pepper App installation to carry an Actions permission.
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ARTIFACT_NAME: ${{ inputs.coverage_artifact }}
+          TIMEOUT: ${{ inputs.coverage_poll_timeout_seconds }}
+          GRACE: ${{ inputs.coverage_poll_grace_seconds }}
+          INTERVAL: ${{ inputs.coverage_poll_interval_seconds }}
+          SELF_RUN_ID: ${{ github.run_id }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+        run: |
+          set -uo pipefail
+          # pull_request carries the head SHA; an `@pepper review` comment
+          # (issue_comment) does not, so resolve it from the PR.
+          HEAD_SHA="${PR_HEAD_SHA}"
+          if [ -z "${HEAD_SHA}" ]; then
+            HEAD_SHA=$(gh pr view "${PR_NUMBER}" --repo "${REPO}" --json headRefOid --jq '.headRefOid' 2>/dev/null || true)
+          fi
+          if [ -z "${HEAD_SHA}" ]; then
+            echo "::notice::Could not resolve PR head SHA — skipping coverage poll (review continues without a coverage note)."
+            echo "found=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          START=$(date +%s)
+          DEADLINE=$(( START + TIMEOUT ))
+          ART_ID=""
+          while : ; do
+            # Server-side name filter; then match the PR head SHA and take the
+            # newest live artifact. A per-element select is pagination-safe.
+            ART_ID=$(gh api "/repos/${REPO}/actions/artifacts?per_page=100&name=${ARTIFACT_NAME}" \
+              --jq "[.artifacts[] | select(.workflow_run.head_sha == \"${HEAD_SHA}\" and .expired == false)] | sort_by(.created_at) | last | .id // empty" \
+              2>/dev/null || true)
+            if [ -n "${ART_ID}" ]; then
+              echo "Found '${ARTIFACT_NAME}' artifact (id=${ART_ID}) for ${HEAD_SHA}."
+              break
+            fi
+            NOW=$(date +%s)
+            if [ "${NOW}" -ge "${DEADLINE}" ]; then
+              echo "::notice::Coverage artifact '${ARTIFACT_NAME}' did not appear within ${TIMEOUT}s — reviewing without a coverage note."
+              break
+            fi
+            # After the grace window, give up early only when some OTHER run for
+            # this SHA has finished AND none is still active. This Pepper run is
+            # excluded so its own in_progress state can't hold the poll open
+            # forever; requiring a COMPLETED other run avoids a premature exit in
+            # the same-run layout (tests + Pepper in one workflow), where self is
+            # the only run — there we fall through to the absolute timeout and
+            # still catch the artifact once the sibling test job uploads it.
+            if [ $(( NOW - START )) -ge "${GRACE}" ]; then
+              RUNS_JSON=$(gh run list --repo "${REPO}" --commit "${HEAD_SHA}" --limit 100 --json databaseId,status 2>/dev/null || echo '[]')
+              OTHER_ACTIVE=$(printf '%s' "${RUNS_JSON}" | jq "[.[] | select((.databaseId|tostring) != \"${SELF_RUN_ID}\") | select(.status != \"completed\")] | length" 2>/dev/null || echo 1)
+              OTHER_DONE=$(printf '%s' "${RUNS_JSON}" | jq "[.[] | select((.databaseId|tostring) != \"${SELF_RUN_ID}\") | select(.status == \"completed\")] | length" 2>/dev/null || echo 0)
+              if [ "${OTHER_ACTIVE:-1}" = "0" ] && [ "${OTHER_DONE:-0}" -gt 0 ]; then
+                echo "::notice::All other CI runs for ${HEAD_SHA} finished and no '${ARTIFACT_NAME}' artifact was produced — reviewing without a coverage note."
+                break
+              fi
+            fi
+            sleep "${INTERVAL}"
+          done
+
+          if [ -z "${ART_ID}" ]; then
+            echo "found=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          # `gh api .../zip` follows the 302 to blob storage and streams the
+          # archive; it works while the producing run's other jobs still run.
+          DL_DIR="${RUNNER_TEMP}/coverage-artifact"
+          mkdir -p "${DL_DIR}"
+          if ! gh api "/repos/${REPO}/actions/artifacts/${ART_ID}/zip" > "${DL_DIR}/artifact.zip" 2>/dev/null; then
+            echo "::notice::Failed to download coverage artifact ${ART_ID} — reviewing without a coverage note."
+            echo "found=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          unzip -o -q "${DL_DIR}/artifact.zip" -d "${DL_DIR}" 2>/dev/null || true
+          COV_FILE=$(find "${DL_DIR}" -type f ! -name 'artifact.zip' | head -n1)
+          if [ -z "${COV_FILE}" ]; then
+            echo "::notice::Coverage artifact contained no file — reviewing without a coverage note."
+            echo "found=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          echo "found=true" >> "${GITHUB_OUTPUT}"
+          echo "file=${COV_FILE}" >> "${GITHUB_OUTPUT}"
+
+      # Coverage consumer, part 2 — fire deterministic tooling ONCE, after the
+      # poll resolves (DEV-526). diff-cover (not the model) computes the note;
+      # the agent later spends its inference JUDGING it, never waiting for it.
+      # Always produces a note file: the real diff-coverage note when the
+      # artifact arrived, or a "no coverage this run" marker otherwise. The note
+      # is folded into the review prompt by the Build prompt step. NON-GATING:
+      # nothing here can fail the job (`|| true` / fallbacks throughout).
+      # Fetch the standalone note renderer from .github at this workflow's own
+      # SHA (version-matched, like the prompt) so the next step runs the exact
+      # program the fixture test verifies. Coverage mode only.
+      - name: Fetch coverage note renderer (coverage mode only)
+        if: inputs.coverage_review_enabled && steps.mode.outputs.mode == 'review'
+        uses: actions/checkout@v7
+        with:
+          repository: SpiceLabsHQ/.github
+          ref: ${{ job.workflow_sha }}
+          path: .pepper-coverage-tpl
+          sparse-checkout: .github/actions/coverage-surface/note.jq
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+
+      - name: Build coverage note (review mode only)
+        id: coverage-note
+        if: inputs.coverage_review_enabled && steps.mode.outputs.mode == 'review'
+        env:
+          FOUND: ${{ steps.coverage-poll.outputs.found }}
+          COV_FILE: ${{ steps.coverage-poll.outputs.file }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          REPO: ${{ github.repository }}
+          # Default job token — only reads PR metadata (base branch). See the
+          # poll step above for why this isn't the App token.
+          GH_TOKEN: ${{ github.token }}
+          DIFF_COVER_VERSION: "10.3.0"
+        run: |
+          set -uo pipefail
+          NOTE="${RUNNER_TEMP}/coverage-note.md"
+          fallback() {
+            printf '%s\n' "_$1 Review off the diff; do not read the absence of a coverage note as either good or bad coverage._" > "${NOTE}"
+            echo "path=${NOTE}" >> "${GITHUB_OUTPUT}"
+            exit 0
+          }
+
+          [ "${FOUND}" = "true" ] && [ -n "${COV_FILE:-}" ] || \
+            fallback "No diff-coverage signal for this run (the repo published no coverage artifact, or it did not arrive in time)."
+
+          # issue_comment carries no pull_request payload, so resolve the base.
+          BASE="${BASE_REF}"
+          if [ -z "${BASE}" ]; then
+            BASE=$(gh pr view "${PR_NUMBER}" --repo "${REPO}" --json baseRefName --jq '.baseRefName' 2>/dev/null || true)
+          fi
+          [ -n "${BASE}" ] || fallback "A coverage artifact was present but the base branch could not be resolved, so diff coverage was not computed."
+
+          git fetch --no-tags --quiet origin "${BASE}" 2>/dev/null || true
+
+          # Install diff-cover only now that there IS coverage to read — a repo
+          # without coverage pays nothing. pipx is preinstalled on GitHub-hosted
+          # ubuntu; fall back to a --user pip install for other images.
+          if ! command -v diff-cover >/dev/null 2>&1; then
+            pipx install --quiet "diff-cover==${DIFF_COVER_VERSION}" >/dev/null 2>&1 \
+              || python3 -m pip install --quiet --disable-pip-version-check --user "diff-cover==${DIFF_COVER_VERSION}" >/dev/null 2>&1 \
+              || python3 -m pip install --quiet --disable-pip-version-check --user --break-system-packages "diff-cover==${DIFF_COVER_VERSION}" >/dev/null 2>&1 \
+              || true
+          fi
+          export PATH="${HOME}/.local/bin:${PATH}"
+          command -v diff-cover >/dev/null 2>&1 || \
+            fallback "A coverage artifact was present but diff-cover could not be installed, so the note was skipped."
+
+          JSON_REPORT="${RUNNER_TEMP}/diff-cover.json"
+          diff-cover "${COV_FILE}" --compare-branch "origin/${BASE}" --format "json:${JSON_REPORT}" -q 2>/dev/null || \
+            fallback "A coverage artifact was present but diff-cover could not read it against origin/${BASE} (unsupported format or diff error)."
+
+          # Render the prompt note from the JSON with the standalone note.jq
+          # program (fetched from .github at job.workflow_sha into
+          # .pepper-coverage-tpl). Running the FILE — not an inline copy — means
+          # the fixture test in .github/actions/coverage-surface/test/ exercises
+          # the exact production program, so the note logic (test-file
+          # classification, truncation, soft-flag threshold) cannot drift from
+          # what CI verifies. No percentage is ever a gate.
+          NOTE_JQ=".pepper-coverage-tpl/.github/actions/coverage-surface/note.jq"
+          [ -f "${NOTE_JQ}" ] || \
+            fallback "A coverage artifact was present but the note renderer (note.jq) was not found for this workflow version."
+          jq -r -f "${NOTE_JQ}" "${JSON_REPORT}" > "${NOTE}" 2>/dev/null || \
+            fallback "A coverage artifact was present but the diff-coverage note could not be rendered."
+
+          # Guard against an empty render (jq succeeded but produced nothing).
+          [ -s "${NOTE}" ] || fallback "A coverage artifact was present but produced an empty diff-coverage note."
+          echo "path=${NOTE}" >> "${GITHUB_OUTPUT}"
+          echo "Coverage note written to ${NOTE}:"
+          cat "${NOTE}"
+
       - name: Fetch review prompt template
         # Pin the prompt to the SHA of THIS reusable workflow file, so every
         # review uses the prompt that shipped with the workflow version the
@@ -424,6 +662,8 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
           GUIDELINES_MARKER: "<!-- PROJECT_GUIDELINES_PLACEHOLDER -->"
           TASK_MARKER: "<!-- TASK_PLACEHOLDER -->"
+          COVERAGE_MARKER: "<!-- COVERAGE_NOTE_PLACEHOLDER -->"
+          COVERAGE_NOTE_PATH: ${{ steps.coverage-note.outputs.path }}
           MODE: ${{ steps.mode.outputs.mode }}
           COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
@@ -468,6 +708,25 @@ jobs:
             }
             { print }
           ' "${TEMPLATE}" > "${ASSEMBLED}"
+
+          # Fold the DEV-526 diff-coverage note into the review template
+          # (review mode only). The coverage-note step always writes a file —
+          # a real note or a "no coverage this run" marker — so the placeholder
+          # is always resolved. If the tagged template predates the marker, the
+          # awk finds no marker line and the note is simply not injected: a
+          # clean degradation, never an error.
+          if [ "${MODE}" = "review" ] && [ -n "${COVERAGE_NOTE_PATH:-}" ] && [ -f "${COVERAGE_NOTE_PATH}" ]; then
+            COVERAGE_ASSEMBLED="$(mktemp)"
+            awk -v marker="${COVERAGE_MARKER}" -v block_file="${COVERAGE_NOTE_PATH}" '
+              $0 == marker {
+                while ((getline line < block_file) > 0) print line
+                close(block_file)
+                next
+              }
+              { print }
+            ' "${ASSEMBLED}" > "${COVERAGE_ASSEMBLED}"
+            mv "${COVERAGE_ASSEMBLED}" "${ASSEMBLED}"
+          fi
 
           # For on-demand, substitute the user's comment in for the task placeholder.
           if [ "${MODE}" = "on-demand" ]; then
@@ -564,16 +823,35 @@ jobs:
           # (replaces the old Bash(curl *), which could also POST).
           FETCH_TOOLS='WebFetch'
           AUTO_TOOLS="${READ_TOOLS},${GIT_TOOLS},${SHELL_TOOLS},${GH_TOOLS},${FETCH_TOOLS}"
-          # Linear MCP read-only tools. The hosted Linear MCP exposes more,
-          # but the bot only needs issues/comments/teams/projects/users for
-          # PR-review context. List read-only tools explicitly so a write
-          # tool can never be invoked even if the API key is later upgraded.
-          LINEAR_TOOLS='mcp__linear__get_issue,mcp__linear__list_issues,mcp__linear__list_comments,mcp__linear__get_team,mcp__linear__list_teams,mcp__linear__get_user,mcp__linear__list_users,mcp__linear__get_project,mcp__linear__list_projects,mcp__linear__list_issue_labels,mcp__linear__get_milestone,mcp__linear__list_milestones,mcp__linear__get_initiative,mcp__linear__list_initiatives'
+          # Whole Linear MCP server, not a hand-curated tool list. The read
+          # scope is enforced by the LINEAR_API_KEY itself (a read-only key), so
+          # write/delete tools fail at the API even if the model reaches for one.
+          # An explicit read-only allowlist kept silently denying legitimate read
+          # tools the model wanted (e.g. list_documents / get_document for a
+          # linked ADR), and every denial burns a review turn toward the
+          # max-turns cap — the exact turn-exhaustion that left PRs unreviewed.
+          # SAFETY INVARIANT: this is safe ONLY while LINEAR_API_KEY is
+          # read-scoped. If that key is ever swapped for a write-capable one,
+          # narrow this back to explicit read tools (or add the Linear write/
+          # delete tools to REVIEW_DISALLOWED below) before merging the swap.
+          #
+          # Syntax: `mcp__<server>__*` is the documented glob for "every tool
+          # from this server" (code.claude.com/docs/en/permissions — allow rules
+          # accept a tool glob only after a literal `mcp__<server>__` prefix). A
+          # bare `mcp__linear` is not the validated form.
+          LINEAR_TOOLS='mcp__linear__*'
           ON_DEMAND_TOOLS='Edit,Write,Bash'
           # claude-code-action auto-includes built-in tools (Read, and the file
           # writers) regardless of --allowedTools. To keep review mode truly
           # read-only on the filesystem we must DENY the writers explicitly.
-          REVIEW_DISALLOWED='Edit,Write,MultiEdit,NotebookEdit'
+          # We also deny the Linear MCP MUTATION tools by glob. LINEAR_TOOLS
+          # above grants the whole `mcp__linear__*` server for maintenance-free
+          # reads; these deny globs (deny beats allow) block writes even if a
+          # consumer's LINEAR_API_KEY is ever mis-scoped to allow them — so the
+          # read-only guarantee no longer rests on the key alone. Every Linear
+          # mutation is save_/create_/delete_/prepare_-prefixed; reads (get_/
+          # list_/search_) stay allowed.
+          REVIEW_DISALLOWED='Edit,Write,MultiEdit,NotebookEdit,mcp__linear__save_*,mcp__linear__create_*,mcp__linear__delete_*,mcp__linear__prepare_*'
           # Reasoning effort. Claude Code's agentic default is `xhigh`, which is
           # tuned for the hardest coding tasks and pays a per-turn latency tax on
           # every one of a review's ~26 turns. A PR review is analytically demanding
@@ -591,7 +869,14 @@ jobs:
           else
             echo "allowed=${AUTO_TOOLS},${LINEAR_TOOLS}" >> "${GITHUB_OUTPUT}"
             echo "disallowed=${REVIEW_DISALLOWED}" >> "${GITHUB_OUTPUT}"
-            echo "max_turns=40" >> "${GITHUB_OUTPUT}"
+            # 80, raised from an initial guess of 40 (DEV-235). A large PR (~700
+            # changed lines) legitimately exhausted 40 turns with ZERO tool
+            # denials — a fast-fail on a healthy review, not a runaway loop. The
+            # cap only spends turns a review actually needs, so small PRs are
+            # unaffected; it just stops cutting large reviews off before a
+            # verdict. Kept below the wall-clock timeout so max-turns stays the
+            # graceful primary stop (see the Run Pepper timeout note).
+            echo "max_turns=80" >> "${GITHUB_OUTPUT}"
             echo "effort=high" >> "${GITHUB_OUTPUT}"
           fi
 
@@ -643,18 +928,21 @@ jobs:
       # tail) multiplied by turn count. The `always()` cleanup below still runs
       # when this step times out, so `pepper-cooking` never gets stuck on.
       #
-      # `--max-turns` (40 review / 60 on-demand) is the PRIMARY stop and it is
+      # `--max-turns` (80 review / 60 on-demand) is the PRIMARY stop and it is
       # graceful: the agent loop ends cleanly and Pepper can still post its
       # verdict. This timeout is only a hang-catcher for a genuinely wedged run.
-      # It is deliberately generous so it does NOT trip before max-turns — 40
-      # turns x ~29s avg is ~19 min and the latency tail can push past 20, so a
-      # 20 min cap would SIGKILL a slow-but-healthy review (no verdict) instead
-      # of letting max-turns stop it cleanly. 30 min clears that worst case with
-      # headroom; the verdict-signal escalation below covers whichever cap trips.
+      # It is sized to NOT trip before max-turns on a healthy review — 80 turns
+      # x ~29s avg is ~39 min, so a 50 min cap leaves headroom for the latency
+      # tail before it would SIGKILL a slow-but-healthy review (no verdict).
+      # Whichever cap trips, the verdict-signal escalation below handles it
+      # gracefully (keyed on the cooking label, not the stop reason). Bumped
+      # from 30 min alongside the review max-turns 40 -> 80 (DEV-526): a real
+      # 700-line review hit 40 turns with zero denials, so the cap, not a loop,
+      # was cutting reviews short.
       - name: Run Pepper
         id: pepper
         uses: anthropics/claude-code-action@v1
-        timeout-minutes: 30
+        timeout-minutes: 50
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         with:
@@ -725,7 +1013,16 @@ jobs:
 
           gh pr edit "${PR_NUMBER}" --add-label "pepper-needs-review" --remove-label "pepper-cooking" || true
 
-          gh pr comment "${PR_NUMBER}" --body 'Pepper did not finish this review — the run stopped (timeout, error, or hit its turn limit) before a verdict was posted, so no approval or change request was recorded. Flagging for a human set of eyes. When the PR is ready, comment `@pepper review` to run me again. — Pepper' || true
+          # This body MUST NOT contain the trigger phrase (default `@pepper`).
+          # It is posted by the Pepper App bot via `gh pr comment`, which fires
+          # an `issue_comment` event; a body matching `contains(body, @pepper)`
+          # would spawn a fresh workflow run every time Pepper escalates. The
+          # review job then skips (the bot's author_association is NONE, failing
+          # the OWNER/MEMBER gate), so it doesn't loop — but each spawned run
+          # churns the `pepper-pr-review-<PR>` concurrency group and can evict a
+          # legitimately pending review. So invite the re-run generically, and
+          # never hardcode the (configurable) trigger phrase here. DEV-526.
+          gh pr comment "${PR_NUMBER}" --body 'Pepper did not finish this review — the run stopped (timeout, error, or hit its turn limit) before a verdict was posted, so no approval or change request was recorded. Flagging for a human set of eyes. Re-request a review from Pepper once the PR is ready and I will take another pass. — Pepper' || true
 
           # Best-effort team review request. Tolerate GitHub rejecting it (the
           # team lacks access to this repo, or the token can't request teams) —
