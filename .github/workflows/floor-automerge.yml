@@ -63,32 +63,54 @@ jobs:
       # in the deployment standard (DEV-514). An App-authored merge DOES trigger
       # those workflows, closing the gap org-wide.
       #
+      # DEDICATED APP: this mints from `spice-automerge` (AUTOMERGE_APP_*), an app
+      # scoped to exactly contents:write + pull-requests:write and nothing else.
+      # It is NOT another workflow's app — per the least-privilege / no-credential-
+      # reuse rule in the secrets-and-configuration standard (ADR-0007), each CI
+      # capability gets its own narrowly-scoped identity. AUTOMERGE_APP_* are
+      # org-level secrets so they resolve in the ruleset-injected required-workflow
+      # context on every code-tier repo (repo-scoped secrets would be empty here).
+      #
       # SAFETY: this is a *required* check that must always go green or it would
-      # deadlock merge. The token mint is therefore best-effort (continue-on-error)
-      # and the enable step falls back to github.token when the App secrets are
-      # absent or minting fails — identical to today's behavior, never a deadlock.
-      # The App must have contents:write + pull-requests:write and be installed on
-      # the repo for the deploy-triggering path to take effect; otherwise it
-      # transparently degrades to the old GITHUB_TOKEN behavior.
+      # deadlock merge. The token mint is best-effort (continue-on-error), and the
+      # enable step tries the app token first, then falls back to github.token —
+      # both if minting produced no token AND if an app-token enable attempt fails
+      # (e.g. app misscoped). The github.token path is byte-for-byte today's
+      # behavior, so the worst case degrades silently and never deadlocks a merge.
       - name: Mint app token (optional — enables deploy-triggering merges)
         id: apptoken
         continue-on-error: true
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ secrets.ORG_CI_AUDIT_APP_ID }}
-          private-key: ${{ secrets.ORG_CI_AUDIT_APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.AUTOMERGE_APP_ID }}
+          private-key: ${{ secrets.AUTOMERGE_APP_PRIVATE_KEY }}
       - name: Enable auto-merge (squash)
         env:
-          GH_TOKEN: ${{ steps.apptoken.outputs.token || github.token }}
-          MERGE_ACTOR: ${{ steps.apptoken.outputs.token && 'github-app (merges trigger deploys)' || 'github-token fallback (merges will NOT trigger deploys)' }}
+          APP_TOKEN: ${{ steps.apptoken.outputs.token }}
+          GH_FALLBACK: ${{ github.token }}
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
-          echo "::notice::Auto-merge enable actor: ${MERGE_ACTOR}"
           # Best-effort: never fail this (required) check. Already-merged,
           # already-closed, or auto-merge-not-permitted all resolve to a green
           # no-op so merge is never deadlocked by this job.
-          if gh pr merge --auto --squash "$PR_URL"; then
-            echo "Auto-merge enabled (squash) on $PR_URL"
+          #
+          # Prefer the app token (its merge triggers deploys). If minting yielded
+          # no token, or the app-token enable fails for any reason, fall back to
+          # github.token so auto-merge is still enabled — the required check stays
+          # green either way. A github.token merge just won't trigger downstream
+          # deploy workflows (the DEV-514 gap), which is exactly today's behavior.
+          if [ -n "$APP_TOKEN" ]; then
+            echo "::notice::Auto-merge enable actor: github-app spice-automerge (merges trigger deploys)"
+            if GH_TOKEN="$APP_TOKEN" gh pr merge --auto --squash "$PR_URL"; then
+              echo "Auto-merge enabled (squash, app-authored) on $PR_URL"
+              exit 0
+            fi
+            echo "::warning::App-token auto-merge enable failed — retrying with GITHUB_TOKEN (this merge will NOT trigger deploys)"
+          else
+            echo "::warning::No app token minted (AUTOMERGE_APP_* absent or mint failed) — using GITHUB_TOKEN (merge will NOT trigger deploys)"
+          fi
+          if GH_TOKEN="$GH_FALLBACK" gh pr merge --auto --squash "$PR_URL"; then
+            echo "Auto-merge enabled (squash, github-token fallback) on $PR_URL"
           else
             echo "::notice::Auto-merge not enabled (already merged/closed, or not permitted) — non-fatal"
           fi
