@@ -6,7 +6,7 @@
   "workflows/pepper-pr-review": "1.4.0",
   "workflows/pr-hygiene": "1.0.0",
   "workflows/release-artifacts": "1.0.1",
-  "workflows/release-please": "1.1.0",
+  "workflows/release-please": "1.1.1",
   "workflows/sast": "1.1.1",
   "workflows/scorecard": "1.1.1",
   "workflows/scorecard-public": "1.1.0",
