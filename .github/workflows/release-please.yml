@@ -134,6 +134,7 @@ jobs:
           private-key: ${{ secrets.ROSEMARY_RELEASER_APP_PRIVATE_KEY }}
 
       - name: Run release-please
+        id: release-please
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
           # Prefer the App token when minted; otherwise GITHUB_TOKEN. The
@@ -143,3 +144,51 @@ jobs:
           config-file: ${{ inputs.config_file }}
           manifest-file: ${{ inputs.manifest_file }}
           target-branch: ${{ inputs.target_branch }}
+
+      # Phantom release-PR guard (DEV-533).
+      #
+      # release-please runs two phases per invocation: (1) tag/publish releases
+      # for merged release PRs, then (2) list existing releases and open/update
+      # release PRs for anything unreleased. Phase 2 reads the GitHub Releases
+      # listing, which is eventually consistent — it can miss a release phase 1
+      # published seconds earlier in the SAME run. When that happens the run
+      # re-proposes the just-released version as a new release PR whose diff
+      # against the target branch is EMPTY (manifest, changelog, and version
+      # files already carry that version from the merged release PR).
+      # Upstream: googleapis/release-please-action#962, release-please#1208.
+      #
+      # An empty diff is the definitive phantom signature: a legitimate release
+      # PR always modifies at least the manifest and a changelog. So: for each
+      # PR this run created or updated, close it if its diff is empty, dropping
+      # the `autorelease: pending` label first so no later run can mistake it
+      # for an untagged release (upstream-recommended hygiene, release-please#1259).
+      #
+      # Best-effort by design — a guard failure must never fail the release run
+      # that just published real releases.
+      - name: Close phantom release PRs (empty diff)
+        if: steps.release-please.outputs.prs_created == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
+          PRS: ${{ steps.release-please.outputs.prs }}
+        run: |
+          set -uo pipefail
+          echo "${PRS}" | jq -r '.[].number' | while read -r pr_number; do
+            [ -n "${pr_number}" ] || continue
+            counts="$(gh pr view "${pr_number}" --repo "${GITHUB_REPOSITORY}" \
+              --json additions,deletions,changedFiles \
+              --jq '[.additions, .deletions, .changedFiles] | add')" || {
+              echo "::warning::Phantom guard: could not inspect PR #${pr_number}; skipping."
+              continue
+            }
+            if [ "${counts}" = "0" ]; then
+              echo "PR #${pr_number} has an empty diff — phantom (version already released). Closing."
+              gh pr edit "${pr_number}" --repo "${GITHUB_REPOSITORY}" \
+                --remove-label "autorelease: pending" || true
+              gh pr close "${pr_number}" --repo "${GITHUB_REPOSITORY}" --delete-branch \
+                --comment "Auto-closed: phantom release PR with an empty diff — this version is already released. Caused by a stale GitHub Releases listing immediately after tagging (DEV-533; googleapis/release-please-action#962)." || {
+                echo "::warning::Phantom guard: failed to close PR #${pr_number}."
+              }
+            else
+              echo "PR #${pr_number} has a non-empty diff (${counts} changed lines+files) — legitimate, leaving open."
+            fi
+          done
