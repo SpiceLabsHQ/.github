@@ -11,15 +11,6 @@
 #            which builds artifacts, attaches an SBOM and SLSA provenance,
 #            and signs with cosign.
 #
-#            The action is invoked TWICE per run (DEV-533): once to publish
-#            releases for merged release PRs, then — after a consistency
-#            barrier that waits for those releases to be visible in the
-#            Releases listing — once to open/update release PRs. A single
-#            invocation does both back-to-back and can read a stale listing
-#            that misses a release it published seconds earlier, re-proposing
-#            an already-released version as a phantom empty-diff release PR
-#            (googleapis/release-please-action#962). See the step comments.
-#
 # Inputs:    config_file     — path to release-please-config.json
 #            manifest_file   — path to .release-please-manifest.json
 #            target_branch   — branch release-please opens PRs against
@@ -142,12 +133,7 @@ jobs:
           app-id: ${{ secrets.ROSEMARY_RELEASER_APP_ID }}
           private-key: ${{ secrets.ROSEMARY_RELEASER_APP_PRIVATE_KEY }}
 
-      # Pass 1 (DEV-533): publish releases ONLY. Turns merged release PRs into
-      # tags + GitHub Releases and swaps their `autorelease: pending` labels to
-      # `autorelease: tagged`. PR creation is deferred to pass 2 below so a
-      # consistency barrier can sit between the two.
-      - name: Run release-please — publish releases (pass 1)
-        id: release
+      - name: Run release-please
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
           # Prefer the App token when minted; otherwise GITHUB_TOKEN. The
@@ -157,114 +143,3 @@ jobs:
           config-file: ${{ inputs.config_file }}
           manifest-file: ${{ inputs.manifest_file }}
           target-branch: ${{ inputs.target_branch }}
-          skip-github-pull-request: true
-
-      # Consistency barrier (DEV-533). release-please decides what is
-      # unreleased by reading the GitHub Releases listing (GraphQL, ordered by
-      # CREATED_AT) — which is eventually consistent and can lag a release
-      # published seconds earlier. Observed on 2026-07-06: a single run
-      # published scorecard-v1.1.1, then re-proposed 1.1.1 as phantom PR #128
-      # because the listing still showed v1.1.0 (upstream:
-      # googleapis/release-please-action#962, release-please#1208).
-      #
-      # So: before pass 2 reads that listing, poll the SAME listing until every
-      # release pass 1 just published appears in it. This is a read-your-writes
-      # barrier keyed on the exact tags created — not a blind sleep. Bounded at
-      # ~60s; on timeout we warn and proceed, and the empty-diff backstop below
-      # cleans up any phantom that still slips through. Never fails the run.
-      - name: Wait for published releases to be listable (consistency barrier)
-        if: steps.release.outputs.releases_created == 'true'
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
-          RELEASE_OUTPUTS: ${{ toJSON(steps.release.outputs) }}
-        run: |
-          set -uo pipefail
-          # Tag names of the releases pass 1 created: the action emits
-          # `tag_name` (single-package) and/or `<path>--tag_name` (manifest)
-          # outputs. Collect both shapes.
-          expected="$(jq -r 'to_entries[]
-              | select(.key == "tag_name" or (.key | endswith("--tag_name")))
-              | .value' <<<"${RELEASE_OUTPUTS}" | sort -u)"
-          if [ -z "${expected}" ]; then
-            echo "releases_created=true but no tag_name outputs found; skipping barrier."
-            exit 0
-          fi
-          printf 'Waiting for the Releases listing to include:\n%s\n' "${expected}"
-          for attempt in $(seq 1 20); do
-            listing="$(gh api graphql \
-              -f owner="${GITHUB_REPOSITORY_OWNER}" \
-              -f repo="${GITHUB_REPOSITORY#*/}" \
-              -f query='query($owner: String!, $repo: String!) {
-                repository(owner: $owner, name: $repo) {
-                  releases(first: 100, orderBy: {field: CREATED_AT, direction: DESC}) {
-                    nodes { tagName }
-                  }
-                }
-              }' --jq '.data.repository.releases.nodes[].tagName' 2>/dev/null | sort -u)" || listing=""
-            missing="$(comm -23 <(printf '%s\n' "${expected}") <(printf '%s\n' "${listing}"))"
-            if [ -z "${missing}" ]; then
-              echo "All just-published releases visible in the listing (attempt ${attempt})."
-              exit 0
-            fi
-            echo "Not yet listable: $(echo "${missing}" | tr '\n' ' ')— retrying in 3s (attempt ${attempt}/20)"
-            sleep 3
-          done
-          echo "::warning::Releases still missing from the listing after ~60s; proceeding. The empty-diff backstop will close any phantom release PR this may produce (DEV-533)."
-
-      # Pass 2 (DEV-533): open/update release PRs ONLY. Thanks to the barrier
-      # above, the unreleased-work scan sees a Releases listing that includes
-      # everything pass 1 just published.
-      - name: Run release-please — open release PRs (pass 2)
-        id: release-please
-        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
-        with:
-          token: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
-          config-file: ${{ inputs.config_file }}
-          manifest-file: ${{ inputs.manifest_file }}
-          target-branch: ${{ inputs.target_branch }}
-          skip-github-release: true
-
-      # Phantom release-PR backstop (DEV-533).
-      #
-      # The barrier above prevents phantoms in the expected case, but eventual
-      # consistency makes no hard promise — if the listing stays stale past the
-      # barrier timeout, pass 2 can still re-propose a just-released version as
-      # a release PR whose diff against the target branch is EMPTY (manifest,
-      # changelog, and version files already carry that version from the merged
-      # release PR).
-      #
-      # An empty diff is the definitive phantom signature: a legitimate release
-      # PR always modifies at least the manifest and a changelog. So: for each
-      # PR pass 2 created or updated, close it if its diff is empty, dropping
-      # the `autorelease: pending` label first so no later run can mistake it
-      # for an untagged release (upstream-recommended hygiene, release-please#1259).
-      #
-      # Best-effort by design — a backstop failure must never fail the release
-      # run that just published real releases.
-      - name: Close phantom release PRs (empty diff)
-        if: steps.release-please.outputs.prs_created == 'true'
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
-          PRS: ${{ steps.release-please.outputs.prs }}
-        run: |
-          set -uo pipefail
-          echo "${PRS}" | jq -r '.[].number' | while read -r pr_number; do
-            [ -n "${pr_number}" ] || continue
-            counts="$(gh pr view "${pr_number}" --repo "${GITHUB_REPOSITORY}" \
-              --json additions,deletions,changedFiles \
-              --jq '[.additions, .deletions, .changedFiles] | add')" || {
-              echo "::warning::Phantom guard: could not inspect PR #${pr_number}; skipping."
-              continue
-            }
-            if [ "${counts}" = "0" ]; then
-              echo "PR #${pr_number} has an empty diff — phantom (version already released). Closing."
-              gh pr edit "${pr_number}" --repo "${GITHUB_REPOSITORY}" \
-                --remove-label "autorelease: pending" || true
-              gh pr close "${pr_number}" --repo "${GITHUB_REPOSITORY}" --delete-branch \
-                --comment "Auto-closed: phantom release PR with an empty diff — this version is already released. Caused by a stale GitHub Releases listing immediately after tagging (DEV-533; googleapis/release-please-action#962)." || {
-                echo "::warning::Phantom guard: failed to close PR #${pr_number}."
-              }
-            else
-              echo "PR #${pr_number} has a non-empty diff (${counts} changed lines+files) — legitimate, leaving open."
-            fi
-          done
