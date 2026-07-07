@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.0](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.4.0...pepper-pr-review-v1.5.0) (2026-07-07)
+
+
+### Features
+
+* **pepper-pr-review:** configurable review timeout + advertise budget to prompt (DEV-534) ([#136](https://github.com/SpiceLabsHQ/.github/issues/136)) ([c32bf5f](https://github.com/SpiceLabsHQ/.github/commit/c32bf5f765f1b6755544b10ef3d539f0290db659))
+
 ## [1.4.0](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.3.0...pepper-pr-review-v1.4.0) (2026-07-06)
 
 
