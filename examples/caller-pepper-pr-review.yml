@@ -61,3 +61,7 @@ jobs:
     #   aws_region: us-east-1
     #   reviewers_team: reviewers   # org team slug requested on escalation (default: reviewers)
     #   show_full_output: true   # debug only — exposes Pepper's tool calls and reasoning in Actions logs (visible to anyone who can see the run)
+    #   # Review budget (DEV-534). review_timeout_minutes is the hard wall-clock cap (SIGKILL backstop);
+    #   # the prompt is told review_timeout_minutes - review_budget_margin_minutes so it files before the wall.
+    #   review_timeout_minutes: 50        # default 50; lower it if your runner/latency budget is tighter
+    #   review_budget_margin_minutes: 10  # default 10; margin held back from the advertised prompt budget

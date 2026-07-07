@@ -131,6 +131,27 @@ on:
         required: false
         type: number
         default: 15
+      review_timeout_minutes:
+        description: |
+          Hard wall-clock cap (minutes) for the Run Pepper step — the SIGKILL
+          backstop for a wedged run. `--max-turns` is the graceful primary stop;
+          keep this sized above a healthy review's turns x per-invocation latency
+          so max-turns, not this, is what normally stops a slow-but-healthy run.
+          A consumer with a tighter latency budget can lower it. See DEV-534.
+        required: false
+        type: number
+        default: 50
+      review_budget_margin_minutes:
+        description: |
+          Minutes subtracted from `review_timeout_minutes` to form the budget
+          advertised to the review prompt ({{REVIEW_BUDGET_MINUTES}}). The model
+          cannot see a clock and the real stop is an ungraceful kill, so the
+          advertised budget is deliberately short of the real cap — the margin
+          covers the inference tail and the final file-verdict/label actions.
+          DEV-534.
+        required: false
+        type: number
+        default: 10
     secrets:
       AWS_CLAUDE_BEDROCK_ROLE_ARN:
         description: ARN of the AWS role to assume via OIDC for Bedrock access.
@@ -666,6 +687,8 @@ jobs:
           COVERAGE_NOTE_PATH: ${{ steps.coverage-note.outputs.path }}
           MODE: ${{ steps.mode.outputs.mode }}
           COMMENT_BODY: ${{ github.event.comment.body }}
+          REVIEW_TIMEOUT_MINUTES: ${{ inputs.review_timeout_minutes }}
+          REVIEW_BUDGET_MARGIN_MINUTES: ${{ inputs.review_budget_margin_minutes }}
         run: |
           set -euo pipefail
 
@@ -749,6 +772,19 @@ jobs:
           # would need escaping for sed's replacement.
           sed -i "s|{{REVIEWERS_TEAM}}|${REVIEWERS_TEAM}|g" "${ASSEMBLED}"
           sed -i "s|{{PR_NUMBER}}|${PR_NUMBER}|g" "${ASSEMBLED}"
+
+          # DEV-534: advertise a budget shorter than the real wall-clock cap
+          # (review_timeout_minutes) so the review keeps a margin for the
+          # inference tail and its final file-verdict/label actions — the model
+          # has no clock and the stop is an ungraceful kill. Clamp to a floor so a
+          # small timeout or large margin can't hand the prompt a zero/negative
+          # budget. The on-demand template has no {{REVIEW_BUDGET_MINUTES}} token,
+          # so this sed is a no-op there.
+          REVIEW_BUDGET_MINUTES=$(( REVIEW_TIMEOUT_MINUTES - REVIEW_BUDGET_MARGIN_MINUTES ))
+          if [ "${REVIEW_BUDGET_MINUTES}" -lt 5 ]; then
+            REVIEW_BUDGET_MINUTES=5
+          fi
+          sed -i "s|{{REVIEW_BUDGET_MINUTES}}|${REVIEW_BUDGET_MINUTES}|g" "${ASSEMBLED}"
 
           {
             echo 'prompt<<PEPPER_PROMPT_EOF'
@@ -932,17 +968,23 @@ jobs:
       # graceful: the agent loop ends cleanly and Pepper can still post its
       # verdict. This timeout is only a hang-catcher for a genuinely wedged run.
       # It is sized to NOT trip before max-turns on a healthy review — 80 turns
-      # x ~29s avg is ~39 min, so a 50 min cap leaves headroom for the latency
-      # tail before it would SIGKILL a slow-but-healthy review (no verdict).
-      # Whichever cap trips, the verdict-signal escalation below handles it
-      # gracefully (keyed on the cooking label, not the stop reason). Bumped
+      # x ~29s avg is ~39 min, so the default 50 min cap leaves headroom for the
+      # latency tail before it would SIGKILL a slow-but-healthy review (no
+      # verdict). Whichever cap trips, the verdict-signal escalation below handles
+      # it gracefully (keyed on the cooking label, not the stop reason). Bumped
       # from 30 min alongside the review max-turns 40 -> 80 (DEV-526): a real
       # 700-line review hit 40 turns with zero denials, so the cap, not a loop,
       # was cutting reviews short.
+      #
+      # DEV-534: the cap is now the `review_timeout_minutes` input (default 50) so
+      # a consumer can tune it, and the review prompt is told a budget of
+      # `review_timeout_minutes - review_budget_margin_minutes` (see Build prompt).
+      # The model can't see a clock and this stop is an ungraceful kill, so it
+      # plans against the shorter advertised budget and files before the real wall.
       - name: Run Pepper
         id: pepper
         uses: anthropics/claude-code-action@v1
-        timeout-minutes: 50
+        timeout-minutes: ${{ inputs.review_timeout_minutes }}
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         with:

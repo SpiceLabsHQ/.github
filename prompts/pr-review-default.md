@@ -87,7 +87,7 @@ Budget scales with diff complexity. A small PR typically resolves in 5–8 tool 
 </context_to_load>
 
 <budget_discipline>
-Your one non-negotiable output is a filed verdict — the `gh pr review` call. A review that ends without one, killed on the wall-clock or stopped on turns, is a wasted run the workflow can only paper over by escalating to a human. That stop is not always graceful and gives you no warning, so do not bet the verdict on reaching the end of the budget.
+Your one non-negotiable output is a filed verdict — the `gh pr review` call. A review that ends without one, killed on the wall-clock or stopped on turns, is a wasted run the workflow can only paper over by escalating to a human. You have roughly **{{REVIEW_BUDGET_MINUTES}} minutes** of wall-clock for this review; you cannot see a clock and the real stop is a hard kill with no warning, so treat that figure as a ceiling to plan against — front-load the verdict-critical work and file well before it, never betting the verdict on reaching the end of the budget.
 
 **Your working context is not durable — the filed review is.** As a review grows, the harness compacts earlier context to stay within the window: a conclusion you reached but only hold in your head ("premise is solid, this is an approve") can be summarized away while you keep exploring, and you have no scratch file to save it in — writes are disabled in review mode. The `gh pr review` you file is the only durable record of your judgment. So the moment you can name an outcome, treat filing it as how you *save your work*, not a closing flourish.
 
