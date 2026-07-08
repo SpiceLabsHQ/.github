@@ -5,9 +5,18 @@ name: Pepper PR Review
 # fork diff exfiltrate secrets. Plain `pull_request` is safe because GitHub
 # strips secrets from fork PR runs. The reusable workflow further gates
 # `issue_comment` to org members only.
+#
+# `.github` self-skips the org code floor (floor-pepper.yml is guarded by
+# `github.repository != 'SpiceLabsHQ/.github'`), so this caller is the ONLY
+# Pepper coverage for this repo's own PRs. It must therefore carry the same
+# trigger set as the floor — including `synchronize`/`reopened` — or a push to
+# an already-open PR (a Renovate rebase, or a fix after review dismissal) never
+# re-runs Pepper and the PR strands at REVIEW_REQUIRED (DEV-497). Duplicate runs
+# on an unchanged head SHA are short-circuited pre-model by the reusable
+# (DEV-523).
 on:
   pull_request:
-    types: [opened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review]
   issue_comment:
     types: [created]
 
