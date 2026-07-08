@@ -18,7 +18,7 @@ name: Linear repo labels
 #                   Personal API keys, with write access.
 #   Repo enumeration reuses the org-owned GitHub App from the CI Floor Audit
 #   (Metadata: read org-wide is enough to list repos), via the existing
-#   ORG_CI_AUDIT_APP_ID / ORG_CI_AUDIT_APP_PRIVATE_KEY secrets. The default
+#   CI_AUDIT_APP_CLIENT_ID / CI_AUDIT_APP_PRIVATE_KEY secrets. The default
 #   GITHUB_TOKEN only sees this repo, so it cannot enumerate the org.
 # Until LINEAR_REPO_LABELS_KEY and the App secrets exist the workflow no-ops with
 # a warning (no red schedule).
@@ -67,15 +67,15 @@ jobs:
         id: guard
         env:
           LINEAR_REPO_LABELS_KEY: ${{ secrets.LINEAR_REPO_LABELS_KEY }}
-          APP_ID: ${{ secrets.ORG_CI_AUDIT_APP_ID }}
-          APP_KEY: ${{ secrets.ORG_CI_AUDIT_APP_PRIVATE_KEY }}
+          APP_CLIENT_ID: ${{ secrets.CI_AUDIT_APP_CLIENT_ID }}
+          APP_KEY: ${{ secrets.CI_AUDIT_APP_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           if [ -z "${LINEAR_REPO_LABELS_KEY}" ]; then
             echo "::warning::LINEAR_REPO_LABELS_KEY is not set — skipping the Linear repo-label sync. See this workflow's header."
             echo "ok=false" >> "${GITHUB_OUTPUT}"
-          elif [ -z "${APP_ID}" ] || [ -z "${APP_KEY}" ]; then
-            echo "::warning::ORG_CI_AUDIT_APP_ID / ORG_CI_AUDIT_APP_PRIVATE_KEY are not set — cannot enumerate org repos. Skipping."
+          elif [ -z "${APP_CLIENT_ID}" ] || [ -z "${APP_KEY}" ]; then
+            echo "::warning::CI_AUDIT_APP_CLIENT_ID / CI_AUDIT_APP_PRIVATE_KEY are not set — cannot enumerate org repos. Skipping."
             echo "ok=false" >> "${GITHUB_OUTPUT}"
           else
             echo "ok=true" >> "${GITHUB_OUTPUT}"
@@ -86,8 +86,8 @@ jobs:
         if: steps.guard.outputs.ok == 'true'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ secrets.ORG_CI_AUDIT_APP_ID }}
-          private-key: ${{ secrets.ORG_CI_AUDIT_APP_PRIVATE_KEY }}
+          client-id: ${{ secrets.CI_AUDIT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CI_AUDIT_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
 
       - name: Sync labels
