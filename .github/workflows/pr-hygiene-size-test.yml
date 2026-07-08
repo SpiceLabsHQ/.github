@@ -1,0 +1,27 @@
+name: PR hygiene — size test
+
+# Runs the pr-hygiene size-check fixture tests (the logic behind DEV-550: the
+# line/file thresholds, the generated/vendored exclusion, the three-way message
+# variant, and the no-comment path) on any PR that touches the workflow or the
+# test, so that logic stays pinned down in CI instead of eyeballed once.
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/pr-hygiene.yml"
+      - ".github/workflows/test/pr-hygiene-size-test.sh"
+      - ".github/workflows/pr-hygiene-size-test.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  fixtures:
+    name: pr-hygiene size fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Run pr-hygiene size fixture tests
+        run: .github/workflows/test/pr-hygiene-size-test.sh
