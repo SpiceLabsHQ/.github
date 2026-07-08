@@ -267,7 +267,7 @@ Wraps [`actions/dependency-review-action`](https://github.com/actions/dependency
 Two PR checks bundled into one reusable workflow. Drop the [caller workflow](examples/caller-pr-hygiene.yml) into any repo at `.github/workflows/pr-hygiene.yml`.
 
 - **Conventional Commits title check (blocking).** Enforces a [Conventional Commits](https://www.conventionalcommits.org/) header on the PR title — required so `release-please` can classify the change at squash-merge time. On failure the workflow posts a sticky comment with a fix example; the comment is deleted automatically once the title is corrected.
-- **Large-PR size warning (non-blocking).** Posts an informational sticky comment when additions + deletions exceed the soft threshold. The check exits 0 either way — branch protection should not require it.
+- **Large-PR size warning (non-blocking).** Posts an informational sticky comment when a PR is large by changed lines **or** by file count. Generated and vendored files (lockfiles, build output, and anything matching `size_exclude_pattern`) are excluded from both counts, so a dependency bump doesn't trip it. The comment names whichever dimension crossed and points to the [Eng Cookbook PR standard](https://github.com/SpiceLabsHQ/Eng-Cookbook/blob/main/standards/pull-requests.md). The check exits 0 either way — branch protection should not require it.
 
 **Inputs** (all optional, override via `with:`):
 
@@ -275,7 +275,9 @@ Two PR checks bundled into one reusable workflow. Drop the [caller workflow](exa
 |---|---|---|
 | `types` | `feat,fix,chore,docs,refactor,test,build,ci,perf,style,revert` | Comma-separated allowed CC types (converted internally to the action's newline format) |
 | `require_scope` | `false` | When `true`, PR titles must include a scope, e.g. `feat(api): ...` |
-| `large_pr_threshold` | `500` | Changed-lines threshold (additions + deletions) for the soft size warning |
+| `large_pr_threshold` | `1000` | Changed-lines threshold (additions + deletions, excluding generated/vendored files) for the soft size warning |
+| `large_pr_file_threshold` | `25` | Changed-files threshold (excluding generated/vendored files) for the soft size warning; fires independently of `large_pr_threshold` |
+| `size_exclude_pattern` | _(lockfiles, `vendor/`, `dist/`, `build/`, `*.min.js`, …)_ | Extended regex (`grep -E`) of paths excluded from both size counts |
 
 No secrets needed. The caller passes `permissions: { contents: read, pull-requests: write }` so the workflow can read the PR payload and post the sticky comments.
 
