@@ -7,9 +7,10 @@ name: PR Hygiene (reusable)
 #      and the release notes drift from reality. Failing the check here keeps
 #      the contract with release-please honest at merge time.
 #   2. Size warning (NON-BLOCKING): posts an informational sticky comment when
-#      the PR is unusually large. Never fails the check — large PRs are a
-#      smell, not a violation, and forcing a split via a red X tends to push
-#      authors to merge-then-fix instead of split.
+#      the PR is unusually large by changed lines OR file count (generated and
+#      vendored files are excluded from both counts). Never fails the check —
+#      large PRs are a smell, not a violation, and forcing a split via a red X
+#      tends to push authors to merge-then-fix instead of split.
 
 on:
   workflow_call:
@@ -32,12 +33,30 @@ on:
         default: false
       large_pr_threshold:
         description: |
-          Soft threshold (additions + deletions) above which the size-warning
-          job posts an informational comment. The check itself never fails on
-          size — see file header.
+          Soft threshold for changed lines (additions + deletions, excluding
+          generated/vendored files — see `size_exclude_pattern`) above which the
+          size-warning job posts an informational comment. The check itself
+          never fails on size — see file header.
         required: false
         type: number
-        default: 500
+        default: 1000
+      large_pr_file_threshold:
+        description: |
+          Soft threshold for the number of changed files (excluding
+          generated/vendored files) above which the size-warning job posts an
+          informational comment. Fires independently of `large_pr_threshold`:
+          either one crossing triggers the notice. Never fails the check.
+        required: false
+        type: number
+        default: 25
+      size_exclude_pattern:
+        description: |
+          Extended regex (grep -E) of file paths excluded from BOTH size counts,
+          so lockfiles, build output, and other generated/vendored files don't
+          trip the warning. Override to widen or narrow per repo.
+        required: false
+        type: string
+        default: '(^|/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|Cargo\.lock|poetry\.lock|Gemfile\.lock|composer\.lock|go\.sum|uv\.lock|bun\.lockb)$|(^|/)(vendor|node_modules|dist|build|__generated__|__snapshots__)/|\.min\.(js|css)$|\.snap$|\.(pb|pb2)\.(go|py)$|\.generated\.'
 
 # Workflow-level permissions are the union of what both jobs need. Each job
 # below restricts further (least privilege per job).
@@ -140,30 +159,99 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Compute changed lines
+      - name: Compute changed size
         id: size
+        # The size read now makes an API call (per-file breakdown for the
+        # generated/vendored filter). A transient API failure must not turn this
+        # non-blocking check red — fail open: no outputs, so the post step below
+        # simply doesn't fire.
+        continue-on-error: true
         env:
-          ADDITIONS: ${{ github.event.pull_request.additions }}
-          DELETIONS: ${{ github.event.pull_request.deletions }}
-          THRESHOLD: ${{ inputs.large_pr_threshold }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          LOC_THRESHOLD: ${{ inputs.large_pr_threshold }}
+          FILE_THRESHOLD: ${{ inputs.large_pr_file_threshold }}
+          EXCLUDE: ${{ inputs.size_exclude_pattern }}
         run: |
           set -euo pipefail
-          # Both fields come from the pull_request event payload, so no API
-          # call is needed. Defaulting to 0 protects against a malformed
-          # payload (shouldn't happen on `pull_request`, but cheap insurance).
-          ADD=${ADDITIONS:-0}
-          DEL=${DELETIONS:-0}
-          TOTAL=$((ADD + DEL))
-          echo "additions=${ADD}" >> "${GITHUB_OUTPUT}"
-          echo "deletions=${DEL}" >> "${GITHUB_OUTPUT}"
-          echo "total=${TOTAL}" >> "${GITHUB_OUTPUT}"
-          if [ "${TOTAL}" -gt "${THRESHOLD}" ]; then
-            echo "over_threshold=true" >> "${GITHUB_OUTPUT}"
+          # The event payload carries only totals (additions/deletions/
+          # changed_files), not the per-file breakdown we need to drop
+          # generated/vendored files before counting. So pull the file list
+          # from the API. GitHub caps this at 3000 files, which is far past any
+          # PR a human should be opening; --paginate walks all pages.
+          FILES_TSV="${RUNNER_TEMP}/pr_files.tsv"
+          gh api --paginate "/repos/${REPO}/pulls/${PR_NUMBER}/files" \
+            --jq '.[] | [.filename, (.additions|tostring), (.deletions|tostring)] | @tsv' \
+            > "${FILES_TSV}"
+
+          # Count changed lines and files, skipping generated/vendored paths.
+          # Match the exclusion against the filename FIELD ($1), not the whole
+          # TSV row — the pattern anchors lockfiles with `$`, which would never
+          # fire against a "<file>\t<add>\t<del>" row. One awk pass, both counts.
+          read -r FILES LOC < <(
+            awk -F'\t' -v pat="${EXCLUDE}" \
+              '$1 !~ pat { files++; loc += $2 + $3 } END { print (files+0), (loc+0) }' \
+              "${FILES_TSV}"
+          )
+          FILES=${FILES:-0}
+          LOC=${LOC:-0}
+
+          # Explicit `if` blocks, not `[ ... ] && VAR=true` — the latter returns
+          # non-zero when the test is false and can trip `set -e` depending on
+          # the shell.
+          LOC_OVER=false
+          if [ "${LOC}" -gt "${LOC_THRESHOLD}" ]; then LOC_OVER=true; fi
+          FILES_OVER=false
+          if [ "${FILES}" -gt "${FILE_THRESHOLD}" ]; then FILES_OVER=true; fi
+          OVER=false
+          if [ "${LOC_OVER}" = true ] || [ "${FILES_OVER}" = true ]; then OVER=true; fi
+
+          {
+            echo "loc=${LOC}"
+            echo "files=${FILES}"
+            echo "over_threshold=${OVER}"
+          } >> "${GITHUB_OUTPUT}"
+          echo "PR (excluding generated/vendored) changes ${LOC} lines across ${FILES} files; thresholds are ${LOC_THRESHOLD} lines / ${FILE_THRESHOLD} files."
+
+          # Build the sticky-comment body here so the opening line and the
+          # "what this checks" block can name the dimension(s) that actually
+          # tripped. Shared header, reasons, and footer are written once; only
+          # the lead clause and the diagnosis vary. Skip the work when under.
+          [ "${OVER}" = true ] || exit 0
+
+          if [ "${LOC_OVER}" = true ] && [ "${FILES_OVER}" = true ]; then
+            LEAD="past both size limits the org flags on (**${LOC_THRESHOLD} lines and ${FILE_THRESHOLD} files**)"
+            WHAT="this PR is both large and spread across many files — the combination that most often means several jobs got bundled into one. Is this really one change?"
+          elif [ "${LOC_OVER}" = true ]; then
+            LEAD="more than the size where the org flags a PR (**${LOC_THRESHOLD} lines changed**)"
+            WHAT="this is a lot of changed code in one PR. Is it one big change, or several smaller ones stacked together?"
           else
-            echo "over_threshold=false" >> "${GITHUB_OUTPUT}"
+            LEAD="touches more files than the org flags for a closer look (**${FILE_THRESHOLD} files**)"
+            WHAT="this PR changes a lot of files across the project. Are those changes all part of the same job, or several unrelated ones bundled together?"
           fi
-          echo "PR changes ${TOTAL} lines (+${ADD} -${DEL}); threshold is ${THRESHOLD}."
+
+          {
+            echo "message<<PR_SIZE_MSG_EOF"
+            cat <<EOF
+          ### Large PR — size check (non-blocking)
+
+          This PR changes **${LOC} lines across ${FILES} files**, ${LEAD}. You can still merge it — this is just a heads-up so you can make sure the size is on purpose.
+
+          **What this checks:** ${WHAT} A cleanup, a bug fix, and a new feature each belong in their own PR. If this one does more than one of those, split it up — one PR per job.
+
+          **Why big PRs get flagged:**
+          - If a bug turns up later, it's harder to track down — it could be anywhere in the ${LOC} lines. A smaller PR narrows it down fast.
+          - The more a PR changes, the easier it is for a small mistake to slip through review unnoticed.
+
+          **When a big PR is fine:** rewriting a single file, adding one self-contained module, or files that are generated automatically (like lockfiles or build output). If your change really is one job, you don't need to make it smaller — just double-check that it is one.
+
+          More on how we size and split PRs: [Spice Eng Cookbook — Pull requests](https://github.com/SpiceLabsHQ/Eng-Cookbook/blob/main/standards/pull-requests.md).
+          EOF
+            echo "PR_SIZE_MSG_EOF"
+          } >> "${GITHUB_OUTPUT}"
 
       - name: Post sticky size warning
         if: steps.size.outputs.over_threshold == 'true'
@@ -176,14 +264,7 @@ jobs:
         uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
         with:
           header: pr-hygiene-size
-          message: |
-            ### Large PR notice (non-blocking)
-
-            This PR changes **${{ steps.size.outputs.total }}** lines (+${{ steps.size.outputs.additions }} / -${{ steps.size.outputs.deletions }}), above the org soft threshold of **${{ inputs.large_pr_threshold }}**.
-
-            Large PRs are harder to review and likelier to hide regressions. Consider splitting if it spans multiple concerns (e.g. a refactor + a feature, or unrelated bug fixes).
-
-            This is informational — the check will not fail.
+          message: ${{ steps.size.outputs.message }}
 
       # Clear the warning if a force-push trimmed the PR back below threshold.
       - name: Clear sticky size warning

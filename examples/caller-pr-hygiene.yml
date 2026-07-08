@@ -29,8 +29,12 @@ jobs:
     # with:
     #   # Require a scope, e.g. `feat(api): ...`. Off by default.
     #   require_scope: true
-    #   # Raise the soft size threshold for repos that ship in larger chunks.
-    #   large_pr_threshold: 1000
+    #   # Soft size thresholds. Defaults: 1000 changed lines, 25 changed files
+    #   # (generated/vendored files excluded). Either crossing posts the notice.
+    #   large_pr_threshold: 1500
+    #   large_pr_file_threshold: 40
+    #   # Widen/narrow what counts as generated/vendored (grep -E over paths).
+    #   size_exclude_pattern: '(^|/)(package-lock\.json|yarn\.lock)$|(^|/)(vendor|dist)/'
     #   # Restrict the allowed CC types. Default includes all 11:
     #   # feat,fix,chore,docs,refactor,test,build,ci,perf,style,revert.
     #   # The line below is a TRIMMED example (drops `style`); use it as a
