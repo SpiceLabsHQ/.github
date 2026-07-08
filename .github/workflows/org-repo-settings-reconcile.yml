@@ -32,8 +32,8 @@ name: Org Repo-Settings Reconcile
 # then that pass WARNS AND SKIPS (it does not fail the run red — an unreadable
 # team is counted as skipped, not an error) while the merge policies reconcile.
 # Store the App's credentials as two secrets on THIS repo:
-#       ORG_REPO_SETTINGS_APP_CLIENT_ID    = the App's Client ID
-#       ORG_REPO_SETTINGS_APP_PRIVATE_KEY  = the App's private-key .pem contents
+#       REPO_SETTINGS_APP_CLIENT_ID    = the App's Client ID
+#       REPO_SETTINGS_APP_PRIVATE_KEY  = the App's private-key .pem contents
 # Until those secrets exist the workflow no-ops with a warning (no red schedule).
 #
 # STAGED ROLLOUT: after configuring the App, run this via workflow_dispatch in
@@ -71,12 +71,12 @@ jobs:
       - name: Guard on App credentials presence
         id: guard
         env:
-          APP_CLIENT_ID: ${{ secrets.ORG_REPO_SETTINGS_APP_CLIENT_ID }}
-          APP_KEY: ${{ secrets.ORG_REPO_SETTINGS_APP_PRIVATE_KEY }}
+          APP_CLIENT_ID: ${{ secrets.REPO_SETTINGS_APP_CLIENT_ID }}
+          APP_KEY: ${{ secrets.REPO_SETTINGS_APP_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           if [ -z "${APP_CLIENT_ID}" ] || [ -z "${APP_KEY}" ]; then
-            echo "::warning::ORG_REPO_SETTINGS_APP_CLIENT_ID / ORG_REPO_SETTINGS_APP_PRIVATE_KEY are not set — skipping the repo-settings reconcile. See this workflow's header for the one-time setup."
+            echo "::warning::REPO_SETTINGS_APP_CLIENT_ID / REPO_SETTINGS_APP_PRIVATE_KEY are not set — skipping the repo-settings reconcile. See this workflow's header for the one-time setup."
             echo "ok=false" >> "${GITHUB_OUTPUT}"
           else
             echo "ok=true" >> "${GITHUB_OUTPUT}"
@@ -87,8 +87,8 @@ jobs:
         if: steps.guard.outputs.ok == 'true'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          client-id: ${{ secrets.ORG_REPO_SETTINGS_APP_CLIENT_ID }}
-          private-key: ${{ secrets.ORG_REPO_SETTINGS_APP_PRIVATE_KEY }}
+          client-id: ${{ secrets.REPO_SETTINGS_APP_CLIENT_ID }}
+          private-key: ${{ secrets.REPO_SETTINGS_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
 
       - name: Reconcile
