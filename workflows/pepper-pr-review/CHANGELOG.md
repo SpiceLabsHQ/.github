@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.1](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.5.0...pepper-pr-review-v1.5.1) (2026-07-12)
+
+
+### Bug Fixes
+
+* **pepper-pr-review:** stop concurrency group racing across callers (DEV-561) ([#143](https://github.com/SpiceLabsHQ/.github/issues/143)) ([d8a23b0](https://github.com/SpiceLabsHQ/.github/commit/d8a23b0e1e1d97590c3209c8ab71e978766169be))
+
 ## [1.5.0](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.4.0...pepper-pr-review-v1.5.0) (2026-07-07)
 
 
