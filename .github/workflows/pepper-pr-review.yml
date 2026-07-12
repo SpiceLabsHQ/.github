@@ -174,7 +174,26 @@ permissions:
   issues: read
 
 concurrency:
-  group: pepper-pr-review-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}
+  # Key by the CALLER's identity (github.workflow) in addition to the PR, so the
+  # org ruleset's REQUIRED floor-pepper run and a repo's own Pepper caller never
+  # share a group and can never evict each other (DEV-561).
+  #
+  # Why the old PR-only key stranded PRs even with cancel-in-progress: false —
+  # GitHub keeps at most one in-progress AND one pending run per group; when a
+  # third run enters, the currently PENDING one is cancelled. On a repo that has
+  # both a local `Pepper PR Review` caller and the ruleset-injected floor-pepper,
+  # a single PR event fires up to three runs into one PR-only group (the caller's
+  # `opened` + `ready_for_review`, plus floor-pepper). One ran, one pended, and
+  # the third evicted the pending one — a coin flip that repeatedly cancelled the
+  # required floor-pepper run and left PRs BLOCKED with no auto-retry.
+  #
+  # In a reusable (workflow_call) workflow, github.workflow resolves to the
+  # CALLER's top-level workflow name, so `CI Floor — Pepper review` (floor) and a
+  # repo's `Pepper PR Review` caller get DISTINCT group keys and run in parallel
+  # without cancelling one another. Runs from the SAME caller on one PR still
+  # share a group and serialize (cancel-in-progress stays false), which the
+  # DEV-523 unchanged-SHA short-circuit relies on to skip duplicate reviews.
+  group: pepper-pr-review-${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -214,9 +233,6 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           ACTOR: ${{ github.actor }}
           ALLOWED_BOTS: ${{ inputs.allowed_bots }}
-          # Empty for issue_comment events (payload carries no pull_request), so
-          # the draft guard below is pull_request-only by construction.
-          IS_DRAFT: ${{ github.event.pull_request.draft }}
           # DEV-523 unchanged-SHA short-circuit. All empty on issue_comment
           # events (no pull_request payload / token not minted), where the
           # short-circuit deliberately does not apply.
@@ -244,17 +260,28 @@ jobs:
               echo "::notice::Triggering actor '${ACTOR}' is a non-allowlisted bot on a pull_request event — skipping Pepper review to avoid a hard-fail (DEV-504). The PR author's prior review state is unaffected."
             fi
           fi
-          # Skip auto-review of draft PRs. GitHub fires `opened` on draft
-          # creation, but a draft is WIP the author hasn't submitted for review —
-          # reviewing it wastes a run (and, when a run stalls, a full timeout).
-          # The caller's `ready_for_review` trigger re-runs Pepper once the author
-          # marks it ready, and an explicit `@pepper review` comment still works
-          # (issue_comment payloads carry no draft flag, so IS_DRAFT is empty and
-          # this guard never fires for them). A skipped required check satisfies
-          # branch protection, same as the bot-initiator skip above. DEV-235.
-          if [ "${EVENT_NAME}" = "pull_request" ] && [ "${IS_DRAFT}" = "true" ]; then
-            run=false
-            echo "::notice::PR is a draft — skipping auto-review until it's marked ready for review (or you comment @pepper review). DEV-235."
+          # Skip auto-review of draft PRs, judged from LIVE draft state rather
+          # than the event payload. GitHub fires `opened` with draft:true at
+          # creation, but the standard agent flow (`gh pr create --draft` then
+          # `gh pr ready` a second later) makes that snapshot stale within
+          # seconds. A run that trusted `github.event.pull_request.draft` skipped
+          # a PR that was already ready and stranded it at REVIEW_REQUIRED with no
+          # auto-retry (DEV-561 failure mode 2). Query the PR's current isDraft
+          # instead. The caller's `ready_for_review` trigger and an explicit
+          # `@pepper review` comment both still work; a skipped required check
+          # satisfies branch protection, same as the bot-initiator skip above.
+          # pull_request only (issue_comment carries no PR payload). Fail-open: if
+          # isDraft can't be read (token hiccup / API error) we do NOT skip — a
+          # wasted review on a true draft is cheap (DEV-523 short-circuits the
+          # re-review) and far safer than wrongly skipping a ready PR. DEV-235.
+          if [ "${run}" = true ] && [ "${EVENT_NAME}" = "pull_request" ]; then
+            LIVE_DRAFT=$(gh pr view "${PR_NUMBER}" --repo "${REPO}" --json isDraft --jq '.isDraft' 2>/dev/null || true)
+            if [ "${LIVE_DRAFT}" = "true" ]; then
+              run=false
+              echo "::notice::PR is a draft — skipping auto-review until it's marked ready for review (or you comment @pepper review). DEV-235."
+            elif [ -z "${LIVE_DRAFT}" ]; then
+              echo "::notice::Could not read live draft state for PR #${PR_NUMBER} — proceeding with review (fail-open; DEV-561)."
+            fi
           fi
           # DEV-523 — short-circuit an automatic re-review when the PR head SHA
           # is unchanged since Pepper's last review. A pull_request re-trigger
