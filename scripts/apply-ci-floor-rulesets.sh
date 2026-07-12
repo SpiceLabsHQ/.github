@@ -12,10 +12,12 @@
 #
 # Usage:
 #   scripts/apply-ci-floor-rulesets.sh [--org SpiceLabsHQ] [--evaluate] [--active] \
-#       [rulesets/spice-ci-floor-docs.json ...]   # default: all rulesets/*.json
+#       [rulesets/spice-ci-floor-docs.json ...]   # default: rulesets/spice-ci-floor-*.json
 #
 # Safety: never touches spice-branch-protection or any ruleset not named in the
-# JSON files it applies.
+# JSON files it applies. The default glob is scoped to spice-ci-floor-*.json so
+# that spice-branch-protection.json (captured as IaC but managed on its own
+# lifecycle — see rulesets/README.md) is never swept in by a no-argument run.
 
 set -euo pipefail
 
@@ -37,10 +39,13 @@ done
 command -v gh >/dev/null || { echo "gh not found" >&2; exit 2; }
 command -v jq >/dev/null || { echo "jq not found" >&2; exit 2; }
 
-# Default to every ruleset payload next to this script's repo root.
+# Default to the CI floor ruleset payloads next to this script's repo root.
+# Scoped to spice-ci-floor-*.json on purpose: spice-branch-protection.json lives
+# in rulesets/ too but must not be swept in (it enforces active PR rules on a
+# separate lifecycle — apply it directly, see rulesets/README.md).
 if [ "${#FILES[@]}" -eq 0 ]; then
   root="$(cd "$(dirname "$0")/.." && pwd)"
-  while IFS= read -r f; do FILES+=("$f"); done < <(ls "$root"/rulesets/*.json)
+  while IFS= read -r f; do FILES+=("$f"); done < <(ls "$root"/rulesets/spice-ci-floor-*.json)
 fi
 
 # Existing org rulesets: name -> id.
