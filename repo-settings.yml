@@ -13,11 +13,20 @@
 # HOW TO ADD A NEW ENFORCED SETTING: add a key under `policies`. Each leaf key is
 # a literal field of GitHub's "Update a repository" REST API
 # (PATCH /repos/{owner}/{repo} — https://docs.github.com/en/rest/repos/repos#update-a-repository).
-# No code change is needed — the reconciler flattens every group and diffs each
-# field against the live repo, PATCHing only on drift (idempotent).
+# No code change is needed — the reconciler diffs each field against the live
+# repo and PATCHes on drift (idempotent).
 #
-# The top-level group names (e.g. `merge`) are for human organization and for
-# per-group exceptions only; they are not sent to the API.
+# GROUPS ARE THE COUPLING BOUNDARY: when any field in a group drifts, the
+# reconciler sends that group's fields TOGETHER in one PATCH. GitHub validates
+# some fields as a set, against the request's defaults rather than the repo's
+# stored values — sending `squash_merge_commit_message: PR_BODY` alone is
+# rejected (422 invalid_squash_commit_setting_combo) even on a repo whose stored
+# `squash_merge_commit_title` is PR_TITLE, because the omitted title defaults to
+# COMMIT_OR_PR_TITLE, which cannot pair with PR_BODY. So: keep co-validated
+# fields in the same group. Splitting them across groups will 422 at apply time.
+#
+# The top-level group names (e.g. `merge`) are for human organization, for
+# per-group exceptions, and for that PATCH grouping; they are not sent to the API.
 
 # Reconciler behavior knobs (not repo settings).
 options:

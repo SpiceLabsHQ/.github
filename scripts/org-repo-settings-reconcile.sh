@@ -9,10 +9,20 @@
 # general-purpose: adding a new enforced setting is a config edit, not code.
 #
 # Each leaf key under `policies.<group>` in the config is a literal field of
-# GitHub's "Update a repository" REST API. The reconciler flattens every group
-# into one desired field-map, diffs it against each live repo, and PATCHes only
-# the drifted fields in a single atomic call (so merge-method invariants — GitHub
-# requires >=1 method enabled — never transiently break).
+# GitHub's "Update a repository" REST API. The reconciler diffs every group
+# against each live repo and PATCHes, in a single atomic call, every field of
+# each group that has any drift (so merge-method invariants — GitHub requires
+# >=1 method enabled — never transiently break).
+#
+# WHY WHOLE-GROUP AND NOT JUST THE DRIFTED FIELDS: GitHub validates some fields
+# as a set, against request defaults rather than the repo's stored values, so a
+# minimal diff can be rejected even when the resulting state would be legal. A
+# repo with squash title PR_TITLE / message COMMIT_MESSAGES drifting only on the
+# message gets 422 invalid_squash_commit_setting_combo for {message: PR_BODY}:
+# the omitted title defaults to COMMIT_OR_PR_TITLE, which cannot pair with
+# PR_BODY. Sending the group whole keeps every co-validated field in the request.
+# A group is therefore the coupling boundary — put fields GitHub validates
+# together in the same group.
 #
 # Team access (DEV-525) is a SECOND, separate pass. Granting a team access to a
 # repo is not a repo-update field but its own endpoint
@@ -70,6 +80,12 @@ command -v jq >/dev/null || { echo "jq not found" >&2; exit 2; }
 command -v yq >/dev/null || { echo "yq (mikefarah) not found — needed to parse ${CONFIG}" >&2; exit 2; }
 [ -f "$CONFIG" ] || { echo "config not found: ${CONFIG}" >&2; exit 2; }
 
+# The per-repo planning logic (drift + PATCH body) lives in its own jq program so
+# it can be fixture-tested directly — scripts/test/org-repo-settings-plan_test.sh.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLAN_JQ="${HERE}/org-repo-settings-plan.jq"
+[ -f "$PLAN_JQ" ] || { echo "plan program not found: ${PLAN_JQ}" >&2; exit 2; }
+
 # --- 1. Load config as JSON -------------------------------------------------
 cfg="$(yq -o=json '.' "$CONFIG")"
 
@@ -109,6 +125,21 @@ skipped_groups() {
   printf '%s' "$exc" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -v '^$' || true
 }
 
+# GitHub's own error message, pulled out of a failed `gh api` stderr blob and
+# flattened to one Markdown-safe line for the report. gh prints the JSON response
+# body followed by its own `gh: <summary>` line, so trim from that line onward
+# before parsing; fall back to the raw text when the body isn't JSON (network
+# failure, HTML error page). Never guess at a cause here — print what the API said.
+api_error() {
+  local raw="$1" body msg
+  body="${raw%%gh: *}"
+  msg="$(printf '%s' "$body" | jq -r '
+    [.message, (.errors[]?.message // empty)]
+    | map(select(. != null and . != "")) | join(" — ")' 2>/dev/null || true)"
+  [ -z "$msg" ] && msg="$raw"
+  printf '%s' "$msg" | tr '\n' ' ' | tr -s ' ' | sed "s/\`/'/g"
+}
+
 # --- 4. Reconcile loop ------------------------------------------------------
 printf '# Repo-settings reconciliation — %s mode\n\n' "$MODE"
 printf '_Org `%s`, desired-state [`%s`](../blob/main/%s). ' "$ORG" "$CONFIG" "$CONFIG"
@@ -141,43 +172,44 @@ while IFS= read -r repo; do
     n_skipped=$((n_skipped + 1)); skip_report="${skip_report}- \`${repo}\` — \`${exc_prop}=${exc}\`\n"; continue
   fi
 
-  # Fields to reconcile for this repo = all desired fields whose group isn't skipped.
-  desired_fields="$(printf '%s' "$groups_json" | jq -c \
-    --arg skips "$skips" '
-      ($skips | split("\n") | map(select(length>0))) as $skip
-      | [ to_entries[] | select((.key as $g | $skip | index($g)) | not)
-          | .value | to_entries[] ] | from_entries')"
-  [ "$(printf '%s' "$desired_fields" | jq 'length')" -eq 0 ] && {
-    # Every group excepted for this repo.
-    n_skipped=$((n_skipped + 1)); skip_report="${skip_report}- \`${repo}\` — all policy groups excepted (\`${exc_prop}=${exc}\`)\n"; continue
-  }
-
   # Live settings for the repo (single GET). On error, note and move on.
   cur="$(gh api "repos/${ORG}/${repo}" 2>/dev/null || true)"
   if [ -z "$cur" ]; then
     n_errors=$((n_errors + 1)); drift_report="${drift_report}- \`${repo}\` — ⚠️ could not read repo settings (skipped)\n"; continue
   fi
 
-  # Diff: keep only fields whose live value differs from desired.
-  patch="$(jq -cn --argjson cur "$cur" --argjson want "$desired_fields" '
-    reduce ($want | to_entries[]) as $e ({}; if ($cur[$e.key]) != $e.value then . + {($e.key): $e.value} else . end)')"
+  # What to change, per org-repo-settings-plan.jq: the groups in force, the
+  # drifted fields (reported), and the PATCH body (whole-group — see that file).
+  plan="$(jq -cn --argjson cur "$cur" --argjson groups "$groups_json" --arg skips "$skips" -f "$PLAN_JQ")"
 
-  if [ "$(printf '%s' "$patch" | jq 'length')" -eq 0 ]; then
+  if [ "$(printf '%s' "$plan" | jq '.active_fields')" -eq 0 ]; then
+    # Every group excepted for this repo.
+    n_skipped=$((n_skipped + 1)); skip_report="${skip_report}- \`${repo}\` — all policy groups excepted (\`${exc_prop}=${exc}\`)\n"; continue
+  fi
+
+  drifted="$(printf '%s' "$plan" | jq -c '.drifted')"
+  patch="$(printf '%s' "$plan" | jq -c '.patch')"
+
+  if [ "$(printf '%s' "$drifted" | jq 'length')" -eq 0 ]; then
     n_conformant=$((n_conformant + 1)); continue
   fi
 
   # Human-readable diff lines (field: current → desired).
-  diff_lines="$(jq -rn --argjson cur "$cur" --argjson patch "$patch" '
-    $patch | to_entries[] | "  - `\(.key)`: `\($cur[.key] | tojson)` → `\(.value | tojson)`"')"
+  diff_lines="$(jq -rn --argjson cur "$cur" --argjson drifted "$drifted" '
+    $drifted | to_entries[] | "  - `\(.key)`: `\($cur[.key] | tojson)` → `\(.value | tojson)`"')"
   n_drift=$((n_drift + 1))
 
   if [ "$MODE" = "apply" ]; then
-    if printf '%s' "$patch" | gh api -X PATCH "repos/${ORG}/${repo}" --input - >/dev/null 2>&1; then
+    # Capture stderr (only) so a failure reports what GitHub actually said. The
+    # previous blanket 2>&1 discarded it and the report guessed at permissions,
+    # which sent a real 422 invalid_squash_commit_setting_combo on a six-night
+    # red schedule to the wrong root cause.
+    if patch_err="$(printf '%s' "$patch" | gh api -X PATCH "repos/${ORG}/${repo}" --input - 2>&1 >/dev/null)"; then
       n_applied=$((n_applied + 1))
       applied_report="${applied_report}- \`${repo}\` — reconciled:\n${diff_lines}\n"
     else
       n_errors=$((n_errors + 1))
-      drift_report="${drift_report}- \`${repo}\` — ⚠️ PATCH failed (needs Administration: write?):\n${diff_lines}\n"
+      drift_report="${drift_report}- \`${repo}\` — ⚠️ PATCH failed: $(api_error "$patch_err")\n${diff_lines}\n"
     fi
   else
     drift_report="${drift_report}- \`${repo}\` — drift:\n${diff_lines}\n"
@@ -266,12 +298,12 @@ while IFS= read -r slug; do
     n_team_drift=$((n_team_drift + 1))
 
     if [ "$MODE" = "apply" ]; then
-      if gh api -X PUT "orgs/${ORG}/teams/${slug}/repos/${ORG}/${repo}" -f permission="${want_perm}" >/dev/null 2>&1; then
+      if grant_err="$(gh api -X PUT "orgs/${ORG}/teams/${slug}/repos/${ORG}/${repo}" -f permission="${want_perm}" 2>&1 >/dev/null)"; then
         n_team_granted=$((n_team_granted + 1))
         team_report="${team_report}- \`${repo}\` — granted team \`${slug}\` = \`${want_perm}\`\n"
       else
         n_team_errors=$((n_team_errors + 1))
-        team_report="${team_report}- \`${repo}\` — ⚠️ failed to grant team \`${slug}\` = \`${want_perm}\` (needs org Members: write?)\n"
+        team_report="${team_report}- \`${repo}\` — ⚠️ failed to grant team \`${slug}\` = \`${want_perm}\`: $(api_error "$grant_err")\n"
       fi
     else
       team_report="${team_report}- \`${repo}\` — team \`${slug}\` below \`${want_perm}\` (would grant)\n"

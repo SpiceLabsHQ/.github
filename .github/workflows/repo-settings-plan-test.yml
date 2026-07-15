@@ -1,0 +1,32 @@
+name: Repo-settings plan — test
+
+# Runs the org-repo-settings-plan.jq fixture test (the drift + PATCH-body logic
+# behind the org repo-settings reconciler) on any PR that touches the reconciler.
+#
+# WHY: the reconciler's apply path only ever runs on a nightly schedule, against
+# the live org — so a defect in it surfaces as a red schedule, not a red PR. That
+# is exactly how DEV-631 happened: the whole-group PATCH path first executed in
+# production and stayed red for six nights. These fixtures give the logic a
+# pre-merge signal.
+
+on:
+  pull_request:
+    paths:
+      - "scripts/org-repo-settings-plan.jq"
+      - "scripts/org-repo-settings-reconcile.sh"
+      - "scripts/test/org-repo-settings-plan_test.sh"
+      - ".github/workflows/repo-settings-plan-test.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  plan-fixtures:
+    name: org-repo-settings-plan.jq fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Run reconciliation plan fixture test
+        run: scripts/test/org-repo-settings-plan_test.sh
