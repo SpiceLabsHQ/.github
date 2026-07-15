@@ -80,6 +80,12 @@ command -v jq >/dev/null || { echo "jq not found" >&2; exit 2; }
 command -v yq >/dev/null || { echo "yq (mikefarah) not found — needed to parse ${CONFIG}" >&2; exit 2; }
 [ -f "$CONFIG" ] || { echo "config not found: ${CONFIG}" >&2; exit 2; }
 
+# The per-repo planning logic (drift + PATCH body) lives in its own jq program so
+# it can be fixture-tested directly — scripts/test/org-repo-settings-plan_test.sh.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLAN_JQ="${HERE}/org-repo-settings-plan.jq"
+[ -f "$PLAN_JQ" ] || { echo "plan program not found: ${PLAN_JQ}" >&2; exit 2; }
+
 # --- 1. Load config as JSON -------------------------------------------------
 cfg="$(yq -o=json '.' "$CONFIG")"
 
@@ -166,39 +172,27 @@ while IFS= read -r repo; do
     n_skipped=$((n_skipped + 1)); skip_report="${skip_report}- \`${repo}\` — \`${exc_prop}=${exc}\`\n"; continue
   fi
 
-  # Groups to reconcile for this repo = every desired group that isn't skipped.
-  # Kept grouped (not flattened) because the PATCH body is assembled per group.
-  desired_groups="$(printf '%s' "$groups_json" | jq -c \
-    --arg skips "$skips" '
-      ($skips | split("\n") | map(select(length>0))) as $skip
-      | with_entries(select((.key as $g | $skip | index($g)) | not))')"
-  [ "$(printf '%s' "$desired_groups" | jq '[.[] | to_entries[]] | length')" -eq 0 ] && {
-    # Every group excepted for this repo.
-    n_skipped=$((n_skipped + 1)); skip_report="${skip_report}- \`${repo}\` — all policy groups excepted (\`${exc_prop}=${exc}\`)\n"; continue
-  }
-
   # Live settings for the repo (single GET). On error, note and move on.
   cur="$(gh api "repos/${ORG}/${repo}" 2>/dev/null || true)"
   if [ -z "$cur" ]; then
     n_errors=$((n_errors + 1)); drift_report="${drift_report}- \`${repo}\` — ⚠️ could not read repo settings (skipped)\n"; continue
   fi
 
-  # Drift: the fields whose live value differs from desired. Reported as-is —
-  # this is what actually changes, and the only thing worth showing a human.
-  drifted="$(jq -cn --argjson cur "$cur" --argjson groups "$desired_groups" '
-    [ $groups[] | to_entries[] | select($cur[.key] != .value) ] | from_entries')"
+  # What to change, per org-repo-settings-plan.jq: the groups in force, the
+  # drifted fields (reported), and the PATCH body (whole-group — see that file).
+  plan="$(jq -cn --argjson cur "$cur" --argjson groups "$groups_json" --arg skips "$skips" -f "$PLAN_JQ")"
+
+  if [ "$(printf '%s' "$plan" | jq '.active_fields')" -eq 0 ]; then
+    # Every group excepted for this repo.
+    n_skipped=$((n_skipped + 1)); skip_report="${skip_report}- \`${repo}\` — all policy groups excepted (\`${exc_prop}=${exc}\`)\n"; continue
+  fi
+
+  drifted="$(printf '%s' "$plan" | jq -c '.drifted')"
+  patch="$(printf '%s' "$plan" | jq -c '.patch')"
 
   if [ "$(printf '%s' "$drifted" | jq 'length')" -eq 0 ]; then
     n_conformant=$((n_conformant + 1)); continue
   fi
-
-  # PATCH body: every field of every group containing drift — not just the
-  # drifted fields. See the header note on co-validated fields (422s). Fields
-  # already at the desired value are re-sent unchanged, so this stays idempotent.
-  patch="$(jq -cn --argjson cur "$cur" --argjson groups "$desired_groups" '
-    [ $groups[]
-      | select(any(to_entries[]; $cur[.key] != .value))
-      | to_entries[] ] | from_entries')"
 
   # Human-readable diff lines (field: current → desired).
   diff_lines="$(jq -rn --argjson cur "$cur" --argjson drifted "$drifted" '
