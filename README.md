@@ -145,18 +145,18 @@ Strongest first:
 
 ### Pepper PR Review (`pepper-pr-review.yml`)
 
-Pepper is the Spice Labs PR review bot, powered by Claude Sonnet 5 on AWS Bedrock. The reusable workflow is centrally maintained here; each repo opts in with a ~15-line caller workflow and (optionally) carries its own review standards file.
+Pepper is the Spice Labs PR review bot, powered by Claude Sonnet 5 on AWS Bedrock. The reusable workflow is centrally maintained here and reaches every code-tier repo **zero-install**: the `spice-ci-floor-code` org ruleset injects [`floor-pepper.yml`](.github/workflows/floor-pepper.yml) (see [`rulesets/`](rulesets/)). A repo optionally carries its own review standards file — nothing else.
 
-**Naming legend:** workflow display name is **Pepper PR Review**, status check appears as **Pepper PR Review / Pepper review**, formal approves and request-changes are authored by the **Pepper PR Review** GitHub App (the reviewer name shown on the PR, not the workflow bot account), and humans invoke on-demand mode by typing `@pepper` in a PR comment.
+**Naming legend:** workflow display name is **Pepper PR Review**, status check appears as **Pepper PR Review / Pepper review**, and formal approves and request-changes are authored by the **Pepper PR Review** GitHub App (the reviewer name shown on the PR, not the workflow bot account).
 
 The bot operates in two modes:
 
-- **Auto-review** (PR opened / ready_for_review): performs a full review and chooses one of three outcomes — formal approve, formal request-changes, or comment-with-reviewer-assignment. Read-only on the filesystem.
-- **On-demand** (`@pepper` mention in a PR comment): treats the comment as a task and can edit files + push commits to the PR branch to satisfy the request.
+- **Auto-review** (PR `opened` / `synchronize` / `reopened` — the only events GitHub delivers to ruleset-injected workflows; `ready_for_review` and `issue_comment` are dropped, see DEV-576): performs a full review and chooses one of three outcomes — formal approve, formal request-changes, or comment-with-reviewer-assignment. Read-only on the filesystem. **Pushing a commit is what triggers a fresh review** — a draft marked ready is reviewed on its next push.
+- **On-demand** (`@pepper` mention in a PR comment): **dormant — no caller in the org wires `issue_comment`.** Floor repos never receive the event, and this repository's own `pepper-self-review.yml` deliberately matches the floor's event set so Pepper behaves one way everywhere (DEV-576). Pushing a commit is the only way to drive a review; removing the mode from the reusable is a DEV-576 follow-up.
 
-**1. Add the caller workflow** to each repo at `.github/workflows/pepper-pr-review.yml`. Copy-paste-ready version at [`examples/caller-pepper-pr-review.yml`](examples/caller-pepper-pr-review.yml).
+**1. Nothing to install.** The floor injects Pepper into every code-tier repo. Do **not** commit a per-repo caller: it duplicates the required floor run (the two-caller concurrency shape fixed in DEV-561) and drifts from the centrally maintained one.
 
-**2. (Optional) Add repo-specific review standards** at `.pepper/pr-review-standards.md`. The reusable workflow auto-detects the file and substitutes it into the review prompt's `<project_specific_guidelines>` block (overriding org defaults on conflict). Absent file → org defaults only. `CLAUDE.md` is also picked up because the action runs in the checked-out workspace.
+**2. (Optional) Add repo-specific review standards** at `.pepper/pr-review-standards.md`. The reusable workflow auto-detects the file and substitutes it into the review prompt's `<project_specific_guidelines>` block (overriding org defaults on conflict). Absent file → org defaults only. `CLAUDE.md` still reaches the reviewer — Claude Code auto-loads it from the checked-out workspace as agent guidance — but it has no guaranteed placement in the review prompt and no override authority on conflict; **review criteria** belong in the standards file, which is substituted verbatim and wins.
 
 **3. Inputs** (all optional, override via `with:`):
 
@@ -189,8 +189,6 @@ The bot operates in two modes:
 | Secret | Effect when set |
 |---|---|
 | `LINEAR_API_KEY` | Workflow exposes the key as env to the action; prompt instructs Pepper to fetch the linked Linear issue (detected from branch name or PR title) and verify the PR's scope against it |
-
-**6. Bulk rollout:** `scripts/rollout-pepper-pr-review.sh` opens an adoption PR in every non-archived org repo. Defaults to dry-run; pass `--apply` to actually create PRs.
 
 **Versioning:** Callers pin with `@pepper-pr-review-v1` (or harden with an immutable `pepper-pr-review-vX.Y.Z` tag / commit SHA — see [Versioning & releases](#versioning--releases)); the reusable workflow pins the underlying `anthropics/claude-code-action` ref. Action upgrades happen in one place.
 
