@@ -1,9 +1,11 @@
 # Org CI floor rulesets (DEV-499)
 
-Infrastructure-as-code for the organization rulesets that enforce the CI floor.
-These are **organization** rulesets (source: `SpiceLabsHQ`), applied with
+Infrastructure-as-code for the organization rulesets. The three **CI floor**
+rulesets are **organization** rulesets (source: `SpiceLabsHQ`), applied with
 [`scripts/apply-ci-floor-rulesets.sh`](../scripts/apply-ci-floor-rulesets.sh).
-See the [CI floor & maturity ladder](../README.md#ci-floor--maturity-ladder)
+The fourth, `spice-branch-protection.json`, is also captured here as IaC but
+lives on its own lifecycle — see [Branch protection](#branch-protection-dev-613)
+below. See the [CI floor & maturity ladder](../README.md#ci-floor--maturity-ladder)
 section for the standard these enforce.
 
 ## The rulesets
@@ -13,6 +15,7 @@ section for the standard these enforce.
 | `spice-ci-floor-docs.json` | `spice-ci-floor-docs` | repos with property `ci-exception = docs` | `floor-hygiene`, `floor-secret-scan`, `floor-pepper` |
 | `spice-ci-floor-code.json` | `spice-ci-floor-code` | all repos **except** `.github` and `docs`-tagged | `floor-hygiene`, `floor-secret-scan`, `floor-sast`, `floor-pepper`, `floor-automerge` |
 | `spice-ci-floor-public.json` | `spice-ci-floor-public` | the public repos (enumerated) | `floor-public` (scorecard-public; codeql + dependency-review are per-repo Silver guidance) |
+| `spice-branch-protection.json` | `spice-branch-protection` | `~ALL` repos, default branch + `main`/`master`/`develop` | PR review (1 approval, last-push approval, stale-dismissal), linear history, no deletion / force-push |
 
 Each ruleset uses GitHub's **"require workflows to pass"** rule to run the
 central `floor-*.yml` workflows (in this repo, at `refs/heads/main`) on PRs in
@@ -31,6 +34,37 @@ this `.github` repo (where the floor workflows live).
 - **Public overlay targeting is enumerated** (rulesets have no visibility
   condition). When a public repo is added, add it here; the org-ci-audit
   dashboard flags drift.
+
+## Branch protection (DEV-613)
+
+`spice-branch-protection.json` captures the org's live `spice-branch-protection`
+ruleset (id `12466693`) as code. It applies to `~ALL` repos on the default
+branch plus `main`/`master`/`develop`, and requires: a pull request with one
+approving review (`require_last_push_approval`, `dismiss_stale_reviews_on_push`;
+`require_code_owner_review` is **off** since the [auto-merge unlock](#auto-merge-rollout-dev-502)),
+linear history, and no branch deletion or force-push. Merges are limited to
+squash/rebase. One team (`actor_id 16119649`) has `pull_request`-mode bypass.
+
+This ruleset is **not** managed by `apply-ci-floor-rulesets.sh` (which is scoped
+to `spice-ci-floor-*.json`). It enforces active PR rules org-wide and carries the
+[solo-reviewer trap](#auto-merge-rollout-dev-502), so it's applied directly and
+deliberately, reading the live value first to review the diff:
+
+```bash
+# Read-only: confirm the checked-in file still matches live (no output = in sync).
+diff <(gh api orgs/SpiceLabsHQ/rulesets/12466693 \
+         --jq '{name,target,enforcement,conditions,rules,bypass_actors}' | jq -S .) \
+     <(jq -S '{name,target,enforcement,conditions,rules,bypass_actors}' \
+         rulesets/spice-branch-protection.json)
+
+# Apply (upsert in place by id). Review the diff above before running this.
+gh api -X PUT orgs/SpiceLabsHQ/rulesets/12466693 \
+  --input rulesets/spice-branch-protection.json
+```
+
+> ⚠️ The PUT above is the **only** supported way to change this ruleset from
+> code. Edits made in the GitHub UI drift from this file — reconcile them back
+> here (re-run the `diff`, commit the JSON) rather than leaving the file stale.
 
 ## Staged rollout (the safe order)
 
@@ -62,7 +96,9 @@ validates the workflow ref when the ruleset is created).
    ```
 
 Re-running the script updates an existing ruleset in place (upsert by name); it
-never touches `spice-branch-protection`.
+never touches `spice-branch-protection` — its default glob is scoped to
+`rulesets/spice-ci-floor-*.json`, so `spice-branch-protection.json` is only ever
+applied by the explicit command in [Branch protection](#branch-protection-dev-613).
 
 ## Auto-merge rollout (DEV-502)
 
@@ -82,7 +118,8 @@ workflow ref when the ruleset references it).
    `require_last_push_approval: true`, so Pepper's approval becomes sufficient
    while its deferral (no approval) still forces a human. This ruleset is **not**
    managed by `apply-ci-floor-rulesets.sh`; apply it directly, reading the live
-   value and flipping only the one flag:
+   value and flipping only the one flag (this flag flip is now already reflected
+   in the checked-in [`spice-branch-protection.json`](#branch-protection-dev-613)):
 
    ```bash
    gh api /orgs/SpiceLabsHQ/rulesets/12466693 \
