@@ -156,7 +156,7 @@ The bot operates in two modes:
 
 **1. Nothing to install.** The floor injects Pepper into every code-tier repo. Do **not** commit a per-repo caller: it duplicates the required floor run (the two-caller concurrency shape fixed in DEV-561) and drifts from the centrally maintained one.
 
-**2. (Optional) Add repo-specific review standards** at `.pepper/pr-review-standards.md`. The reusable workflow auto-detects the file and substitutes it into the review prompt's `<project_specific_guidelines>` block (overriding org defaults on conflict). Absent file → org defaults only. `CLAUDE.md` is **not** a review input — the review prompt never instructs reading it, so criteria left only there may not reach the review; put them in the standards file.
+**2. (Optional) Add repo-specific review standards** at `.pepper/pr-review-standards.md`. The reusable workflow auto-detects the file and substitutes it into the review prompt's `<project_specific_guidelines>` block (overriding org defaults on conflict). Absent file → org defaults only. `CLAUDE.md` still reaches the reviewer — Claude Code auto-loads it from the checked-out workspace as agent guidance — but it has no guaranteed placement in the review prompt and no override authority on conflict; **review criteria** belong in the standards file, which is substituted verbatim and wins.
 
 **3. Inputs** (all optional, override via `with:`):
 
