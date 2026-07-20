@@ -34,14 +34,17 @@ name: CI Floor — Auto-merge enable
 # `synchronize` is in the trigger list so a Renovate rebase (force-push) re-arms
 # auto-merge if it was ever cleared — the DEV-497 lesson applied here too.
 #
-# Skips: drafts (re-fires on ready_for_review), this `.github` repo (self-skip,
+# Skips: drafts (auto-merge arms on the next push after the PR is marked
+# ready — ruleset injection drops `ready_for_review`, DEV-576), this `.github` repo (self-skip,
 # matching the floor pattern; .github merges its own PRs via its self-* callers +
 # Renovate platformAutomerge), and rosemary-releaser release PRs (their release
 # loop owns their merge; a version bump has nothing to gate).
 
 on:
   pull_request:
-    types: [opened, reopened, ready_for_review, synchronize]
+    # Default activity types only — injection drops anything else (DEV-576);
+    # see floor-pepper.yml for the full note.
+    types: [opened, reopened, synchronize]
 
 permissions:
   contents: write

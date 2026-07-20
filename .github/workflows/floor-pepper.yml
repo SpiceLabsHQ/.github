@@ -13,26 +13,24 @@ name: CI Floor — Pepper review
 # per-repo secret setup is required.
 #
 # Bot handling: the reusable's `allowed_bots: renovate,dependabot` lets those
-# bots' PRs be reviewed. It HARD-FAILS on any other non-human initiator
-# (observed: rosemary-releaser, linear-code). As a *required* check a failure
-# blocks merge, so:
-#   - rosemary-releaser[bot] release PRs are skipped here (a SKIPPED required
-#     job still satisfies the ruleset; there's nothing to review in a version
-#     bump, and failing would deadlock the release loop).
-#   - Other bot-initiated events (e.g. linear-code touching a human PR) remain a
-#     known risk for making Pepper a *required* check org-wide; this is why the
-#     code floor adds Pepper LAST and is tracked with the bot policy in DEV-493.
+# bots' PRs be reviewed. Any other bot-initiated event skips the review cleanly
+# inside the reusable's gate (DEV-504) — a skipped required job satisfies the
+# ruleset and leaves any prior verdict intact. This caller additionally skips
+# rosemary-releaser[bot] release PRs outright: there's nothing to review in a
+# version bump, and a failure would deadlock the release loop.
 #
 # Do NOT add `pull_request_target` — see pepper-self-review.yml for the reason.
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-  # On-demand mode: the reusable keys `@pepper review` / `@pepper <task>` off
-  # `github.event_name == 'issue_comment'`. Every other Pepper caller wires this;
-  # the floor must too, or zero-install repos silently lose on-demand review.
-  issue_comment:
-    types: [created]
+    # Only the default activity types — deliberately. GitHub delivers
+    # ruleset-injected workflows on the DEFAULT pull_request types only; extra
+    # declared types (ready_for_review) and other events (issue_comment) are
+    # silently dropped (DEV-576), so declaring them here would be dead config
+    # that reads like capability. Consequences: a draft marked ready gets its
+    # review on the next push (synchronize), and on-demand `@pepper` comments
+    # work only where a caller is committed (pepper-self-review.yml, this repo).
+    types: [opened, synchronize, reopened]
 
 jobs:
   pepper:
