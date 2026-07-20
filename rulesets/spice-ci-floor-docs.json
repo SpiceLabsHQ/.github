@@ -21,7 +21,8 @@
         "do_not_enforce_on_create": true,
         "workflows": [
           { "repository_id": 1150169232, "path": ".github/workflows/floor-hygiene.yml", "ref": "refs/heads/main" },
-          { "repository_id": 1150169232, "path": ".github/workflows/floor-secret-scan.yml", "ref": "refs/heads/main" }
+          { "repository_id": 1150169232, "path": ".github/workflows/floor-secret-scan.yml", "ref": "refs/heads/main" },
+          { "repository_id": 1150169232, "path": ".github/workflows/floor-pepper.yml", "ref": "refs/heads/main" }
         ]
       }
     }
