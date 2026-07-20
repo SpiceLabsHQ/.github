@@ -240,18 +240,12 @@ The reusable workflow leads by example: every third-party action it invokes is p
 
 **1. Add the caller workflow** to each repo at `.github/workflows/actions-audit.yml`. Copy-paste-ready version at [`examples/caller-actions-audit.yml`](examples/caller-actions-audit.yml).
 
-### Dependency Review (`dependency-review.yml`)
-
-Wraps [`actions/dependency-review-action`](https://github.com/actions/dependency-review-action) with org-standard severity threshold and license policy. Designed to fail PRs that introduce (a) dependencies with CVEs at/above the configured severity, or (b) dependencies carrying denied licenses.
-
-**1. Add the caller workflow** to each repo at `.github/workflows/dependency-review.yml`. Copy-paste-ready version at [`examples/caller-dependency-review.yml`](examples/caller-dependency-review.yml).
-
 **2. Inputs** (all optional, override via `with:`):
 
 | Input | Default | Notes |
 |---|---|---|
 | `min_severity` | `medium` | zizmor severity threshold. One of `low`, `medium`, `high`. Findings at or above this level fail the job |
-| `allow_tags_for` | `actions/*,github/*` | Comma-separated owner globs allowed to use tags instead of SHA pins. Add e.g. `aws-actions/*` if you trust other publishers |
+| `allow_tags_for` | `actions/*,github/*,SpiceLabsHQ/*` | Comma-separated owner globs allowed to use tags instead of SHA pins. Add e.g. `aws-actions/*` if you trust other publishers |
 
 **3. Required permissions** (caller declares them in its job block — see the example):
 
@@ -264,6 +258,45 @@ Wraps [`actions/dependency-review-action`](https://github.com/actions/dependency
 **4. No secrets required.** The audit runs entirely against the caller's checked-out workspace and uses `GITHUB_TOKEN` for SARIF upload.
 
 **Versioning:** Callers pin with `@actions-audit-v1` (or harden with an immutable `actions-audit-vX.Y.Z` tag / commit SHA — see [Versioning & releases](#versioning--releases)). The reusable workflow pins zizmor to an exact version (`ZIZMOR_VERSION` env in the workflow) so audit results are reproducible across runs.
+
+### Dependency Review (`dependency-review.yml`)
+
+Wraps [`actions/dependency-review-action`](https://github.com/actions/dependency-review-action) with org-standard severity threshold and license policy. Designed to fail PRs that introduce (a) dependencies with CVEs at/above the configured severity, or (b) dependencies carrying denied licenses.
+
+**1. Add the caller workflow** to each repo at `.github/workflows/dependency-review.yml`. Copy-paste-ready version at [`examples/caller-dependency-review.yml`](examples/caller-dependency-review.yml).
+
+**2. Inputs** (all optional, override via `with:`):
+
+| Input | Default | Notes |
+|---|---|---|
+| `fail_on_severity` | `high` | Minimum CVE severity that fails the check. One of `low`, `moderate`, `high`, `critical` |
+| `deny_licenses` | `GPL-2.0,GPL-3.0,AGPL-1.0,AGPL-3.0,LGPL-2.0,LGPL-2.1,LGPL-3.0` | Comma-separated SPDX identifiers denied org-wide. See **License policy rationale** below |
+| `allow_licenses` | _(empty)_ | Optional allow-list. When non-empty, the action switches to allow-list mode and `deny_licenses` is ignored — see precedence below |
+| `comment_summary_in_pr` | `true` | Post the action's built-in vulnerability + license summary as a PR comment |
+
+**License policy rationale:** Spice Labs maintains All Rights Reserved on its own code. The default `deny_licenses` blocks all GPL/AGPL/LGPL variants because their copyleft obligations would force giving up the ARR posture if a covered dependency were linked into a Spice Labs product. The default explicitly enumerates all seven copyleft variants the dependency-review-action will currently see in the wild:
+
+- `GPL-2.0`, `GPL-3.0` — strong copyleft
+- `AGPL-1.0`, `AGPL-3.0` — strong copyleft, network-use trigger
+- `LGPL-2.0`, `LGPL-2.1`, `LGPL-3.0` — weak copyleft
+
+LGPL is included in the default deny list because dynamic-linking compliance is hard to guarantee in SaaS / containerized deployments. Repos with audited LGPL deps and a clean dynamic-linking story can override via `allow_licenses` (or by passing a narrower `deny_licenses`).
+
+**Precedence — `allow_licenses` vs `deny_licenses`:** `actions/dependency-review-action` rejects callers that pass both at once. When `allow_licenses` is set the reusable workflow drops `deny_licenses`, putting the action into allow-list mode (stricter — only listed licenses pass). When `allow_licenses` is empty the org-default deny-list applies. To override the deny-list, pass your own `deny_licenses` value; to switch policies entirely, set `allow_licenses`.
+
+**Misuse warning:** The reusable workflow's silent drop of `deny_licenses` when both inputs are set could mask a caller mistake, so it emits a `::warning::` to the Actions log when both `allow_licenses` and `deny_licenses` are non-empty. The warning records that `deny_licenses` was ignored and asks the caller to pass only one.
+
+**3. Required permissions** in the caller (already shown in the example):
+
+```yaml
+permissions:
+  contents: read
+  pull-requests: write   # only used when comment_summary_in_pr is true
+```
+
+**4. Requirements:** Dependency Review API is free on public repos. On private repos it requires GitHub Advanced Security.
+
+**Versioning:** Callers pin with `@dependency-review-v1` (or harden with an immutable `dependency-review-vX.Y.Z` tag / commit SHA — see [Versioning & releases](#versioning--releases)); the reusable workflow SHA-pins the underlying `actions/dependency-review-action` ref. Action upgrades happen in one place.
 
 ### PR Hygiene (`pr-hygiene.yml`)
 
@@ -343,6 +376,18 @@ Reusable wrapper around GitHub's first-party `github/codeql-action` for deep sta
 **1. Add the caller workflow** to each repo at `.github/workflows/codeql.yml`. Copy-paste-ready version at [`examples/caller-codeql.yml`](examples/caller-codeql.yml). Triggers: every PR (diff-scoped), every push to `main` (full repo), and weekly on Mondays.
 
 **2. Auto-detected languages:** the workflow probes the worktree for source files and emits one matrix job per detected language. CodeQL language IDs: `javascript-typescript`, `python`, `go`, `java-kotlin`, `csharp`, `ruby`, `swift`, `cpp`. JS+TS share a single `javascript-typescript` analyzer; Java+Kotlin share `java-kotlin`. No caller configuration needed for the common cases.
+
+**3. Inputs** (all optional, override via `with:`):
+
+| Input | Default | Notes |
+|---|---|---|
+| `languages` | (empty → auto-detect) | Comma-separated CodeQL language IDs to override auto-detect. Use the IDs listed above |
+| `query_suite` | `security-extended` | One of `default`, `security-extended`, `security-and-quality`. Pick `security-and-quality` if you want lint-style code-quality findings alongside security findings |
+| `build_command` | (empty) | Custom shell command to build compiled-language sources (Java/Kotlin, C#, C/C++, Swift) when CodeQL's `autobuild` can't figure out your project. Empty → autobuild for compiled languages, no-op for interpreted languages |
+
+**4. No secrets required.** SARIF upload uses the standard `GITHUB_TOKEN` with `security-events: write`.
+
+**Versioning:** Callers pin with `@codeql-v1` (or harden with an immutable `codeql-vX.Y.Z` tag / commit SHA — see [Versioning & releases](#versioning--releases)); the reusable workflow pins `github/codeql-action` to `@v4`. Engine upgrades happen in one place.
 
 ### Release Please (`release-please.yml`)
 
@@ -428,18 +473,6 @@ Two flags shape the monorepo behavior. `separate-pull-requests: false` keeps a s
 
 For a single-package repo, use the single-key form instead: `{".": "0.0.0"}`. **The keys here MUST exactly match the `packages` keys in your config file.** A typo (`packages/api` vs `packages/api/`) silently no-ops for that package on every run; release-please does not warn.
 
-### SAST (Semgrep) (`sast.yml`)
-
-Reusable Semgrep scan that runs the Spice Labs-curated default ruleset, layers on auto-detected language packs, and uploads SARIF to GitHub Code Scanning (Security tab). Catches OWASP Top Ten classes — including A03 injection — across any caller language without per-repo wiring.
-
-Semgrep is installed via `pip install semgrep==<pinned-version>` so the rule engine version is plain-text auditable in the reusable workflow. No third-party Semgrep Action is used. The pinned version is bumped deliberately when the org wants new rules.
-
-**1. Add the caller workflow** to each repo at `.github/workflows/sast.yml`. Copy-paste-ready version at [`examples/caller-sast.yml`](examples/caller-sast.yml). Triggers: every PR, every push to `main`, and weekly on Mondays.
-
-**2. (Optional) Add repo-specific custom rules** at `.semgrep.yml`. The reusable workflow auto-detects the file at the configured `config_path` and layers it on top of the curated rulesets. Absent file → curated rulesets only.
-
-**3. Auto-detected language packs:** the workflow probes the worktree for source files and adds `p/javascript`, `p/python`, `p/golang`, or `p/java` when it finds matching files. No caller configuration needed for the common cases.
-
 **4. Inputs** (all optional, override via `with:`):
 
 | Input | Default | Notes |
@@ -500,6 +533,32 @@ You can drop the field once the first release PR has merged; release-please igno
 - **Manifest keys must match config keys exactly.** A typo (`packages/api` vs `packages/api/`) will silently no-op for that package on every run.
 - **The config and manifest are strict JSON.** No comments, no trailing commas. release-please uses raw `JSON.parse()` and a parse failure aborts the whole run — no release PR opens until the file is fixed.
 - **Versioning:** Callers pin with `@release-please-v1` (or harden with an immutable `release-please-vX.Y.Z` tag / commit SHA — see [Versioning & releases](#versioning--releases)); the reusable workflow SHA-pins both `googleapis/release-please-action` and `actions/create-github-app-token`. Action upgrades happen in one place.
+
+### SAST (Semgrep) (`sast.yml`)
+
+Reusable Semgrep scan that runs the Spice Labs-curated default ruleset, layers on auto-detected language packs, and uploads SARIF to GitHub Code Scanning (Security tab). Catches OWASP Top Ten classes — including A03 injection — across any caller language without per-repo wiring.
+
+Semgrep is installed via `pip install semgrep==<pinned-version>` so the rule engine version is plain-text auditable in the reusable workflow. No third-party Semgrep Action is used. The pinned version is bumped deliberately when the org wants new rules.
+
+**1. Add the caller workflow** to each repo at `.github/workflows/sast.yml`. Copy-paste-ready version at [`examples/caller-sast.yml`](examples/caller-sast.yml). Triggers: every PR, every push to `main`, and weekly on Mondays.
+
+**2. (Optional) Add repo-specific custom rules** at `.semgrep.yml`. The reusable workflow auto-detects the file at the configured `config_path` and layers it on top of the curated rulesets. Absent file → curated rulesets only.
+
+**3. Auto-detected language packs:** the workflow probes the worktree for source files and adds `p/javascript`, `p/python`, `p/golang`, or `p/java` when it finds matching files. No caller configuration needed for the common cases.
+
+**4. Inputs** (all optional, override via `with:`):
+
+| Input | Default | Notes |
+|---|---|---|
+| `additional_rulesets` | (empty) | Comma-separated extra Semgrep ruleset IDs (e.g. `p/javascript,p/golang`). Each becomes its own `--config` flag. Layered on top of the curated defaults and auto-detected packs |
+| `config_path` | `.semgrep.yml` | Path to a caller-maintained custom-rules file. Tolerated absent — workflow simply skips when the file isn't present |
+| `fail_on_severity` | `error` | Severity gate. One of `info`, `warning`, `error`. Findings at or above this level fail the job. SARIF still uploads either way |
+
+**5. No secrets required.** Semgrep runs against the checked-out tree; SARIF upload uses the standard `GITHUB_TOKEN` with `security-events: write`.
+
+**Curated rulesets (always on):** `p/default`, `p/owasp-top-ten`, `p/secrets`.
+
+**Versioning:** Callers pin with `@sast-v1` (or harden with an immutable `sast-vX.Y.Z` tag / commit SHA — see [Versioning & releases](#versioning--releases)); the reusable workflow pins Semgrep to a specific PyPI release. Engine upgrades happen in one place.
 
 ### Release Artifacts (`release-artifacts.yml`)
 
@@ -576,14 +635,6 @@ slsa-verifier verify-artifact \
 
 **8. Pinning policy.** The reusable workflow SHA-pins all third-party actions (`anchore/sbom-action`, `sigstore/cosign-installer`) to 40-char commit SHAs per the actions-audit policy. `actions/attest-build-provenance` is first-party but is also SHA-pinned because it is an attestation primitive whose semantics we want to bump deliberately. `actions/checkout` follows the standard first-party major-tag policy. Callers pin with `@release-artifacts-v1` (or harden with an immutable `release-artifacts-vX.Y.Z` tag / commit SHA — see [Versioning & releases](#versioning--releases)).
 
-| `languages` | (empty → auto-detect) | Comma-separated CodeQL language IDs to override auto-detect. Use the IDs listed above |
-| `query_suite` | `security-extended` | One of `default`, `security-extended`, `security-and-quality`. Pick `security-and-quality` if you want lint-style code-quality findings alongside security findings |
-| `build_command` | (empty) | Custom shell command to build compiled-language sources (Java/Kotlin, C#, C/C++, Swift) when CodeQL's `autobuild` can't figure out your project. Empty → autobuild for compiled languages, no-op for interpreted languages |
-
-**4. No secrets required.** SARIF upload uses the standard `GITHUB_TOKEN` with `security-events: write`.
-
-**Versioning:** Callers pin with `@codeql-v1` (or harden with an immutable `codeql-vX.Y.Z` tag / commit SHA — see [Versioning & releases](#versioning--releases)); the reusable workflow pins `github/codeql-action` to `@v4`. Engine upgrades happen in one place.
-
 ### OpenSSF Scorecard
 
 Two reusable workflows wrap the [OpenSSF Scorecard](https://scorecard.dev) for different audiences. Both run the same Scorecard analysis and upload SARIF to GitHub Code Scanning; the difference is whether results are also published to OpenSSF's public dashboard at [securityscorecards.dev](https://securityscorecards.dev).
@@ -658,42 +709,3 @@ Scorecard's publish endpoint (`post_results.go` in the upstream Scorecard repo) 
 - **`publish_results: true` is mandatory.** That's the whole point of this workflow. Flipping it to `false` silently turns this into a worse copy of the internal `scorecard.yml`.
 
 **Versioning:** Callers pin with `@scorecard-public-v1` (or harden with an immutable `scorecard-public-vX.Y.Z` tag / commit SHA — see [Versioning & releases](#versioning--releases)). The reusable workflow SHA-pins `ossf/scorecard-action` to the same tag as the internal variant (currently v2.4.3) and tracks `actions/*` and `github/*` at major-version tags per the actions-audit policy.
-
-| `fail_on_severity` | `high` | Minimum CVE severity that fails the check. One of `low`, `moderate`, `high`, `critical` |
-| `deny_licenses` | `GPL-2.0,GPL-3.0,AGPL-1.0,AGPL-3.0,LGPL-2.0,LGPL-2.1,LGPL-3.0` | Comma-separated SPDX identifiers denied org-wide. See **License policy rationale** below |
-| `allow_licenses` | _(empty)_ | Optional allow-list. When non-empty, the action switches to allow-list mode and `deny_licenses` is ignored — see precedence below |
-| `comment_summary_in_pr` | `true` | Post the action's built-in vulnerability + license summary as a PR comment |
-
-**License policy rationale:** Spice Labs maintains All Rights Reserved on its own code. The default `deny_licenses` blocks all GPL/AGPL/LGPL variants because their copyleft obligations would force giving up the ARR posture if a covered dependency were linked into a Spice Labs product. The default explicitly enumerates all seven copyleft variants the dependency-review-action will currently see in the wild:
-
-- `GPL-2.0`, `GPL-3.0` — strong copyleft
-- `AGPL-1.0`, `AGPL-3.0` — strong copyleft, network-use trigger
-- `LGPL-2.0`, `LGPL-2.1`, `LGPL-3.0` — weak copyleft
-
-LGPL is included in the default deny list because dynamic-linking compliance is hard to guarantee in SaaS / containerized deployments. Repos with audited LGPL deps and a clean dynamic-linking story can override via `allow_licenses` (or by passing a narrower `deny_licenses`).
-
-**Precedence — `allow_licenses` vs `deny_licenses`:** `actions/dependency-review-action` rejects callers that pass both at once. When `allow_licenses` is set the reusable workflow drops `deny_licenses`, putting the action into allow-list mode (stricter — only listed licenses pass). When `allow_licenses` is empty the org-default deny-list applies. To override the deny-list, pass your own `deny_licenses` value; to switch policies entirely, set `allow_licenses`.
-
-**Misuse warning:** The reusable workflow's silent drop of `deny_licenses` when both inputs are set could mask a caller mistake, so it emits a `::warning::` to the Actions log when both `allow_licenses` and `deny_licenses` are non-empty. The warning records that `deny_licenses` was ignored and asks the caller to pass only one.
-
-**3. Required permissions** in the caller (already shown in the example):
-
-```yaml
-permissions:
-  contents: read
-  pull-requests: write   # only used when comment_summary_in_pr is true
-```
-
-**4. Requirements:** Dependency Review API is free on public repos. On private repos it requires GitHub Advanced Security.
-
-**Versioning:** Callers pin with `@dependency-review-v1` (or harden with an immutable `dependency-review-vX.Y.Z` tag / commit SHA — see [Versioning & releases](#versioning--releases)); the reusable workflow SHA-pins the underlying `actions/dependency-review-action` ref. Action upgrades happen in one place.
-
-| `additional_rulesets` | (empty) | Comma-separated extra Semgrep ruleset IDs (e.g. `p/javascript,p/golang`). Each becomes its own `--config` flag. Layered on top of the curated defaults and auto-detected packs |
-| `config_path` | `.semgrep.yml` | Path to a caller-maintained custom-rules file. Tolerated absent — workflow simply skips when the file isn't present |
-| `fail_on_severity` | `error` | Severity gate. One of `info`, `warning`, `error`. Findings at or above this level fail the job. SARIF still uploads either way |
-
-**5. No secrets required.** Semgrep runs against the checked-out tree; SARIF upload uses the standard `GITHUB_TOKEN` with `security-events: write`.
-
-**Curated rulesets (always on):** `p/default`, `p/owasp-top-ten`, `p/secrets`.
-
-**Versioning:** Callers pin with `@sast-v1` (or harden with an immutable `sast-vX.Y.Z` tag / commit SHA — see [Versioning & releases](#versioning--releases)); the reusable workflow pins Semgrep to a specific PyPI release. Engine upgrades happen in one place.
