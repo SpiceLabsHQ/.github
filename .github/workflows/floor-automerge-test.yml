@@ -1,0 +1,28 @@
+name: Floor auto-merge — arming test
+
+# Runs the floor-automerge arming-condition fixture tests (the ADR-0017
+# author-class logic: the enumerated bot allowlist, the `automerge-humans`
+# human opt-in and its user.type gate, and the rosemary/draft/self skips) on
+# any PR that touches the workflow or the test, so that logic stays pinned
+# down in CI instead of eyeballed once.
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/floor-automerge.yml"
+      - ".github/workflows/test/floor-automerge-if-test.sh"
+      - ".github/workflows/floor-automerge-test.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  fixtures:
+    name: floor-automerge arming fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Run floor-automerge arming fixture tests
+        run: .github/workflows/test/floor-automerge-if-test.sh

@@ -36,6 +36,10 @@ name: CI Floor — Auto-merge enable
 #     seen. Opt-in makes self-arming a deliberate per-repo choice; elsewhere the
 #     author still clicks GitHub's native "Enable auto-merge" button when they
 #     want it (per-PR override is GitHub-native — no new machinery here).
+#     The opt-in branch is additionally gated on `user.type == 'User'`: the
+#     property is REPO-scoped, so without the type gate any unlisted bot's PR
+#     in an opt-in repo would arm through it — reopening exactly the hole the
+#     enumerated allowlist closes.
 #
 # ZERO-MINUTE SKIP: the author-class test lives in the JOB-LEVEL `if:` below, which
 # GitHub evaluates BEFORE provisioning a runner. A non-arming PR (a human PR in a
@@ -106,7 +110,10 @@ jobs:
       (
         contains(fromJSON('["renovate[bot]","dependabot[bot]"]'),
                  github.event.pull_request.user.login) ||
-        github.event.repository.custom_properties['automerge-humans'] == 'true'
+        (
+          github.event.repository.custom_properties['automerge-humans'] == 'true' &&
+          github.event.pull_request.user.type == 'User'
+        )
       )
     runs-on: ubuntu-latest
     steps:
