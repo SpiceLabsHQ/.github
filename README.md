@@ -152,7 +152,7 @@ Pepper is the Spice Labs PR review bot, powered by Claude Sonnet 5 on AWS Bedroc
 The bot operates in two modes:
 
 - **Auto-review** (PR `opened` / `synchronize` / `reopened` — the only events GitHub delivers to ruleset-injected workflows; `ready_for_review` and `issue_comment` are dropped, see DEV-576): performs a full review and chooses one of three outcomes — formal approve, formal request-changes, or comment-with-reviewer-assignment. Read-only on the filesystem. **Pushing a commit is what triggers a fresh review** — a draft marked ready is reviewed on its next push.
-- **On-demand** (`@pepper` mention in a PR comment): treats the comment as a task and can edit files + push commits to the PR branch. **Works only where a Pepper caller is committed in the repo — today, only this repository's own `pepper-self-review.yml`.** Floor repos never receive `issue_comment`, so `@pepper` does nothing there.
+- **On-demand** (`@pepper` mention in a PR comment): **dormant — no caller in the org wires `issue_comment`.** Floor repos never receive the event, and this repository's own `pepper-self-review.yml` deliberately matches the floor's event set so Pepper behaves one way everywhere (DEV-576). Pushing a commit is the only way to drive a review; removing the mode from the reusable is a DEV-576 follow-up.
 
 **1. Nothing to install.** The floor injects Pepper into every code-tier repo. Do **not** commit a per-repo caller: it duplicates the required floor run (the two-caller concurrency shape fixed in DEV-561) and drifts from the centrally maintained one.
 

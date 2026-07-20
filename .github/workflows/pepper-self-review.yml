@@ -3,22 +3,22 @@ name: Pepper PR Review
 # DO NOT add `pull_request_target` here. That event runs in the base repo's
 # context with full secret access even for fork PRs and would let a malicious
 # fork diff exfiltrate secrets. Plain `pull_request` is safe because GitHub
-# strips secrets from fork PR runs. The reusable workflow further gates
-# `issue_comment` to org members only.
+# strips secrets from fork PR runs.
 #
 # `.github` self-skips the org code floor (floor-pepper.yml is guarded by
 # `github.repository != 'SpiceLabsHQ/.github'`), so this caller is the ONLY
-# Pepper coverage for this repo's own PRs. It must therefore carry the same
-# trigger set as the floor — including `synchronize`/`reopened` — or a push to
-# an already-open PR (a Renovate rebase, or a fix after review dismissal) never
-# re-runs Pepper and the PR strands at REVIEW_REQUIRED (DEV-497). Duplicate runs
-# on an unchanged head SHA are short-circuited pre-model by the reusable
+# Pepper coverage for this repo's own PRs. It carries EXACTLY the floor's event
+# set — deliberately (DEV-576). Because this file is committed (not injected),
+# extra triggers WOULD fire here; they are omitted so Pepper behaves one way
+# org-wide: a push is the only re-trigger, drafts are reviewed on their next
+# push, and comment commands exist nowhere. `synchronize` is load-bearing — a
+# push to an already-open PR (a Renovate rebase, a fix after review dismissal)
+# must re-run Pepper or the PR strands at REVIEW_REQUIRED (DEV-497). Duplicate
+# runs on an unchanged head SHA are short-circuited pre-model by the reusable
 # (DEV-523).
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-  issue_comment:
-    types: [created]
+    types: [opened, synchronize, reopened]
 
 jobs:
   pepper:
@@ -28,8 +28,7 @@ jobs:
     # rosemary-releaser"), and a required check that FAILS blocks the release
     # loop entirely. A SKIPPED job satisfies branch protection, and there's
     # nothing for Pepper to review in a manifest/CHANGELOG/version.txt bump
-    # anyway. issue_comment events are unaffected (the expression below is
-    # empty-vs-string, i.e. true, for them).
+    # anyway.
     if: github.event.pull_request.user.login != 'rosemary-releaser[bot]'
     # Local reference: resolves to the same commit as this run, so this repo
     # never pins itself to its own tags (the legacy shared `v1` is frozen —
