@@ -124,6 +124,37 @@ workflow ref when the ruleset references it).
    check name, or a floor-style required workflow. Objective correctness backstop
    for changes Pepper structurally can't fully judge (e.g. a lockfile bump).
 
+6. **Define the `automerge-humans` org custom property** (ADR-0017 — author-class
+   arming). `floor-automerge` now auto-arms only allowlisted bots by default;
+   **human** PRs self-arm only in repos where this property is `true`. Define it
+   once, org-wide, as a **true/false** property that **defaults to `false`** and
+   is **settable by repo admins** (so a repo can opt itself in). The endpoint is
+   [`PUT /orgs/{org}/properties/schema/{custom_property_name}`](https://docs.github.com/en/rest/orgs/custom-properties#create-or-update-a-custom-property-for-an-organization)
+   (verified against the GitHub REST docs):
+
+   ```bash
+   gh api -X PUT /orgs/SpiceLabsHQ/properties/schema/automerge-humans \
+     -f value_type=true_false \
+     -F required=true \
+     -f default_value=false \
+     -f values_editable_by=org_and_repo_actors \
+     -f description='Opt this repo into self-arming GitHub auto-merge for HUMAN PRs (floor-automerge). Default/false = human PRs do not self-arm; the author uses the native Enable auto-merge button. Does not affect bot PRs or the review gate.'
+   ```
+
+   `value_type=true_false` makes the allowed values the strings `"true"`/`"false"`
+   (`floor-automerge` compares `== 'true'`); `required=true` + `default_value=false`
+   gives every repo an explicit `false` until an admin flips it;
+   `values_editable_by=org_and_repo_actors` is what lets **repo** admins set it
+   (not just org owners). To opt a specific repo in, set the value via
+   [`PATCH /repos/{owner}/{repo}/properties/values`](https://docs.github.com/en/rest/repos/custom-properties#create-or-update-custom-property-values-for-a-repository)
+   (also verified against the GitHub REST docs):
+
+   ```bash
+   gh api -X PATCH /repos/SpiceLabsHQ/<repo>/properties/values --input - <<'JSON'
+   { "properties": [ { "property_name": "automerge-humans", "value": "true" } ] }
+   JSON
+   ```
+
 Then monitor Pepper's approve-vs-defer precision — the load-bearing trust
 boundary — and extend the org-ci-audit dashboard (issue #98) to surface
 auto-merge coverage per repo.

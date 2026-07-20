@@ -2,28 +2,69 @@ name: CI Floor — Auto-merge enable
 
 # Standard: implements the auto-merge path of the Eng-Cookbook deployment standard
 #           (single trunk -> continuous delivery) —
-#           https://github.com/SpiceLabsHQ/Eng-Cookbook/blob/main/standards/deployment.md
+#           https://github.com/SpiceLabsHQ/Eng-Cookbook/blob/main/standards/pull-requests.md
 #
 # Central CODE-floor workflow (DEV-502). Registered in `spice-ci-floor-code`
 # via the "require workflows to pass" rule, so it runs on every code-tier PR
 # with zero per-repo install — the same mechanism as floor-pepper (DEV-499).
 #
-# WHAT IT DOES: enables GitHub native auto-merge (squash) on the PR. The PR then
-# merges ITSELF once all required checks are green AND an approving review
+# WHAT IT DOES: enables ("arms") GitHub native auto-merge (squash) on the PR. The
+# PR then merges ITSELF once all required checks are green AND an approving review
 # exists. Pepper (floor-pepper) is that reviewer: high-confidence -> approves ->
 # merge fires; not confident -> defers to @SpiceLabsHQ/reviewers and does NOT
 # approve -> the PR waits for a human. Pepper's deferral IS the human fallback,
 # automatically, with no rules to maintain.
 #
-# THE MERGE GATE IS REVIEW CONFIDENCE, NOT CHANGE TYPE. There are deliberately
-# no semver tiers (patch/minor/major auto-merge rules). Spice is AI-first and
-# has an always-on reviewer, so majors, security bumps, and anomalies are all
-# handled by Pepper's judgment + its deferral to humans — not by version-delta
-# rules. Applies uniformly to bot AND human PRs.
+# THE MERGE GATE IS STILL REVIEW CONFIDENCE, NOT CHANGE TYPE (unchanged). There
+# are deliberately no semver tiers (patch/minor/major auto-merge rules). Spice is
+# AI-first and has an always-on reviewer, so majors, security bumps, and
+# anomalies are all handled by Pepper's judgment + its deferral to humans — not
+# by version-delta rules.
 #
-# Renovate PRs also enable auto-merge natively via `platformAutomerge` (shared
-# renovate preset, default.json), so this workflow is the belt-and-suspenders
-# path that covers Dependabot + human PRs uniformly.
+# WHAT ARMS IS AUTHOR-CLASS SCOPED (the DEV-502 change amended by ADR-0017). The
+# gate above is unchanged; what changed is *which PRs auto-arm* here:
+#   - BOTS, by default — but only an ENUMERATED allowlist (renovate[bot],
+#     dependabot[bot]), NOT a `*[bot]` glob. Every GitHub App login ends in
+#     `[bot]`, so a glob would silently arm any future app; the allowlist is the
+#     auditable inventory of "who arms automatically." Bots arm by default
+#     because no human reads review feedback on a bot's behalf — instant merge on
+#     a green + approved bump is the whole point.
+#   - HUMANS, per-repo opt-IN — arm only when the repo carries the org custom
+#     property `automerge-humans == 'true'` (default absent/false). Arming every
+#     human PR was denying authors the experience of *reading Pepper's review*:
+#     a high-confidence approval merged instantly and the feedback was never
+#     seen. Opt-in makes self-arming a deliberate per-repo choice; elsewhere the
+#     author still clicks GitHub's native "Enable auto-merge" button when they
+#     want it (per-PR override is GitHub-native — no new machinery here).
+#
+# ZERO-MINUTE SKIP: the author-class test lives in the JOB-LEVEL `if:` below, which
+# GitHub evaluates BEFORE provisioning a runner. A non-arming PR (a human PR in a
+# non-opt-in repo, an unlisted bot) therefore skips with zero runner minutes. A
+# skipped job still satisfies the ruleset "require workflows to pass" rule — the
+# same way the draft and rosemary-releaser skips already do — so the never-
+# deadlock invariant holds: skipping is a *pass*, never a red required check.
+#
+# CUSTOM-PROPERTY MECHANISM: repository custom properties ride in the event
+# payload at `github.event.repository.custom_properties`. The `automerge-humans`
+# name is hyphenated, so it needs bracket syntax
+# (`custom_properties['automerge-humans']`), and property values are STRINGS —
+# hence `== 'true'`. See rulesets/README.md for the one-time org mutation that
+# defines the property.
+#
+# FAIL-SAFE DIRECTION: a missing/absent property (the default) makes the `if:`
+# false -> the job skips -> the required check counts as PASSING. Worst case, a
+# human PR simply doesn't self-arm and its author uses the native auto-merge
+# button — never a red required check, never a deadlocked merge.
+#
+# Renovate PRs also arm auto-merge natively via `platformAutomerge` (shared
+# renovate preset, default.json) — a second, consistent bots-by-default arming
+# path — so this workflow is the belt-and-suspenders path for the allowlisted
+# bots plus opt-in human repos.
+#
+# See the pull-requests standard and its decision record for the why:
+#   https://github.com/SpiceLabsHQ/Eng-Cookbook/blob/main/standards/pull-requests.md
+#   https://github.com/SpiceLabsHQ/Eng-Cookbook/blob/main/decisions/ADR-0017-scope-auto-merge-arming.md
+#   (ADR-0017 amends ADR-0008 merge-on-review-confidence with author-class arming).
 #
 # REQUIRED-CHECK SAFETY: zero-install injection only exists via the ruleset
 # "required workflows" rule, so this job is a *required* check and must always
@@ -37,8 +78,14 @@ name: CI Floor — Auto-merge enable
 # Skips: drafts (auto-merge arms on the next push after the PR is marked
 # ready — ruleset injection drops `ready_for_review`, DEV-576), this `.github` repo (self-skip,
 # matching the floor pattern; .github merges its own PRs via its self-* callers +
-# Renovate platformAutomerge), and rosemary-releaser release PRs (their release
-# loop owns their merge; a version bump has nothing to gate).
+# Renovate platformAutomerge), rosemary-releaser release PRs (their release loop
+# owns their merge; a version bump has nothing to gate), and — new — any PR that
+# is neither an allowlisted bot nor a human PR in an `automerge-humans` repo.
+#
+# The explicit rosemary-releaser exclusion is KEPT, not dropped as redundant: the
+# human opt-in clause is REPO-scoped, so in an `automerge-humans` repo a rosemary
+# release PR would otherwise self-arm. The exclusion preserves the invariant that
+# the release loop — never this workflow — owns release-PR merges, in every repo.
 
 on:
   pull_request:
@@ -55,7 +102,12 @@ jobs:
     if: >-
       github.repository != 'SpiceLabsHQ/.github' &&
       github.event.pull_request.draft == false &&
-      github.event.pull_request.user.login != 'rosemary-releaser[bot]'
+      github.event.pull_request.user.login != 'rosemary-releaser[bot]' &&
+      (
+        contains(fromJSON('["renovate[bot]","dependabot[bot]"]'),
+                 github.event.pull_request.user.login) ||
+        github.event.repository.custom_properties['automerge-humans'] == 'true'
+      )
     runs-on: ubuntu-latest
     steps:
       # Enable auto-merge as a GitHub App rather than the built-in GITHUB_TOKEN.
