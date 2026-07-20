@@ -1,0 +1,127 @@
+name: 'Sync Linear GitHub labels'
+description: >-
+  Keep a Linear label group in sync with a set of GitHub objects — the
+  repositories of an org/user, or the reusable workflows hosted in one or more
+  repositories. Tracks renames via a stable key stored in the label description
+  so a rename updates the existing label in place — no issue associations are
+  lost.
+author: 'SpiceLabsHQ'
+branding:
+  icon: tag
+  color: purple
+
+inputs:
+  linear-api-key:
+    description: >-
+      Linear API key (a personal API key, or an OAuth access token) with
+      permission to read and write issue labels. Sent verbatim as the
+      Authorization header — do NOT prefix it with "Bearer".
+    required: true
+  github-token:
+    description: >-
+      Token used to enumerate GitHub. The default GITHUB_TOKEN can only see the
+      repository the workflow runs in, so to enumerate an org or user you must
+      supply a token with org/user repo read — a fine-grained PAT (Metadata:
+      read) or a GitHub App installation token.
+    required: false
+    default: ${{ github.token }}
+  source:
+    description: >-
+      What becomes a label: "repos" (every repository of `owner`) or "actions"
+      (every reusable workflow — one declaring `on: workflow_call` — found in
+      the repositories listed in `action-repos`).
+    required: false
+    default: 'repos'
+  owner:
+    description: 'The GitHub org or user login to enumerate.'
+    required: false
+    default: ${{ github.repository_owner }}
+  action-repos:
+    description: >-
+      Comma-separated repositories to scan when source=actions. Entries may be
+      "owner/repo" or a bare "repo" (resolved against `owner`). Defaults to
+      "<owner>/.github". A repo with no .github/workflows directory is skipped.
+    required: false
+    default: ''
+  group-name:
+    description: 'Name of the Linear label group to create and maintain.'
+    required: false
+    default: 'repo'
+  team:
+    description: >-
+      Linear team key or name to scope the label group to. Leave empty for a
+      workspace-level group (visible to every team).
+    required: false
+    default: ''
+  name-separator:
+    description: >-
+      Separator between the host repo and the workflow name when source=actions
+      (e.g. "/" produces ".github/sast"). Only used by source=actions.
+    required: false
+    default: '/'
+  color:
+    description: >-
+      Hex color (e.g. "#7C3AED") applied to labels this action creates. Leave
+      empty to let Linear assign one. Only applied at creation — existing labels
+      are never recolored.
+    required: false
+    default: ''
+  lowercase:
+    description: 'Lowercase names when writing them as Linear labels.'
+    required: false
+    default: 'true'
+  include-forks:
+    description: 'Include forked repositories. Only used by source=repos.'
+    required: false
+    default: 'true'
+  include-archived:
+    description: 'Include archived repositories. Only used by source=repos.'
+    required: false
+    default: 'false'
+  prune:
+    description: >-
+      What to do with a managed label whose underlying object no longer exists:
+      "report" (log only — safest), "archive" (soft-delete, recoverable in
+      Linear), or "delete" (permanent; removes the label from any issues).
+    required: false
+    default: 'report'
+  dry-run:
+    description: 'Compute and log the plan without mutating Linear.'
+    required: false
+    default: 'false'
+
+outputs:
+  created:
+    description: 'Number of labels created.'
+    value: ${{ steps.sync.outputs.created }}
+  renamed:
+    description: 'Number of labels renamed to follow a rename upstream.'
+    value: ${{ steps.sync.outputs.renamed }}
+  adopted:
+    description: 'Number of pre-existing labels adopted (stamped with a key).'
+    value: ${{ steps.sync.outputs.adopted }}
+  pruned:
+    description: 'Number of labels pruned (archived or deleted) for gone objects.'
+    value: ${{ steps.sync.outputs.pruned }}
+
+runs:
+  using: composite
+  steps:
+    - id: sync
+      shell: bash
+      env:
+        LINEAR_API_KEY: ${{ inputs.linear-api-key }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        INPUT_SOURCE: ${{ inputs.source }}
+        INPUT_OWNER: ${{ inputs.owner }}
+        INPUT_ACTION_REPOS: ${{ inputs.action-repos }}
+        INPUT_GROUP_NAME: ${{ inputs.group-name }}
+        INPUT_TEAM: ${{ inputs.team }}
+        INPUT_NAME_SEPARATOR: ${{ inputs.name-separator }}
+        INPUT_COLOR: ${{ inputs.color }}
+        INPUT_LOWERCASE: ${{ inputs.lowercase }}
+        INPUT_INCLUDE_FORKS: ${{ inputs.include-forks }}
+        INPUT_INCLUDE_ARCHIVED: ${{ inputs.include-archived }}
+        INPUT_PRUNE: ${{ inputs.prune }}
+        INPUT_DRY_RUN: ${{ inputs.dry-run }}
+      run: ${{ github.action_path }}/sync.sh

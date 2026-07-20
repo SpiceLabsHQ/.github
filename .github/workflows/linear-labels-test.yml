@@ -1,0 +1,27 @@
+name: Linear labels — test
+
+# Runs the fixture tests behind the linear-github-labels action on any PR that
+# touches it, so the reconciliation branches and the reusable-workflow
+# detection heuristic stay pinned down in CI.
+
+on:
+  pull_request:
+    paths:
+      - ".github/actions/linear-github-labels/**"
+      - ".github/workflows/linear-labels-test.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  fixtures:
+    name: plan.jq + detect.sh fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Run reconciliation fixture test
+        run: .github/actions/linear-github-labels/test/plan_test.sh
+      - name: Run reusable-workflow detection test
+        run: .github/actions/linear-github-labels/test/detect_test.sh

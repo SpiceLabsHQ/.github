@@ -1,0 +1,169 @@
+name: Linear labels
+
+# Nightly: keep Linear label groups in sync with GitHub, so tagging an issue
+# with the repo or the reusable workflow it concerns needs no manual upkeep.
+#
+#   `repo`        — every non-archived repository in the org
+#   `org-actions` — every reusable workflow (`on: workflow_call`) the org
+#                   publishes, named "<host-repo>/<workflow>" (e.g. `.github/sast`)
+#
+# Renames are tracked by a stable key stored in each label's description — the
+# repo's immutable GitHub ID for `repo`, and `gh-action:<repo-id>:<path>` for
+# `org-actions`. Reconciliation keys on that, never the name, so a rename
+# updates the existing label in place and no issue associations are lost. The
+# logic lives in the reusable composite action at
+# .github/actions/linear-github-labels (publishable for other orgs/users too).
+#
+# MULTI-REPO: `org-actions` scans the repos listed in `action-repos`. Today that
+# is just this repo; when a reusable workflow moves to or appears in another
+# repo, add it to that list — the key already carries the host repo's ID, so
+# existing labels do not churn.
+#
+# TOKEN SETUP:
+#   LINEAR_REPO_LABELS_KEY  (repo secret) — a Linear personal API key with label
+#                   WRITE scope. This action creates/updates labels, so a
+#                   read-only key fails every mutation with "Invalid scope:
+#                   `write` required". It is intentionally a DEDICATED secret,
+#                   separate from the org-wide read-only LINEAR_API_KEY, so write
+#                   access stays scoped to just this job (least privilege).
+#                   Create it in Linear → Settings → Security & access →
+#                   Personal API keys, with write access.
+#   GitHub enumeration reuses the org-owned GitHub App from the CI Floor Audit
+#   (Metadata: read org-wide to list repos; Contents: read to inspect workflow
+#   files), via the existing CI_AUDIT_APP_CLIENT_ID / CI_AUDIT_APP_PRIVATE_KEY
+#   secrets. The default GITHUB_TOKEN only sees this repo, so it cannot
+#   enumerate the org.
+# Until LINEAR_REPO_LABELS_KEY and the App secrets exist the workflow no-ops with
+# a warning (no red schedule).
+
+on:
+  schedule:
+    - cron: "37 6 * * *"   # nightly, 06:37 UTC
+  workflow_dispatch:
+    inputs:
+      groups:
+        description: "Which label groups to sync"
+        type: choice
+        options: [both, repo, org-actions]
+        default: both
+      team:
+        description: "Linear team to scope the groups to (empty = workspace-level)"
+        type: string
+        default: "DevOps"
+      prune:
+        description: "Handling for labels whose GitHub object is gone"
+        type: choice
+        options: [report, archive, delete]
+        default: report
+      dry-run:
+        description: "Log the plan without mutating Linear"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linear-labels
+  cancel-in-progress: true
+
+jobs:
+  # Secrets can't be read in a job-level `if:`, so the guard is its own job and
+  # both sync jobs gate on its output.
+  guard:
+    name: Check required secrets
+    runs-on: ubuntu-latest
+    outputs:
+      ok: ${{ steps.guard.outputs.ok }}
+    steps:
+      - name: Guard on required secrets
+        id: guard
+        env:
+          LINEAR_REPO_LABELS_KEY: ${{ secrets.LINEAR_REPO_LABELS_KEY }}
+          APP_CLIENT_ID: ${{ secrets.CI_AUDIT_APP_CLIENT_ID }}
+          APP_KEY: ${{ secrets.CI_AUDIT_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${LINEAR_REPO_LABELS_KEY}" ]; then
+            echo "::warning::LINEAR_REPO_LABELS_KEY is not set — skipping the Linear label sync. See this workflow's header."
+            echo "ok=false" >> "${GITHUB_OUTPUT}"
+          elif [ -z "${APP_CLIENT_ID}" ] || [ -z "${APP_KEY}" ]; then
+            echo "::warning::CI_AUDIT_APP_CLIENT_ID / CI_AUDIT_APP_PRIVATE_KEY are not set — cannot enumerate GitHub. Skipping."
+            echo "ok=false" >> "${GITHUB_OUTPUT}"
+          else
+            echo "ok=true" >> "${GITHUB_OUTPUT}"
+          fi
+
+  repo:
+    name: Sync Linear `repo` labels
+    needs: guard
+    if: >-
+      needs.guard.outputs.ok == 'true' &&
+      (inputs.groups == null || inputs.groups == 'both' || inputs.groups == 'repo')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Mint org-scoped installation token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.CI_AUDIT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CI_AUDIT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Sync labels
+        uses: ./.github/actions/linear-github-labels
+        with:
+          linear-api-key: ${{ secrets.LINEAR_REPO_LABELS_KEY }}
+          github-token: ${{ steps.app-token.outputs.token }}
+          source: repos
+          owner: ${{ github.repository_owner }}
+          group-name: repo
+          # Scheduled runs get no dispatch inputs, so the scope for the nightly is
+          # set here: the `repo` group lives in the DevOps team. Set empty for a
+          # workspace-level group instead. Names may overlap across teams — the
+          # action disambiguates the group by (name, team).
+          team: ${{ inputs.team || 'DevOps' }}
+          prune: ${{ inputs.prune || 'report' }}
+          dry-run: ${{ inputs.dry-run || 'false' }}
+
+  org-actions:
+    name: Sync Linear `org-actions` labels
+    needs: guard
+    if: >-
+      needs.guard.outputs.ok == 'true' &&
+      (inputs.groups == null || inputs.groups == 'both' || inputs.groups == 'org-actions')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Mint org-scoped installation token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.CI_AUDIT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CI_AUDIT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Sync labels
+        uses: ./.github/actions/linear-github-labels
+        with:
+          linear-api-key: ${{ secrets.LINEAR_REPO_LABELS_KEY }}
+          github-token: ${{ steps.app-token.outputs.token }}
+          source: actions
+          owner: ${{ github.repository_owner }}
+          # Add further hosts here as reusable workflows appear outside this
+          # repo — comma-separated, "owner/repo" or a bare repo name.
+          action-repos: ${{ github.repository }}
+          group-name: org-actions
+          team: ${{ inputs.team || 'DevOps' }}
+          color: "#F97316"
+          prune: ${{ inputs.prune || 'report' }}
+          dry-run: ${{ inputs.dry-run || 'false' }}
