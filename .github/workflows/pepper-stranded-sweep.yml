@@ -58,7 +58,18 @@ name: Pepper — stranded PR sweep
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    # Every ~15 min, deliberately OFF the quarter-hour marks. GitHub documents
+    # that the `schedule` event "can be delayed during periods of high loads",
+    # that "high load times include the start of every hour", and that under
+    # sufficient load "some queued jobs may be dropped" — with the recommended
+    # mitigation being to schedule at a different time of the hour. `*/15` fires
+    # at :00 (the documented worst slot) plus three other round minutes every
+    # repo reaches for; in practice it produced zero runs in the first hour after
+    # this workflow shipped. These offsets match the convention already used by
+    # the other schedules here (`37 6`, `17 13`, `41 6`).
+    # 5 minutes is the documented floor, so the cadence itself was never the
+    # problem — the minute-of-hour was.
+    - cron: "7,22,37,52 * * * *"
   workflow_dispatch:
     inputs:
       max_nudges:
