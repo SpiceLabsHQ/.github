@@ -26,13 +26,13 @@ name: Pepper — stranded PR sweep
 # SILENTLY (reopens happen, reviews never do, nothing goes red) — so the script
 # asserts its own presence on that list at startup and refuses to run otherwise.
 #
-# The sweep uses its OWN App (`spice-pepper-sweep`), not Pepper's review App.
-# ADR-0007 requires one App per capability, forbids consuming another App's
-# credentials, and forbids widening an existing App to serve a new use — and this
-# sweep needs a permission Pepper's App does not carry. The ADR names reusing
-# `pepper-pr-review` as an explicitly rejected alternative. Two identities also
-# make the backoff exact: "did Pepper review?" and "did WE nudge?" are different
-# questions and now have different answers.
+# The sweep acts as Pepper's own App (`pepper-pr-review`). Reviewing a PR and
+# re-firing a review that never happened are two actions of ONE capability, so
+# they share one App — ADR-0007 scopes an App per capability, not per workflow,
+# and this is not a second capability borrowing a first one's credentials. One
+# login then answers both questions the sweep asks ("has Pepper reviewed?" and
+# "did we already nudge?"), which is sound precisely because nothing else in
+# Pepper reopens PRs: a reopen by this App is the sweep.
 #
 # GUARDRAILS (all three are in the script, exercised by the fixture test):
 #   - Per-run cap (`max_nudges`, default 5) so a mass-stranding event cannot fire
@@ -42,20 +42,14 @@ name: Pepper — stranded PR sweep
 #   - Floor exclusions inherited: drafts, docs-tier repos, this `.github` repo,
 #     and rosemary-releaser release PRs.
 #
-# ONE-TIME SETUP (required — the sweep no-ops until this exists). Provision a new
-# org-owned GitHub App named so its slug is exactly `spice-pepper-sweep`, since
-# that string is what floor-pepper.yml allow-lists. Grant it, installed org-wide:
-#       Repository:   Pull requests     = read/write  (the close -> reopen)
-#       Repository:   Metadata          = read
-#       Organization: Custom properties = read        (the docs-tier skip)
-# and nothing else — that is the whole capability (ADR-0007 rule 9).
-# Store its credentials as secrets on THIS repo:
-#       PEPPER_SWEEP_APP_ID           = the App's App ID
-#       PEPPER_SWEEP_APP_PRIVATE_KEY  = the App's private-key .pem contents
-# Repo-scoped secrets are correct here: this workflow runs only in `.github` and
-# is not ruleset-injected, so the org-level requirement in rule 10 (which exists
-# because injected workflows resolve secrets against the TARGET repo) does not
-# apply. Until the secrets exist the workflow no-ops with a warning.
+# ONE-TIME SETUP: grant the existing `pepper-pr-review` App one more permission,
+# org-wide. It already holds what the close -> reopen needs:
+#       Repository:   Pull requests     = read/write   (already granted)
+#       Repository:   Metadata          = read         (already granted)
+#       Organization: Custom properties = read         (ADD THIS — docs-tier skip)
+# The credentials are the App's existing `PEPPER_PR_REVIEW_APP_*` org secrets, so
+# there is nothing new to store. Until they resolve, the workflow no-ops with a
+# warning rather than failing.
 #
 # Without the custom-property read the run FAILS rather than proceeding: an
 # unreadable property list is indistinguishable from "no repo is docs-tier",
@@ -102,12 +96,12 @@ jobs:
       - name: Guard on App credentials presence
         id: guard
         env:
-          APP_ID: ${{ secrets.PEPPER_SWEEP_APP_ID }}
-          APP_KEY: ${{ secrets.PEPPER_SWEEP_APP_PRIVATE_KEY }}
+          APP_ID: ${{ secrets.PEPPER_PR_REVIEW_APP_ID }}
+          APP_KEY: ${{ secrets.PEPPER_PR_REVIEW_APP_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           if [ -z "${APP_ID}" ] || [ -z "${APP_KEY}" ]; then
-            echo "::warning::PEPPER_SWEEP_APP_ID / PEPPER_SWEEP_APP_PRIVATE_KEY are not set — skipping the sweep. See this workflow's header for the one-time App setup."
+            echo "::warning::PEPPER_PR_REVIEW_APP_ID / PEPPER_PR_REVIEW_APP_PRIVATE_KEY are not set — skipping the sweep. See this workflow's header for the one-time App setup."
             echo "ok=false" >> "${GITHUB_OUTPUT}"
           else
             echo "ok=true" >> "${GITHUB_OUTPUT}"
@@ -120,22 +114,20 @@ jobs:
         if: steps.guard.outputs.ok == 'true'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ secrets.PEPPER_SWEEP_APP_ID }}
-          private-key: ${{ secrets.PEPPER_SWEEP_APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.PEPPER_PR_REVIEW_APP_ID }}
+          private-key: ${{ secrets.PEPPER_PR_REVIEW_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
 
       - name: Sweep
         if: steps.guard.outputs.ok == 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          # Our own identity, resolved from the token we actually minted rather
-          # than hardcoded — a rename of the App cannot desync the "did WE nudge?"
-          # backoff from the login we really act as. The startup preflight then
-          # checks this same resolved slug against floor-pepper.yml's allow-list.
-          PEPPER_SWEEP_BOT_LOGIN: ${{ steps.app-token.outputs.app-slug }}[bot]
-          # Pepper's review identity is a DIFFERENT App, so it is named here
-          # rather than derived from our token.
-          PEPPER_REVIEW_BOT_LOGIN: pepper-pr-review[bot]
+          # Resolved from the token we actually minted rather than hardcoded, so
+          # a rename of the App cannot desync the "has Pepper reviewed / did we
+          # already nudge" tests from the login we really act as. The startup
+          # preflight checks this same resolved slug against floor-pepper.yml's
+          # allowed_bots.
+          PEPPER_BOT_LOGIN: ${{ steps.app-token.outputs.app-slug }}[bot]
           MAX_NUDGES: ${{ inputs.max_nudges || '5' }}
         run: |
           set -euo pipefail
