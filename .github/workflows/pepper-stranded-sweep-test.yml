@@ -1,0 +1,33 @@
+name: Pepper stranded sweep — test
+
+# Runs the pepper-stranded-sweep-decide.jq fixture test (the per-PR nudge/skip
+# decision behind the stranded-PR sweep) on any PR that touches the sweep.
+#
+# WHY: the sweep only ever runs on a schedule, against the live org, and its two
+# guardrails fail SILENTLY when they regress — a broken backoff is a reopen loop
+# on real PRs, a broken verdict test is a Bedrock bill. Neither shows up as a red
+# check, only as churn. These fixtures give the logic a pre-merge signal, the same
+# reasoning as repo-settings-plan-test.yml (DEV-631).
+
+on:
+  pull_request:
+    paths:
+      - "scripts/pepper-stranded-sweep-decide.jq"
+      - "scripts/pepper-stranded-sweep.sh"
+      - "scripts/test/pepper-stranded-sweep-decide_test.sh"
+      - ".github/workflows/pepper-stranded-sweep.yml"
+      - ".github/workflows/pepper-stranded-sweep-test.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  decide-fixtures:
+    name: pepper-stranded-sweep-decide.jq fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Run sweep decision fixture test
+        run: scripts/test/pepper-stranded-sweep-decide_test.sh
