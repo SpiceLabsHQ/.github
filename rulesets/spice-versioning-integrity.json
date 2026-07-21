@@ -1,0 +1,30 @@
+{
+  "name": "spice-versioning-integrity",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": {
+      "include": ["~DEFAULT_BRANCH"],
+      "exclude": []
+    },
+    "repository_name": {
+      "include": [".github"],
+      "exclude": []
+    }
+  },
+  "rules": [
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": false,
+        "do_not_enforce_on_create": true,
+        "required_status_checks": [
+          { "context": "Versioning integrity" }
+        ]
+      }
+    }
+  ],
+  "bypass_actors": [
+    { "actor_id": 16119649, "actor_type": "Team", "bypass_mode": "pull_request" }
+  ]
+}

@@ -3,9 +3,11 @@
 Infrastructure-as-code for the organization rulesets. The three **CI floor**
 rulesets are **organization** rulesets (source: `SpiceLabsHQ`), applied with
 [`scripts/apply-ci-floor-rulesets.sh`](../scripts/apply-ci-floor-rulesets.sh).
-The fourth, `spice-branch-protection.json`, is also captured here as IaC but
-lives on its own lifecycle — see [Branch protection](#branch-protection-dev-613)
-below. See the [CI floor & maturity ladder](../README.md#ci-floor--maturity-ladder)
+Two more, `spice-branch-protection.json` and `spice-versioning-integrity.json`,
+are also captured here as IaC but live on their own lifecycles — see
+[Branch protection](#branch-protection-dev-613) and
+[Versioning integrity](#versioning-integrity-dev-677) below. See the
+[CI floor & maturity ladder](../README.md#ci-floor--maturity-ladder)
 section for the standard these enforce.
 
 ## The rulesets
@@ -16,6 +18,7 @@ section for the standard these enforce.
 | `spice-ci-floor-code.json` | `spice-ci-floor-code` | all repos **except** `.github` and `docs`-tagged | `floor-hygiene`, `floor-secret-scan`, `floor-sast`, `floor-pepper`, `floor-automerge` |
 | `spice-ci-floor-public.json` | `spice-ci-floor-public` | the public repos (enumerated) | `floor-public` (scorecard-public; codeql + dependency-review are per-repo Silver guidance) |
 | `spice-branch-protection.json` | `spice-branch-protection` | `~ALL` repos, default branch + `main`/`master`/`develop` | PR review (1 approval, last-push approval, stale-dismissal), linear history, no deletion / force-push |
+| `spice-versioning-integrity.json` | `spice-versioning-integrity` | `.github` only, default branch | the `Versioning integrity` status check — see [Versioning integrity](#versioning-integrity-dev-677) |
 
 Each ruleset uses GitHub's **"require workflows to pass"** rule to run the
 central `floor-*.yml` workflows (in this repo, at `refs/heads/main`) on PRs in
@@ -65,6 +68,47 @@ gh api -X PUT orgs/SpiceLabsHQ/rulesets/12466693 \
 > ⚠️ The PUT above is the **only** supported way to change this ruleset from
 > code. Edits made in the GitHub UI drift from this file — reconcile them back
 > here (re-run the `diff`, commit the JSON) rather than leaving the file stale.
+
+## Versioning integrity (DEV-677)
+
+`spice-versioning-integrity.json` makes the `Versioning integrity` check
+(`.github/workflows/repo-checks.yml`) a **required status check** — but only on
+`.github`, because that is the only repo where the check exists.
+
+**Why it needs its own ruleset.** The invariant it guards is real: a reusable
+workflow (or a file it ships, such as `pepper-pr-review`'s `prompts/`) changed
+without regenerating `workflows/<name>/workflow.sha256`, so the commit routes to
+no release-please package — no release PR, no tag — and since consumers pin the
+moving `@<name>-v1` alias, the change never reaches anyone (DEV-235). Until now
+nothing enforced it at merge time; it went red and relied on a human noticing.
+
+**Why not `spice-branch-protection`.** That ruleset targets
+`repository_name: ["~ALL"]`. `repo-checks.yml` exists only in `.github`, so
+adding the check there would block every PR in every org repo forever, waiting
+on a check that never runs.
+
+**Parameter choices.** `strict_required_status_checks_policy` is **false** on
+purpose — requiring branches to be up to date would force a rebase every time
+`main` moves, which is exactly the Renovate churn `rebaseWhen: "conflicted"`
+exists to avoid (DEV-497). `do_not_enforce_on_create: true` matches the floor
+rulesets. The bypass actor mirrors `spice-branch-protection` so a
+checksum-stale PR can still be merged by hand until self-healing lands
+(DEV-670).
+
+Applied explicitly, never by the default glob:
+
+```bash
+# Dry-run first — confirm `.github` is matched and no other repo is.
+scripts/apply-ci-floor-rulesets.sh --evaluate rulesets/spice-versioning-integrity.json
+
+# Then enforce.
+scripts/apply-ci-floor-rulesets.sh --active rulesets/spice-versioning-integrity.json
+```
+
+> ⚠️ Verify in `--evaluate` mode before flipping active. Two things to confirm on
+> a real PR: that `repository_name: [".github"]` matches a leading-dot repo name
+> as a literal, and that the reported check context is exactly
+> `Versioning integrity` (the job's `name:`, not its key).
 
 ## Staged rollout (the safe order)
 
