@@ -38,6 +38,16 @@ jobs:
       github.repository != 'SpiceLabsHQ/.github' &&
       github.event.pull_request.user.login != 'rosemary-releaser[bot]'
     uses: SpiceLabsHQ/.github/.github/workflows/pepper-pr-review.yml@pepper-pr-review-v1
+    with:
+      # `pepper-pr-review` is Pepper's OWN App, and it is on this list because of
+      # the stranded-PR sweep (DEV-667): that sweep reopens stranded PRs as this
+      # App, which makes it the triggering actor of the resulting `reopened`
+      # event. Without the entry the bot-initiator gate (DEV-504) would skip
+      # every review the sweep fires — all the churn, none of the reviews, and
+      # silently, since a skipped required check still passes. Removing it
+      # disables the sweep without any signal that it has been disabled.
+      # This does NOT let Pepper review its own PRs; Pepper does not open any.
+      allowed_bots: renovate,dependabot,pepper-pr-review
     permissions:
       contents: read
       pull-requests: write
