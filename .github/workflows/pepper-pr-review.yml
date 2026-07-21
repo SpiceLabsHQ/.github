@@ -210,6 +210,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       run: ${{ steps.decide.outputs.run }}
+      nag: ${{ steps.decide.outputs.nag }}
     steps:
       # Minted only on pull_request events, where the decide step needs the
       # App's bot login ("<app-slug>[bot]") to pick Pepper's own prior reviews
@@ -244,6 +245,14 @@ jobs:
         run: |
           set -euo pipefail
           run=true
+          # `nag` is the exact MIRROR of the draft skip below (DEV-666): the runs
+          # where the review is skipped for being a draft post the draft-guidance
+          # comment instead, and no others. It is set ONLY inside the live-draft
+          # branch, which is itself reachable only while `run` is still true — so
+          # a PR skipped for any OTHER reason (non-allowlisted bot initiator,
+          # unchanged SHA) never gets the comment, and the fail-open path where
+          # draft state is unreadable reviews rather than nags.
+          nag=false
           # Only pull_request events carry the triggering actor that
           # claude-code-action gates on. If that actor is a bot NOT on the
           # allow-list, skip rather than let the action hard-fail.
@@ -287,6 +296,7 @@ jobs:
             LIVE_DRAFT=$(gh pr view "${PR_NUMBER}" --repo "${REPO}" --json isDraft --jq '.isDraft' 2>/dev/null || true)
             if [ "${LIVE_DRAFT}" = "true" ]; then
               run=false
+              nag=true
               echo "::notice::PR is a draft — skipping auto-review. Mark it ready for review, then push a commit to trigger a review. DEV-235."
             elif [ -z "${LIVE_DRAFT}" ]; then
               echo "::notice::Could not read live draft state for PR #${PR_NUMBER} — proceeding with review (fail-open; DEV-561)."
@@ -344,6 +354,78 @@ jobs:
             fi
           fi
           echo "run=${run}" >> "${GITHUB_OUTPUT}"
+          echo "nag=${nag}" >> "${GITHUB_OUTPUT}"
+
+  # Draft guidance (DEV-666). The gate skips the review on drafts, which from
+  # the PR surface is indistinguishable from "Pepper never ran" — the author is
+  # left waiting for a review that will never arrive. This job is the mirror
+  # image of that skip: draft -> say how to get reviewed, ready -> nothing (the
+  # review runs as before). It is the FAST PATH of draft handling; the org sweep
+  # is the guarantee half.
+  #
+  # A STICKY comment (same `header:` every run) so a draft pushed to ten times
+  # carries one comment, updated in place, not ten. Cleared once the PR is no
+  # longer a draft so a "still a draft" note never sits above Pepper's actual
+  # verdict — the same post/clear pairing pr-hygiene uses for its size warning.
+  #
+  # NON-BLOCKING BY CONSTRUCTION. floor-pepper is a REQUIRED check org-wide, so
+  # a failure here would deadlock auto-merge (DEV-502) over a courtesy comment.
+  # Every step is `continue-on-error`, leaving the job green whatever GitHub's
+  # comment API does.
+  draft-guidance:
+    name: Draft guidance comment
+    needs: gate
+    runs-on: ubuntu-latest
+    # `nag` is only ever true on a pull_request event, so this covers both the
+    # post and the clear branches without re-testing the event name.
+    if: github.event_name == 'pull_request'
+    steps:
+      # Posted under Pepper's own identity — the message speaks in first person
+      # about Pepper's review behavior, so github-actions[bot] would be the
+      # wrong voice. continue-on-error + the `||` fallback below mean a mint
+      # hiccup downgrades the author to github-actions[bot] rather than
+      # swallowing the guidance entirely.
+      - name: Generate App installation token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.PEPPER_PR_REVIEW_APP_ID }}
+          private-key: ${{ secrets.PEPPER_PR_REVIEW_APP_PRIVATE_KEY }}
+
+      # This body MUST NOT contain the trigger phrase (default `@pepper`).
+      # Posted by the Pepper App, it fires an `issue_comment` event, and a body
+      # matching `contains(body, @pepper)` would spawn a fresh workflow run on
+      # every draft push. Same invariant as the no-verdict escalation comment
+      # below — see the longer note there.
+      - name: Post draft guidance
+        if: needs.gate.outputs.nag == 'true'
+        continue-on-error: true
+        # SHA-pinned to v3.0.4 (third-party).
+        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
+        with:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          header: pepper-draft-guidance
+          message: |
+            This PR is still a draft, so I haven't reviewed it — I wait until it's ready.
+
+            To get a review: mark it **Ready for review**, then push a commit or close and reopen the PR. If you'd rather do nothing, I'll pick it up on my next automated pass; nudging is just faster.
+
+            And if this didn't need to be a draft, opening it ready next time skips the whole step. New to how we run PRs? [Here's the rundown](https://github.com/SpiceLabsHQ/Eng-Cookbook/blob/main/standards/pull-requests.md).
+
+            — Pepper
+
+      # The PR is no longer a draft (or was never one): drop any guidance left
+      # from an earlier draft push. A no-op when no such comment exists, which
+      # is the common case on a PR opened ready.
+      - name: Clear draft guidance
+        if: needs.gate.outputs.nag != 'true'
+        continue-on-error: true
+        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
+        with:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          header: pepper-draft-guidance
+          delete: true
 
   review:
     name: Pepper review
