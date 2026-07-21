@@ -21,6 +21,192 @@ on:
     types: [opened, synchronize, reopened]
 
 jobs:
+  # Self-heal workflow.sha256 on bot-authored PRs (DEV-670).
+  #
+  # Renovate bumps a pinned action SHA inside a reusable workflow YAML and
+  # structurally cannot regenerate the matching workflows/<name>/workflow.sha256
+  # — `postUpgradeTasks` is unavailable on the hosted Mend app and this org runs
+  # no self-hosted Renovate. The result is a PR that can never be made correct by
+  # its own author (SpiceLabsHQ/.github#138: six correct, unactionable reviews).
+  # Left alone once Pepper starts approving bot dependency PRs, the stale
+  # checksum auto-merges and silently breaks release routing for that workflow
+  # package — no release PR, no tag, and consumers pinned to the moving
+  # `@<name>-v1` alias never receive the change.
+  #
+  # This job regenerates the checksums and pushes them onto the PR branch, then
+  # SKIPS the Pepper job for this run: the push emits `synchronize`, which
+  # re-runs CI and Pepper against the corrected tree. That skip is the primary
+  # defense against Pepper reviewing (and ruling on) a tree it is about to
+  # invalidate.
+  #
+  # This lives here, in the repo-local caller, and NOT in the reusable's `gate`
+  # job. workflow.sha256 files exist only in SpiceLabsHQ/.github — they are the
+  # release-please routing bridge for reusable workflows, which GitHub requires
+  # to live flat in .github/workflows/. pepper-pr-review.yml ships to every org
+  # repo via floor-pepper.yml, and its `gate` job has no checkout, so it can
+  # neither run the script nor carry a .github-specific predicate. Nothing in
+  # this job changes behavior for any consumer of the reusable.
+  #
+  # BLOCKED ON DEV-678. The push identity must NOT be the Pepper App:
+  # `require_last_push_approval: true` is live on this repo, so a Pepper-authored
+  # push makes Pepper's own subsequent approval stop satisfying the rule and the
+  # PR strands with everything green. It also must not be GITHUB_TOKEN, whose
+  # pushes do not trigger workflows — without a `synchronize` the corrected tree
+  # is never reviewed. Until the dedicated CHECKSUM_SYNC_APP_* App exists, the
+  # mint below yields no token, the job reports `pushed=false`, and Pepper runs
+  # exactly as it does today.
+  checksum-sync:
+    name: Self-heal workflow.sha256
+    runs-on: ubuntu-latest
+    permissions:
+      # The push deliberately does NOT use GITHUB_TOKEN (see above), so this job
+      # needs no write scope of its own.
+      contents: read
+    outputs:
+      # 'true' ONLY when a sync commit was actually pushed. Every other
+      # outcome — ineligible author, no drift, no token, push rejected, job
+      # crash — leaves it unset or 'false', which is what makes the gate on the
+      # `pepper` job fail OPEN.
+      pushed: ${{ steps.sync.outputs.pushed }}
+    steps:
+      - name: Decide eligibility
+        id: eligible
+        env:
+          # Enumerated bot allowlist, never a `*[bot]` glob — every GitHub App
+          # login ends in `[bot]`. Kept byte-identical to floor-automerge.yml's
+          # list (see also README "Auto-merge"); DEV-679 adds a drift check
+          # across the copies rather than a shared source.
+          ALLOWED_BOTS: '["renovate[bot]","dependabot[bot]"]'
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          run=true
+          if ! printf '%s' "${ALLOWED_BOTS}" | grep -qF "\"${AUTHOR}\""; then
+            run=false
+            echo "PR author '${AUTHOR}' is not an allowlisted dependency bot — no checksum sync."
+          # Fork PRs: secrets are stripped from the run and the head branch is
+          # not ours to push to. Nothing to do but let Pepper review as usual.
+          elif [ "${HEAD_REPO}" != "${BASE_REPO}" ]; then
+            run=false
+            echo "::notice::PR head is a fork (${HEAD_REPO}) — skipping checksum sync; cannot push to a fork branch."
+          fi
+          echo "run=${run}" >> "${GITHUB_OUTPUT}"
+
+      # Check out the PR HEAD commit, not the pull_request merge commit: the
+      # checksums must be regenerated against — and pushed onto — the branch as
+      # the bot left it. persist-credentials: false because GITHUB_TOKEN must
+      # never be the pusher here.
+      - name: Checkout PR head
+        if: steps.eligible.outputs.run == 'true'
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Detect checksum drift
+        id: drift
+        if: steps.eligible.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          # --check also validates release-please config/manifest coverage,
+          # which this job cannot fix. That is fine: a non-checksum failure
+          # produces no working-tree diff below, so nothing is pushed and
+          # Pepper reviews and reports it as it does today.
+          if scripts/sync-workflow-checksums.sh --check; then
+            echo "drift=false" >> "${GITHUB_OUTPUT}"
+            echo "Checksums are already in sync — nothing to do."
+          else
+            echo "drift=true" >> "${GITHUB_OUTPUT}"
+            echo "::notice::Versioning integrity is failing on this bot PR — attempting a checksum sync."
+          fi
+
+      # Fail open on a mint failure (App not yet provisioned per DEV-678,
+      # secrets absent, App mis-scoped): an empty token leaves pushed=false and
+      # Pepper runs. Never skip the review because the sync could not happen —
+      # the PR would then sit with no verdict and no signal, since every
+      # required workflow self-skips green in this repo. Same convention as
+      # pepper-pr-review.yml:301-303 / :329-331 / :1195-1197 and
+      # floor-automerge.yml:154-178.
+      - name: Mint checksum-sync App token
+        id: app-token
+        if: steps.drift.outputs.drift == 'true'
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.CHECKSUM_SYNC_APP_ID }}
+          private-key: ${{ secrets.CHECKSUM_SYNC_APP_PRIVATE_KEY }}
+
+      - name: Regenerate and push
+        id: sync
+        if: steps.drift.outputs.drift == 'true'
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          REPO: ${{ github.repository }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # Single source of truth for the output, written exactly once at the
+          # end. Every early exit below leaves it false, which is the fail-open
+          # value: Pepper runs.
+          pushed=false
+
+          sync_and_push() {
+            if [ -z "${APP_TOKEN}" ]; then
+              echo "::warning::No checksum-sync App token (CHECKSUM_SYNC_APP_* absent or mint failed) — leaving the stale checksum in place. Pepper will review this PR as-is. See DEV-678."
+              return 0
+            fi
+
+            if ! scripts/sync-workflow-checksums.sh; then
+              echo "::warning::scripts/sync-workflow-checksums.sh failed — nothing pushed. Pepper will review this PR as-is."
+              return 0
+            fi
+
+            if git diff --quiet -- 'workflows/*/workflow.sha256'; then
+              echo "::notice::Versioning integrity is failing for a reason the sync script cannot fix (likely release-please config/manifest coverage) — nothing pushed."
+              return 0
+            fi
+
+            # Commit as the sync App's own bot identity. The numeric user id
+            # makes GitHub attribute the commit to that App rather than to an
+            # unlinked email; it is cosmetic, so a lookup failure is non-fatal.
+            local bot_login bot_id bot_email
+            bot_login="${APP_SLUG}[bot]"
+            bot_id="$(GH_TOKEN="${APP_TOKEN}" gh api "/users/${APP_SLUG}%5Bbot%5D" --jq '.id' 2>/dev/null || true)"
+            if [ -n "${bot_id}" ]; then
+              bot_email="${bot_id}+${bot_login}@users.noreply.github.com"
+            else
+              bot_email="${bot_login}@users.noreply.github.com"
+            fi
+            git config user.name "${bot_login}"
+            git config user.email "${bot_email}"
+
+            git add -- 'workflows/*/workflow.sha256'
+            # Conventional subject with a type release-please does not treat as
+            # a release trigger. This repo squash-merges, so the landed commit's
+            # subject is the PR title and this message only rides along in the
+            # squash body; the checksum file change is what routes the commit to
+            # the workflow's release-please package.
+            git commit -m "chore(deps): sync workflow.sha256 for changed reusable workflows"
+
+            # Push the exact ref from our detached HEAD, with no force. A
+            # non-fast-forward rejection means the bot moved the branch
+            # underneath us (a Renovate rebase); the resulting synchronize
+            # re-runs this job against the new head, so failing open is correct.
+            if git push "https://x-access-token:${APP_TOKEN}@github.com/${REPO}.git" "HEAD:refs/heads/${HEAD_REF}"; then
+              pushed=true
+              echo "::notice::Pushed a workflow.sha256 sync commit onto ${HEAD_REF} (base ${HEAD_SHA}). The resulting synchronize re-runs CI and Pepper against the corrected tree; this run's Pepper job is skipped."
+            else
+              echo "::warning::Could not push the checksum sync onto ${HEAD_REF} (branch moved, or the App lacks contents: write). Pepper will review this PR as-is."
+            fi
+          }
+
+          sync_and_push
+          echo "pushed=${pushed}" >> "${GITHUB_OUTPUT}"
+
   pepper:
     # Skip release-please's mechanical version-bump PRs: claude-code-action
     # hard-fails on PRs initiated by non-human actors (observed on the first
@@ -29,7 +215,26 @@ jobs:
     # loop entirely. A SKIPPED job satisfies branch protection, and there's
     # nothing for Pepper to review in a manifest/CHANGELOG/version.txt bump
     # anyway.
-    if: github.event.pull_request.user.login != 'rosemary-releaser[bot]'
+    #
+    # The second clause is the DEV-670 skip: when checksum-sync actually pushed
+    # a correction, this run's tree is already superseded, so reviewing it would
+    # spend a Bedrock invocation to rule on a commit nobody will merge — and,
+    # worse, could file a verdict against a defect the push just fixed. The
+    # push emits `synchronize`, which re-runs this workflow and reviews the
+    # corrected tree (the DEV-523 unchanged-SHA short-circuit does not suppress
+    # it — the SHA changed).
+    #
+    # `!cancelled()` plus `!= 'true'` is what makes this fail OPEN. If
+    # checksum-sync is skipped, fails, or crashes before writing its output, the
+    # output is unset — not 'true' — and Pepper runs. The review is never
+    # skipped because the sync could not happen: every required workflow
+    # self-skips green in this repo, so a wrongly skipped Pepper leaves the PR
+    # with no verdict and no signal at all (DEV-504).
+    needs: [checksum-sync]
+    if: >-
+      !cancelled()
+      && github.event.pull_request.user.login != 'rosemary-releaser[bot]'
+      && needs.checksum-sync.outputs.pushed != 'true'
     # Local reference: resolves to the same commit as this run, so this repo
     # never pins itself to its own tags (the legacy shared `v1` is frozen —
     # see README "Versioning & releases"). Side effect worth knowing: a PR
