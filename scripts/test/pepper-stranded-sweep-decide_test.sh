@@ -18,14 +18,17 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DECIDE="${HERE}/../pepper-stranded-sweep-decide.jq"
 
-BOT='pepper-pr-review[bot]'
+# Two distinct Apps (ADR-0007): one reviews, one reopens.
+BOT='pepper-pr-review[bot]'        # posts reviews  -> "is there a current verdict?"
+SWEEP='spice-pepper-sweep[bot]'    # reopens PRs    -> "did we already nudge?"
 EXCLUDED='["rosemary-releaser[bot]"]'
 
 fails=0
 
 # Run the real decision program. Args: <pr> <reviews> <timeline>
 decide() {
-  jq -cn --arg bot "$BOT" --argjson excluded_authors "$EXCLUDED" \
+  jq -cn --arg review_bot "$BOT" --arg sweep_bot "$SWEEP" \
+    --argjson excluded_authors "$EXCLUDED" \
     --argjson pr "$1" --argjson reviews "$2" --argjson timeline "$3" -f "$DECIDE"
 }
 
@@ -49,7 +52,7 @@ pr()       { jq -cn --arg sha "$1" --arg author "${2:-alice}" --argjson draft "$
                '{draft: $draft, user: {login: $author}, head: {sha: $sha}}'; }
 review()   { jq -cn --arg sha "$1" --arg at "$2" --arg who "${3:-$BOT}" \
                '{commit_id: $sha, submitted_at: $at, user: {login: $who}}'; }
-reopened() { jq -cn --arg at "$1" --arg who "${2:-$BOT}" \
+reopened() { jq -cn --arg at "$1" --arg who "${2:-$SWEEP}" \
                '{event: "reopened", created_at: $at, actor: {login: $who}}'; }
 # A review the reviewer has started but not submitted: submitted_at is null.
 pending()  { jq -cn --arg sha "$1" --arg who "${2:-$BOT}" \
@@ -89,6 +92,13 @@ check "nudge worked, then a new push stranded it again" nudge stranded \
 # or one manual reopen would permanently exempt a PR from the sweep.
 check "reopened by a human, not the sweep" nudge stranded \
   "$(decide "$(pr sha-a)" '[]' "[$(reopened 2026-07-02T00:00:00Z alice)]")"
+
+# The two Apps are distinct on purpose (ADR-0007). A reopen by the REVIEW App is
+# not one of our nudges — if these two identities were ever collapsed back into
+# one shared login, any reopen by Pepper's App would silently suppress a real
+# nudge and strand the PR permanently. This case pins them apart.
+check "reopened by Pepper's review App, not the sweep App" nudge stranded \
+  "$(decide "$(pr sha-a)" '[]' "[$(reopened 2026-07-02T00:00:00Z "$BOT")]")"
 
 # Newest nudge wins: an old nudge that did get a review must not mask a recent
 # nudge that did not.

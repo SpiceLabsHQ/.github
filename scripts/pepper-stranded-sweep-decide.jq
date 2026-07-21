@@ -6,10 +6,16 @@
 # exercised against fixtures by scripts/test/pepper-stranded-sweep-decide_test.sh
 # without touching the network — the same split as org-repo-settings-plan.jq.
 #
-# Inputs (all required):
-#   $bot               — Pepper's App login, e.g. "pepper-pr-review[bot]". The sweep
-#                        reopens PRs as this same identity, so one login covers both
-#                        "did Pepper review?" and "did the sweep already nudge?".
+# Two DISTINCT identities, per ADR-0007 (one App per capability, no borrowing):
+#   $review_bot        — the App that posts reviews, "pepper-pr-review[bot]".
+#                        Answers "does this PR have a current Pepper verdict?"
+#   $sweep_bot         — the App that reopens stranded PRs, "spice-pepper-sweep[bot]".
+#                        Answers "did WE already nudge this PR?"
+# Keeping them separate is not just policy compliance: it makes the backoff exact.
+# With a single shared login, any reopen by Pepper's App — for any reason, now or
+# later — would read as one of our nudges and silently suppress a real one.
+#
+# Other inputs:
 #   $excluded_authors  — JSON array of PR author logins the floor never reviews.
 #   $pr                — {draft, user:{login}, head:{sha}}
 #   $reviews           — GET /repos/{o}/{r}/pulls/{n}/reviews
@@ -21,7 +27,7 @@
 # submitted_at and would sort ahead of real ones, so drop it here rather than
 # reason about nulls downstream.
 def bot_reviews:
-  [$reviews[]? | select(.user.login == $bot and .submitted_at != null)];
+  [$reviews[]? | select(.user.login == $review_bot and .submitted_at != null)];
 
 # Pepper's most recent review, or null if it has never reviewed this PR.
 def last_review:
@@ -32,7 +38,7 @@ def last_review:
 # needs no side-channel state (no label to create org-wide, no comment to parse)
 # and it self-clears: a PR that gets its review simply stops being a candidate.
 def last_nudge_at:
-  ([$timeline[]? | select(.event == "reopened" and .actor.login == $bot) | .created_at]
+  ([$timeline[]? | select(.event == "reopened" and .actor.login == $sweep_bot) | .created_at]
    | sort | last);
 
 if ($pr.draft // false) then

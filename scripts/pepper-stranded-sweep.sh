@@ -14,14 +14,20 @@
 # SHA. That is the proven manual workaround, automated. No SHA change, no forced
 # push, no rewritten history.
 #
-# IDENTITY (and why it matters): the sweep reopens as Pepper's own App,
-# `pepper-pr-review[bot]`. The reopen makes that App the triggering actor of the
-# resulting pull_request event, and the reusable's bot-initiator gate (DEV-504)
-# SKIPS any bot initiator outside `allowed_bots` — which would silently defeat
-# the whole sweep. `.github/workflows/floor-pepper.yml` therefore carries
-# `pepper-pr-review` in its `allowed_bots`. Reusing Pepper's App rather than
-# minting a new one also means a single login answers both questions this sweep
-# asks: "has Pepper reviewed?" and "have we already nudged?".
+# IDENTITY (and why it matters): the sweep acts as its OWN App,
+# `spice-pepper-sweep[bot]` — not Pepper's. ADR-0007 requires one App per
+# capability and forbids both borrowing another App's credentials and widening an
+# existing App to serve a new use; this sweep needs a permission Pepper's review
+# App does not have (`Organization: Custom properties = read`), so a dedicated App
+# is the only compliant shape. The ADR names reusing `pepper-pr-review` as an
+# explicitly rejected alternative.
+#
+# The reopen makes the sweep's App the TRIGGERING ACTOR of the resulting
+# pull_request event, and the reusable's bot-initiator gate (DEV-504) skips any
+# bot initiator outside `allowed_bots`. So `.github/workflows/floor-pepper.yml`
+# carries `spice-pepper-sweep` in its `allowed_bots`. That coupling is enforced at
+# runtime (see the preflight below) rather than trusted, because getting it wrong
+# fails SILENTLY: the sweep would reopen PRs and Pepper would skip every one.
 #
 # GUARDRAILS
 #   - Per-run cap (--max, default 5). A mass-stranding event must not fire a
@@ -42,9 +48,15 @@ ORG="SpiceLabsHQ"
 MAX=5
 DRY_RUN=false
 
-# Pepper's App login. Both the "has a current verdict" test and the "already
-# nudged" backoff key off this one identity (see IDENTITY above).
-BOT_LOGIN="${PEPPER_BOT_LOGIN:-pepper-pr-review[bot]}"
+# The two identities this sweep reasons about. They are DIFFERENT Apps (ADR-0007:
+# one App per capability, never borrow another's credentials).
+#   REVIEW_BOT — posts the reviews; defines "has a current verdict".
+#   SWEEP_BOT  — reopens stranded PRs (this script's own identity); defines
+#                "did we already nudge".
+# SWEEP_BOT is injected by the workflow from the token it actually minted, so the
+# backoff can never key off a login we are not really acting as.
+REVIEW_BOT_LOGIN="${PEPPER_REVIEW_BOT_LOGIN:-pepper-pr-review[bot]}"
+SWEEP_BOT_LOGIN="${PEPPER_SWEEP_BOT_LOGIN:-spice-pepper-sweep[bot]}"
 
 # Authors the floor never reviews, mirrored from floor-pepper.yml's job-level
 # `if:`. Keep in sync with that caller — a divergence here means the sweep
@@ -69,13 +81,28 @@ done
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DECIDE="${HERE}/pepper-stranded-sweep-decide.jq"
 
-# Sourced by the fixture test, which wants the decision program and nothing else.
-[ -n "${SWEEP_LIB_ONLY:-}" ] && return 0
-
 command -v gh >/dev/null || { echo "gh not found" >&2; exit 2; }
 command -v jq >/dev/null || { echo "jq not found" >&2; exit 2; }
 [ -f "$DECIDE" ] || { echo "decision program not found: $DECIDE" >&2; exit 2; }
 case "$MAX" in ''|*[!0-9]*) echo "--max must be a non-negative integer" >&2; exit 2 ;; esac
+
+# --- 0. Preflight: our identity must be on the floor's allow-list -----------
+# The sweep's whole effect depends on floor-pepper.yml listing this App in
+# `allowed_bots`: without it the bot-initiator gate (DEV-504) skips every review
+# our reopens trigger. That failure is invisible — PRs get closed and reopened,
+# no review appears, and no check goes red, because a skipped required check
+# still passes. Two files having to agree about one string is exactly the kind of
+# coupling that rots, so assert it here instead of trusting a comment.
+FLOOR_CALLER="${HERE}/../.github/workflows/floor-pepper.yml"
+sweep_slug="${SWEEP_BOT_LOGIN%\[bot\]}"
+if [ -f "$FLOOR_CALLER" ]; then
+  if ! grep -E '^[[:space:]]*allowed_bots:' "$FLOOR_CALLER" | grep -q "\b${sweep_slug}\b"; then
+    echo "::error::${sweep_slug} is not in allowed_bots in ${FLOOR_CALLER##*/} — every review this sweep triggers would be silently skipped by the DEV-504 bot-initiator gate. Refusing to nudge." >&2
+    exit 1
+  fi
+else
+  echo "::warning::Could not find ${FLOOR_CALLER} to verify ${sweep_slug} is on the floor's allowed_bots list."
+fi
 
 # --- 1. In-scope repos ------------------------------------------------------
 # Code-tier only: the floor's Pepper review is injected into untagged repos, so a
@@ -163,7 +190,8 @@ while IFS=$'\t' read -r _updated repo num sha author; do
   fi
 
   decision="$(jq -n \
-    --arg bot "$BOT_LOGIN" \
+    --arg review_bot "$REVIEW_BOT_LOGIN" \
+    --arg sweep_bot "$SWEEP_BOT_LOGIN" \
     --argjson excluded_authors "$EXCLUDED_AUTHORS" \
     --argjson pr "$(jq -n --arg sha "$sha" --arg author "$author" \
         '{draft: false, user: {login: $author}, head: {sha: $sha}}')" \
