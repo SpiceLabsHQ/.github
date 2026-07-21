@@ -3,7 +3,8 @@ name: Repo Checks
 # Repo-local CI for the versioning invariants that per-workflow release-please
 # routing depends on. Fails the PR when:
 #
-#   * a reusable workflow changed but workflows/<name>/workflow.sha256 wasn't
+#   * a reusable workflow — or a file it ships, such as pepper-pr-review's
+#     prompts/ templates — changed but workflows/<name>/workflow.sha256 wasn't
 #     regenerated (commits would silently stop routing to that workflow's
 #     release-please package — no release PR, no changelog entry, no tag)
 #   * a package dir is orphaned (workflow renamed/deleted without cleanup)

@@ -8,6 +8,12 @@
 # workflows/<name>/workflow.sha256, which routes the commit to that workflow's
 # release-please package. CI enforces the invariant via `--check`.
 #
+# A workflow's behavior can also live outside its YAML. pepper-pr-review reads
+# its review prompts from prompts/ at the release commit, so a prompt-only edit
+# needs the same bridge or it never reaches a caller pinned to the moving tag
+# alias (DEV-637). Those files are declared in workflow_assets() below and
+# hashed into the same checksum file.
+#
 # Usage:
 #   scripts/sync-workflow-checksums.sh            # rewrite checksum files in place
 #   scripts/sync-workflow-checksums.sh --check    # verify; exit 1 on drift (CI mode)
@@ -49,6 +55,18 @@ reusable_workflows() {
   grep -lE '^[[:space:]]+workflow_call:' .github/workflows/*.yml | sort
 }
 
+# Files outside .github/workflows/<name>.yml whose content a workflow ships as
+# behavior, and which must therefore route to its release package too.
+workflow_assets() {
+  case "$1" in
+    pepper-pr-review)
+      for asset in prompts/*.md; do
+        [ -f "$asset" ] && printf '%s\n' "$asset"
+      done | sort
+      ;;
+  esac
+}
+
 errors=0
 fail() {
   echo "ERROR: $1" >&2
@@ -61,12 +79,16 @@ while IFS= read -r file; do
   names+=("$name")
   dir="workflows/$name"
   expected="$(sha256 "$file")  $file"
+  while IFS= read -r asset; do
+    [ -n "$asset" ] || continue
+    expected+=$'\n'"$(sha256 "$asset")  $asset"
+  done < <(workflow_assets "$name")
 
   if $CHECK; then
     if [ ! -f "$dir/workflow.sha256" ]; then
       fail "$dir/workflow.sha256 is missing — run scripts/sync-workflow-checksums.sh"
     elif [ "$(cat "$dir/workflow.sha256")" != "$expected" ]; then
-      fail "$dir/workflow.sha256 is stale — $file changed; run scripts/sync-workflow-checksums.sh and commit the result"
+      fail "$dir/workflow.sha256 is stale — $file or a file it ships changed; run scripts/sync-workflow-checksums.sh and commit the result"
     fi
   else
     mkdir -p "$dir"
