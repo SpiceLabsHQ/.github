@@ -14,20 +14,22 @@
 # SHA. That is the proven manual workaround, automated. No SHA change, no forced
 # push, no rewritten history.
 #
-# IDENTITY (and why it matters): the sweep acts as its OWN App,
-# `spice-pepper-sweep[bot]` — not Pepper's. ADR-0007 requires one App per
-# capability and forbids both borrowing another App's credentials and widening an
-# existing App to serve a new use; this sweep needs a permission Pepper's review
-# App does not have (`Organization: Custom properties = read`), so a dedicated App
-# is the only compliant shape. The ADR names reusing `pepper-pr-review` as an
-# explicitly rejected alternative.
+# IDENTITY (and why it matters): the sweep acts as Pepper's own App,
+# `pepper-pr-review[bot]`. Reviewing a PR and re-firing a review that never
+# happened are two actions of ONE capability, so they share one App — ADR-0007's
+# rule is one App per capability, not one per workflow, and this is not a second
+# capability borrowing a first one's credentials.
 #
-# The reopen makes the sweep's App the TRIGGERING ACTOR of the resulting
-# pull_request event, and the reusable's bot-initiator gate (DEV-504) skips any
-# bot initiator outside `allowed_bots`. So `.github/workflows/floor-pepper.yml`
-# carries `spice-pepper-sweep` in its `allowed_bots`. That coupling is enforced at
-# runtime (see the preflight below) rather than trusted, because getting it wrong
-# fails SILENTLY: the sweep would reopen PRs and Pepper would skip every one.
+# The reopen makes that App the TRIGGERING ACTOR of the resulting pull_request
+# event, and the reusable's bot-initiator gate (DEV-504) skips any bot initiator
+# outside `allowed_bots`. So `.github/workflows/floor-pepper.yml` carries
+# `pepper-pr-review` in its `allowed_bots`. That coupling is enforced at runtime
+# (see the preflight below) rather than trusted, because getting it wrong fails
+# SILENTLY: the sweep would reopen PRs and Pepper would skip every one.
+#
+# Sharing the login also means one identity answers both questions the sweep asks
+# — "has Pepper reviewed?" and "did we already nudge?" — which is sound precisely
+# because nothing else in Pepper reopens PRs: a reopen by this App is the sweep.
 #
 # GUARDRAILS
 #   - Per-run cap (--max, default 5). A mass-stranding event must not fire a
@@ -48,15 +50,11 @@ ORG="SpiceLabsHQ"
 MAX=5
 DRY_RUN=false
 
-# The two identities this sweep reasons about. They are DIFFERENT Apps (ADR-0007:
-# one App per capability, never borrow another's credentials).
-#   REVIEW_BOT — posts the reviews; defines "has a current verdict".
-#   SWEEP_BOT  — reopens stranded PRs (this script's own identity); defines
-#                "did we already nudge".
-# SWEEP_BOT is injected by the workflow from the token it actually minted, so the
-# backoff can never key off a login we are not really acting as.
-REVIEW_BOT_LOGIN="${PEPPER_REVIEW_BOT_LOGIN:-pepper-pr-review[bot]}"
-SWEEP_BOT_LOGIN="${PEPPER_SWEEP_BOT_LOGIN:-spice-pepper-sweep[bot]}"
+# Pepper's App login — the one identity behind both the "has a current verdict"
+# test and the "already nudged" backoff (see IDENTITY above). Injected by the
+# workflow from the token it actually minted, so the backoff can never key off a
+# login we are not really acting as.
+BOT_LOGIN="${PEPPER_BOT_LOGIN:-pepper-pr-review[bot]}"
 
 # Authors the floor never reviews, mirrored from floor-pepper.yml's job-level
 # `if:`. Keep in sync with that caller — a divergence here means the sweep
@@ -94,7 +92,7 @@ case "$MAX" in ''|*[!0-9]*) echo "--max must be a non-negative integer" >&2; exi
 # still passes. Two files having to agree about one string is exactly the kind of
 # coupling that rots, so assert it here instead of trusting a comment.
 FLOOR_CALLER="${HERE}/../.github/workflows/floor-pepper.yml"
-sweep_slug="${SWEEP_BOT_LOGIN%\[bot\]}"
+sweep_slug="${BOT_LOGIN%\[bot\]}"
 if [ -f "$FLOOR_CALLER" ]; then
   if ! grep -E '^[[:space:]]*allowed_bots:' "$FLOOR_CALLER" | grep -q "\b${sweep_slug}\b"; then
     echo "::error::${sweep_slug} is not in allowed_bots in ${FLOOR_CALLER##*/} — every review this sweep triggers would be silently skipped by the DEV-504 bot-initiator gate. Refusing to nudge." >&2
@@ -190,8 +188,7 @@ while IFS=$'\t' read -r _updated repo num sha author; do
   fi
 
   decision="$(jq -n \
-    --arg review_bot "$REVIEW_BOT_LOGIN" \
-    --arg sweep_bot "$SWEEP_BOT_LOGIN" \
+    --arg bot "$BOT_LOGIN" \
     --argjson excluded_authors "$EXCLUDED_AUTHORS" \
     --argjson pr "$(jq -n --arg sha "$sha" --arg author "$author" \
         '{draft: false, user: {login: $author}, head: {sha: $sha}}')" \
