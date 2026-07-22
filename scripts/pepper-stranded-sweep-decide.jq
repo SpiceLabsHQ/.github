@@ -43,9 +43,27 @@ if ($pr.draft // false) then
   # The floor deliberately does not auto-review drafts, so a draft is not stranded.
   {action: "skip", reason: "draft"}
 
+elif ($pr.user.login | endswith("[bot]")) then
+  # NEVER nudge a bot-authored PR (DEV-667 incident). The nudge is a close ->
+  # reopen, and a bot reads the close through its OWN semantics, not ours:
+  # Dependabot treats a manual close as "rejected", comments "I won't notify you
+  # again about this release", and abandons the update. So a nudge meant to
+  # trigger a review instead SUPPRESSES a real dependency bump. We cannot know
+  # any given bot's close-handling, so the fail-safe is categorical — no bot's
+  # PR is ever closed by this sweep — rather than an allowlist of the bots whose
+  # behavior we happen to have learned. This costs almost nothing: bots open
+  # their PRs ready (not draft), so they are essentially never stranded by the
+  # draft->ready gap this sweep exists to close. `endswith("[bot]")` is how the
+  # floor's own bot-initiator gate (DEV-504) recognizes a bot login; note that
+  # Pepper's review App shares that suffix, but Pepper opens no PRs, so it never
+  # reaches this check as an author.
+  {action: "skip", reason: "bot-author"}
+
 elif (($excluded_authors | index($pr.user.login)) != null) then
-  # Inherit the floor's own author exclusions (rosemary-releaser release PRs, etc.)
-  # so the sweep never fights an intentional skip.
+  # Inherit the floor's own author exclusions. NOTE: the bot check above already
+  # subsumes the current entries (rosemary-releaser[bot] is a bot); this stays as
+  # the hook for any FUTURE non-bot author the floor decides to exclude, so the
+  # two exclusion lists cannot silently diverge.
   {action: "skip", reason: "excluded-author"}
 
 elif (last_review != null and last_review.commit_id == $pr.head.sha) then

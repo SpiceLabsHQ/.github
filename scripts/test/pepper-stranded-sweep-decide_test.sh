@@ -106,9 +106,26 @@ check "several nudges, newest has no review since" skip awaiting-nudge \
   "$(decide "$(pr sha-c)" "[$(review sha-b 2026-07-03T00:00:00Z)]" \
      "[$(reopened 2026-07-02T00:00:00Z),$(reopened 2026-07-04T00:00:00Z)]")"
 
-# --- Inherited floor exclusions --------------------------------------------
-check "rosemary release PR" skip excluded-author \
+# --- Guardrail: never nudge a bot-authored PR (DEV-667 incident) ------------
+# The nudge is a close -> reopen, and Dependabot reads the close as "rejected":
+# it abandoned a real js-yaml bump the one time the sweep touched its PR. So a
+# bot PR is skipped EVEN WHEN genuinely stranded (no review at all here) — the
+# categorical rule, not an allowlist of known-bad bots.
+check "dependabot PR, stranded, still skipped" skip bot-author \
+  "$(decide "$(pr sha-a 'dependabot[bot]')" '[]' '[]')"
+
+check "renovate PR, stranded, still skipped" skip bot-author \
+  "$(decide "$(pr sha-a 'renovate[bot]')" '[]' '[]')"
+
+# rosemary-releaser is a bot too, so the bot rule now subsumes the old
+# excluded-author path for it. Pinned so a refactor can't quietly let a
+# rosemary release PR through to a nudge.
+check "rosemary release PR is caught as a bot" skip bot-author \
   "$(decide "$(pr sha-a 'rosemary-releaser[bot]')" '[]' '[]')"
+
+# The bot check must not swallow a human whose name merely CONTAINS "bot".
+check "human author containing 'bot' is not a bot" nudge stranded \
+  "$(decide "$(pr sha-a 'robotina')" '[]' '[]')"
 
 check "draft PR" skip draft \
   "$(decide "$(pr sha-a alice true)" '[]' '[]')"
