@@ -56,10 +56,12 @@ DRY_RUN=false
 # login we are not really acting as.
 BOT_LOGIN="${PEPPER_BOT_LOGIN:-pepper-pr-review[bot]}"
 
-# Authors the floor never reviews, mirrored from floor-pepper.yml's job-level
-# `if:`. Keep in sync with that caller — a divergence here means the sweep
-# reopens a PR the floor will then skip, which is a pointless nudge, not a
-# review.
+# Non-bot authors the floor never reviews. Bots are handled categorically in the
+# decision program (any `[bot]` login is skipped — see the bot-author rule and
+# the DEV-667 incident it came from), so this list is only for future HUMAN
+# exclusions. rosemary-releaser[bot] is kept here as documentation of intent even
+# though the bot rule already covers it; the entries must not diverge from
+# floor-pepper.yml's job-level `if:`.
 EXCLUDED_AUTHORS='["rosemary-releaser[bot]"]'
 
 # Repos the floor never reviews. `.github` self-skips in floor-pepper.yml (it
