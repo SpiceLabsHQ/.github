@@ -402,7 +402,7 @@ jobs:
         if: needs.gate.outputs.nag == 'true'
         continue-on-error: true
         # SHA-pinned to v3.0.4 (third-party).
-        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
         with:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
           header: pepper-draft-guidance
@@ -421,7 +421,7 @@ jobs:
       - name: Clear draft guidance
         if: needs.gate.outputs.nag != 'true'
         continue-on-error: true
-        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
         with:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
           header: pepper-draft-guidance

@@ -117,7 +117,7 @@ jobs:
       - name: Post sticky comment on title failure
         if: always() && steps.lint.outputs.error_message != null
         # SHA-pinned to v3.0.4 (third-party).
-        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
         with:
           header: pr-hygiene-title
           message: |
@@ -145,7 +145,7 @@ jobs:
       # comment so the PR isn't littered with a "you fixed it" trail.
       - name: Clear sticky comment on title pass
         if: steps.lint.outputs.error_message == null
-        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
         with:
           header: pr-hygiene-title
           delete: true
@@ -261,7 +261,7 @@ jobs:
         # not turn this into a red X. `continue-on-error: true` keeps the step
         # outcome visible in the logs but lets the job exit 0 regardless.
         continue-on-error: true
-        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
         with:
           header: pr-hygiene-size
           message: ${{ steps.size.outputs.message }}
@@ -272,7 +272,7 @@ jobs:
         # See note on the post step: the non-blocking guarantee must hold even
         # if the comment-delete call transiently fails.
         continue-on-error: true
-        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
         with:
           header: pr-hygiene-size
           delete: true
