@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.6.0](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.5.1...pepper-pr-review-v1.6.0) (2026-07-26)
+
+
+### Features
+
+* **pepper-pr-review:** post draft-only guidance comment (DEV-666) ([#154](https://github.com/SpiceLabsHQ/.github/issues/154)) ([4b19a6f](https://github.com/SpiceLabsHQ/.github/commit/4b19a6ff335f2f6cdf2f5d177d07f463ee773c0b))
+
+
+### Bug Fixes
+
+* **pepper-pr-review:** advise pushing a commit for re-review, not commenting ([#148](https://github.com/SpiceLabsHQ/.github/issues/148)) ([52c0471](https://github.com/SpiceLabsHQ/.github/commit/52c047146b367e491c289bee846732786a5910c3))
+* **pepper-pr-review:** stop ruling on CI status (DEV-637) ([#156](https://github.com/SpiceLabsHQ/.github/issues/156)) ([72a08db](https://github.com/SpiceLabsHQ/.github/commit/72a08db0749cd6ad7c4012c9ee140ccbb86f9c95))
+
 ## [1.5.1](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.5.0...pepper-pr-review-v1.5.1) (2026-07-12)
 
 
