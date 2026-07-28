@@ -486,6 +486,51 @@ jobs:
           echo "Resolved mode: ${MODE}"
           echo "mode=${MODE}" >> "${GITHUB_OUTPUT}"
 
+      # DEV-721 — pin the commit this run is reviewing, and expose its short
+      # form so Pepper can stamp it on the review body.
+      #
+      # Why the PR head and not `git rev-parse HEAD`: the checkout above lands
+      # on `refs/pull/N/merge` for `pull_request` events, so the working tree's
+      # HEAD is a synthetic merge commit that appears nowhere in the PR's commit
+      # list. What a reader wants to correlate against is the head commit shown
+      # on the PR, which is what `github.event.pull_request.head.sha` carries.
+      #
+      # Why it matters: a long review can outlive the commit it started on. The
+      # author pushes mid-run, and GitHub stamps the filed review's `commit_id`
+      # with whatever head is current at submission time — so the PR surface
+      # attributes the verdict to a commit Pepper never looked at. Resolving the
+      # SHA here, at the start of the run, and carrying it into the body gives
+      # the reader a fixed record of what was actually reviewed.
+      #
+      # Fail-open: `issue_comment` payloads carry no head SHA, so fall back to
+      # the PR's current head; if even that is unreadable we emit `unknown` and
+      # the prompt drops the stamp rather than failing the review over a
+      # cosmetic line.
+      - name: Resolve reviewed head SHA
+        id: head-sha
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -uo pipefail
+          SHA="${PR_HEAD_SHA}"
+          if [ -z "${SHA}" ]; then
+            SHA=$(gh pr view "${PR_NUMBER}" --repo "${REPO}" --json headRefOid --jq '.headRefOid' 2>/dev/null || true)
+          fi
+          if [ -z "${SHA}" ]; then
+            echo "::notice::Could not resolve the PR head SHA — the review will omit its commit stamp (DEV-721)."
+            SHORT="unknown"
+          else
+            # Fixed 7 chars rather than `git rev-parse --short`, whose length is
+            # repo-size dependent; the stamp should read identically everywhere.
+            SHORT="${SHA:0:7}"
+            echo "Reviewing PR #${PR_NUMBER} at head ${SHA} (short: ${SHORT})."
+          fi
+          echo "sha=${SHA}" >> "${GITHUB_OUTPUT}"
+          echo "short=${SHORT}" >> "${GITHUB_OUTPUT}"
+
       # `gh pr edit --add-label "<name>"` errors with `"<name>" not found`
       # when the label doesn't exist in the repo — gh does not auto-create
       # labels on add. Pre-create the four labels Pepper applies so every
@@ -811,6 +856,7 @@ jobs:
           COMMENT_BODY: ${{ github.event.comment.body }}
           REVIEW_TIMEOUT_MINUTES: ${{ inputs.review_timeout_minutes }}
           REVIEW_BUDGET_MARGIN_MINUTES: ${{ inputs.review_budget_margin_minutes }}
+          HEAD_SHA_SHORT: ${{ steps.head-sha.outputs.short }}
         run: |
           set -euo pipefail
 
@@ -907,6 +953,13 @@ jobs:
             REVIEW_BUDGET_MINUTES=5
           fi
           sed -i "s|{{REVIEW_BUDGET_MINUTES}}|${REVIEW_BUDGET_MINUTES}|g" "${ASSEMBLED}"
+
+          # DEV-721: the head SHA this run is reviewing, for the review body's
+          # commit stamp. Hex or the literal `unknown` — nothing sed would treat
+          # specially. The on-demand template carries no {{HEAD_SHA_SHORT}}
+          # token, so this sed is a no-op there, and a tagged review template
+          # predating the token degrades to no stamp rather than erroring.
+          sed -i "s|{{HEAD_SHA_SHORT}}|${HEAD_SHA_SHORT}|g" "${ASSEMBLED}"
 
           {
             echo 'prompt<<PEPPER_PROMPT_EOF'
@@ -1164,6 +1217,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
           REVIEWERS_TEAM: ${{ inputs.reviewers_team }}
           REPO_OWNER: ${{ github.repository_owner }}
+          HEAD_SHA_SHORT: ${{ steps.head-sha.outputs.short }}
         run: |
           set -uo pipefail
           # A clean review swapped cooking -> pepper-approved/changes-requested
@@ -1186,7 +1240,16 @@ jobs:
           # churns the `pepper-pr-review-<PR>` concurrency group and can evict a
           # legitimately pending review. So invite the re-run generically, and
           # never hardcode the (configurable) trigger phrase here. DEV-526.
-          gh pr comment "${PR_NUMBER}" --body 'Pepper did not finish this review — the run stopped (timeout, error, or hit its turn limit) before a verdict was posted, so no approval or change request was recorded. Flagging for a human set of eyes. Re-request a review from Pepper once the PR is ready and I will take another pass. — Pepper' || true
+          #
+          # DEV-721: name the commit the abandoned run was reading. Without it a
+          # reader can't tell whether the stalled pass even covered the code
+          # that's on the PR now. Dropped when the SHA didn't resolve, matching
+          # the review body's own stamp rule.
+          STAMP=""
+          if [ -n "${HEAD_SHA_SHORT:-}" ] && [ "${HEAD_SHA_SHORT}" != "unknown" ]; then
+            STAMP=" The run was reviewing \`${HEAD_SHA_SHORT}\`."
+          fi
+          gh pr comment "${PR_NUMBER}" --body "Pepper did not finish this review — the run stopped (timeout, error, or hit its turn limit) before a verdict was posted, so no approval or change request was recorded.${STAMP} Flagging for a human set of eyes. Re-request a review from Pepper once the PR is ready and I will take another pass. — Pepper" || true
 
           # Best-effort team review request. Tolerate GitHub rejecting it (the
           # team lacks access to this repo, or the token can't request teams) —
