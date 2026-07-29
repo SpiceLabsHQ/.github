@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.0](https://github.com/SpiceLabsHQ/.github/compare/pr-hygiene-v1.0.0...pr-hygiene-v1.1.0) (2026-07-29)
+
+
+### Features
+
+* **pepper-pr-review:** stamp the reviewed head SHA on review output (DEV-721) ([#170](https://github.com/SpiceLabsHQ/.github/issues/170)) ([4b0b0ab](https://github.com/SpiceLabsHQ/.github/commit/4b0b0ab2a0e5779c4f4ba4dcd0984617a0213ae6))
+* **pr-hygiene:** retune size warning for an AI-first reviewer ([#139](https://github.com/SpiceLabsHQ/.github/issues/139)) ([9027ca6](https://github.com/SpiceLabsHQ/.github/commit/9027ca6493a28e071dcf9d6a066bc77ee8de51af))
+
 ## 1.0.0 (2026-07-03)
 
 Baseline release establishing per-workflow versioning ([DEV-408]). Functionally
