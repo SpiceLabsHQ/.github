@@ -2,7 +2,7 @@
   "workflows/actions-audit": "1.2.0",
   "workflows/codeql": "1.1.0",
   "workflows/dependency-review": "1.1.0",
-  "workflows/markdownlint": "1.1.0",
+  "workflows/markdownlint": "1.2.0",
   "workflows/pepper-pr-review": "1.6.0",
   "workflows/pr-hygiene": "1.0.0",
   "workflows/release-artifacts": "1.0.1",
