@@ -1,7 +1,9 @@
 name: Repo Checks
 
-# Repo-local CI for the versioning invariants that per-workflow release-please
-# routing depends on. Fails the PR when:
+# Repo-local CI for invariants that only this repo's own files can violate.
+#
+# `Versioning integrity` — the versioning invariants that per-workflow
+# release-please routing depends on. Fails the PR when:
 #
 #   * a reusable workflow — or a file it ships, such as pepper-pr-review's
 #     prompts/ templates — changed but workflows/<name>/workflow.sha256 wasn't
@@ -12,6 +14,16 @@ name: Repo Checks
 #     the reusable-workflow inventory 1:1
 #
 # Fix locally with: scripts/sync-workflow-checksums.sh
+#
+# `Bot allowlist drift` — the bot inventory duplicated across pepper-pr-review,
+# floor-pepper and floor-automerge (DEV-679). Actions has no cross-workflow
+# literal sharing, so the duplication stays and agreement is asserted instead.
+# Repo-local rather than part of the scheduled org-ci-audit because all three
+# files live here, the check needs no token and no network, and divergence is
+# introduced by a PR in this repo — so the signal belongs on that PR, before the
+# merge, not in a dashboard a week later.
+#
+# Check locally with: scripts/check-bot-allowlists.sh
 
 on:
   pull_request:
@@ -30,3 +42,28 @@ jobs:
           persist-credentials: false
       - name: Check workflow checksums + release-please registration
         run: scripts/sync-workflow-checksums.sh --check
+
+  bot-allowlists:
+    name: Bot allowlist drift
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout — first-party, allowed to use a major-version tag.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # The fixtures run first and in this same job: they cost about a second,
+      # they need no extra runner, and a drift verdict from a checker whose own
+      # logic is broken is not worth reading. This is why there is no separate
+      # path-filtered `*-test.yml` here — repo-settings-plan-test.yml and
+      # pepper-stranded-sweep-test.yml exist because the logic they cover runs
+      # only on a schedule and would otherwise have no pre-merge signal at all.
+      # This checker already runs on every PR.
+      #
+      # yq (mikefarah v4) and jq are both preinstalled on ubuntu-latest; the
+      # same assumption already backs scripts/org-repo-settings-reconcile.sh.
+      - name: Run allowlist drift fixtures
+        run: scripts/test/check-bot-allowlists_test.sh
+
+      - name: Check bot allowlists for drift
+        run: scripts/check-bot-allowlists.sh
