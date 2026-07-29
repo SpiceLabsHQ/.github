@@ -1,3 +1,5 @@
-18c9cbb6ba1a2a1217cdd91911aa4e079fc8d322e842ab3068de55681734abe2  .github/workflows/pepper-pr-review.yml
+8bfe0146134bda7cbcff1c8fc01c543b6622ba01bf2a0bf7350d20f8ffc1dafa  .github/workflows/pepper-pr-review.yml
 2ae5884278249e631840f726075422b18aeee842d40e8f9d3f002457c2651a21  prompts/on-demand-default.md
 5083d934e8ade76066559097d7298d2ffb31a5057253815d802570784d9e0e27  prompts/pr-review-default.md
+11dc7698f19af2705d4ac5a38a235f2e67d7aa247a7111b31e1acd62a2604555  scripts/pepper-bot-outcome-collapse-decide.jq
+73016df49cad046c67b2b783d9985ff74d31f6a1d351ce5bbfd9fe780b17554b  scripts/pepper-bot-outcome-collapse.sh

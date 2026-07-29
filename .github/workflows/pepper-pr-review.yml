@@ -857,7 +857,7 @@ jobs:
           echo "Coverage note written to ${NOTE}:"
           cat "${NOTE}"
 
-      - name: Fetch review prompt template
+      - name: Fetch review prompt template and post-verdict programs
         # Pin the prompt to the SHA of THIS reusable workflow file, so every
         # review uses the prompt that shipped with the workflow version the
         # caller pinned (version-matched, not floating).
@@ -875,12 +875,21 @@ jobs:
         # NOT the legacy `refs/tags/v1` this replaced: it is frozen at 60a48c1
         # (README "Versioning & releases" — deprecated, never moves), so every
         # prompt edit since silently never reached any review (DEV-235).
+        #
+        # The DEV-674 outcome-collapse programs ride along in the same checkout,
+        # for the same reason and with the same version-matching: they are the
+        # workflow's behavior, they run on the CALLER's runner where this repo's
+        # `scripts/` does not exist, and a fix to them must reach a consumer
+        # pinned to `@pepper-pr-review-v1` on that tag's commit, not float.
         uses: actions/checkout@v7
         with:
           repository: SpiceLabsHQ/.github
           ref: ${{ job.workflow_sha }}
           path: .pepper-pr-review-tpl
-          sparse-checkout: prompts
+          sparse-checkout: |
+            prompts
+            scripts/pepper-bot-outcome-collapse.sh
+            scripts/pepper-bot-outcome-collapse-decide.jq
           sparse-checkout-cone-mode: false
           fetch-depth: 1
 
@@ -1256,6 +1265,85 @@ jobs:
             --max-turns ${{ steps.tools.outputs.max_turns }}
             ${{ steps.tools.outputs.disallowed != '' && format('--disallowedTools "{0}"', steps.tools.outputs.disallowed) || '' }}
             ${{ steps.mcp.outputs.path != '' && format('--mcp-config {0}', steps.mcp.outputs.path) || '' }}
+
+      # Bot-PR outcome collapse (DEV-674). On a PR authored by an enumerated
+      # dependency bot the outcome set must be {approve, comment + escalate}.
+      # `CHANGES_REQUESTED` there is a dead letter: Renovate and Dependabot have
+      # no reader for a review body and no reason to push the commit that would
+      # clear the verdict, so the PR simply stops. SpiceLabsHQ/.github#138 took
+      # six of them in two weeks — every one correct, none actionable:
+      #   gh api repos/SpiceLabsHQ/.github/pulls/138/reviews \
+      #     --jq '[.[]|.state]|group_by(.)|map({(.[0]):length})|add'
+      #     -> {"CHANGES_REQUESTED":6}
+      # This generalizes DEV-637: never file a verdict the author has no path to
+      # clear.
+      #
+      # WHY HERE AND NOT IN THE PROMPT. Deleting `--request-changes` from a
+      # markdown template is not structural. `GH_TOOLS='Bash(gh *)'` leaves the
+      # call fully available, `REVIEW_DISALLOWED` carries no `gh` entries, and
+      # prompts/pr-review-default.md actively drives it. That is exactly the
+      # in-context rule `<budget_discipline>` documents as unreliable under
+      # compaction. Enforcing it after the verdict makes the guarantee
+      # independent of what the model chose to do.
+      #
+      # There is no REST operation that converts a submitted review, and a
+      # COMMENT review supersedes nothing (`COMMENTED` is "An informational
+      # review" in GitHub's own schema), so the findings are re-filed as a
+      # comment and EVERY Pepper `CHANGES_REQUESTED` on the PR is dismissed —
+      # they block independently. See the script header for the full argument,
+      # the guard against PRs a later approval already cleared, and the
+      # dismissal-permission residual.
+      #
+      # Collapsing does not make the PR mergeable: `reviewDecision` falls to
+      # REVIEW_REQUIRED and a COMMENT review does not satisfy the ruleset's
+      # `required_approving_review_count: 1`, so escalation is self-clearing by a
+      # human while `CHANGES_REQUESTED` terminated nothing.
+      #
+      # This is the BACKSTOP, not the primary defense. DEV-670's gate skip is what
+      # keeps Pepper from reviewing a stale tree in the first place; this step
+      # only bounds the damage when that skip mis-evaluates and a verdict is filed
+      # against something the bot could never have fixed.
+      #
+      # `always()` because a Pepper step that timed out or errored may still have
+      # submitted the review before it stopped. Runs before the no-verdict
+      # escalation, which is a no-op on this path (a posted verdict already
+      # cleared `pepper-cooking`). The script never exits non-zero: this workflow
+      # is a required check on the floor, and a failed post-verdict cleanup must
+      # not turn a completed review red (DEV-504).
+      - name: Collapse bot-PR change request into comment + escalation (DEV-674)
+        if: always() && steps.mode.outputs.mode == 'review'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          # The PR's AUTHOR, never `github.actor`. The DEV-667 stranded sweep
+          # triggers reviews as Pepper's own App, so on that path the initiator is
+          # Pepper and the author is Renovate; keying on the initiator would miss
+          # every swept bot PR and could misfire on a human one. `issue.user.login`
+          # is the `issue_comment` fallback, where `pull_request` is absent.
+          PR_AUTHOR: ${{ github.event.pull_request.user.login || github.event.issue.user.login }}
+          # "<app-slug>[bot]" is Pepper's own review author. Same derivation as the
+          # DEV-523 short-circuit in the gate job. Empty when the token action gave
+          # no slug, which the decision program treats as "stand down" — dismissing
+          # a review we cannot prove is ours is worse than leaving it standing.
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          REVIEWERS_TEAM: ${{ inputs.reviewers_team }}
+          REPO_OWNER: ${{ github.repository_owner }}
+        run: |
+          set -uo pipefail
+          # Author class, resolved inline and enumerated. These two logins are the
+          # dependency bots this org runs (the same pair the `allowed_bots` input
+          # defaults to); any other author — human or bot — keeps the ordinary
+          # outcome set, because it can read a change request and push a fix.
+          FLAVOR="default"
+          case "${PR_AUTHOR}" in
+            "renovate[bot]"|"dependabot[bot]") FLAVOR="dependency" ;;
+          esac
+          export FLAVOR
+          PEPPER_BOT_LOGIN=""
+          [ -n "${APP_SLUG}" ] && PEPPER_BOT_LOGIN="${APP_SLUG}[bot]"
+          export PEPPER_BOT_LOGIN
+          bash .pepper-pr-review-tpl/scripts/pepper-bot-outcome-collapse.sh || true
 
       # No-verdict escalation (DEV-235). If Run Pepper ended without posting a
       # verdict, the PR would otherwise be left with no review AND no outcome
