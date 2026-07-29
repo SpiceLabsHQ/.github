@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/SpiceLabsHQ/.github/compare/actions-audit-v1.2.0...actions-audit-v1.3.0) (2026-07-29)
+
+
+### Features
+
+* **pepper-pr-review:** stamp the reviewed head SHA on review output (DEV-721) ([#170](https://github.com/SpiceLabsHQ/.github/issues/170)) ([4b0b0ab](https://github.com/SpiceLabsHQ/.github/commit/4b0b0ab2a0e5779c4f4ba4dcd0984617a0213ae6))
+
 ## [1.2.0](https://github.com/SpiceLabsHQ/.github/compare/actions-audit-v1.1.2...actions-audit-v1.2.0) (2026-07-06)
 
 
