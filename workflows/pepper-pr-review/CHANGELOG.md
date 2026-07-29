@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.7.0](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.6.0...pepper-pr-review-v1.7.0) (2026-07-29)
+
+
+### Features
+
+* **pepper-pr-review:** add author-class `flavor` axis orthogonal to `mode` (DEV-672) ([#163](https://github.com/SpiceLabsHQ/.github/issues/163)) ([ceba188](https://github.com/SpiceLabsHQ/.github/commit/ceba188069cb9423aeed1e9601461a58d35bbf59))
+* **pepper-pr-review:** collapse bot-PR change requests in the workflow (DEV-674) ([#165](https://github.com/SpiceLabsHQ/.github/issues/165)) ([b51c427](https://github.com/SpiceLabsHQ/.github/commit/b51c427146d579c99d1102afad978ac1fa47186a))
+* **pepper-pr-review:** dependency review template and risk model (DEV-673) ([#164](https://github.com/SpiceLabsHQ/.github/issues/164)) ([4a27792](https://github.com/SpiceLabsHQ/.github/commit/4a2779267cc1fe09e9eec0930e46e1e7a5e52584))
+* **pepper-pr-review:** stamp the reviewed head SHA on review output (DEV-721) ([#170](https://github.com/SpiceLabsHQ/.github/issues/170)) ([4b0b0ab](https://github.com/SpiceLabsHQ/.github/commit/4b0b0ab2a0e5779c4f4ba4dcd0984617a0213ae6))
+
 ## [1.6.0](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.5.1...pepper-pr-review-v1.6.0) (2026-07-26)
 
 
