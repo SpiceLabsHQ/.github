@@ -531,6 +531,48 @@ jobs:
           echo "sha=${SHA}" >> "${GITHUB_OUTPUT}"
           echo "short=${SHORT}" >> "${GITHUB_OUTPUT}"
 
+      # `flavor` is a SECOND, orthogonal axis, deliberately not a third `mode`
+      # value. `mode` answers "what is Pepper being asked to do" and is consumed
+      # at twelve sites in this job (label creation, the cooking marker, the
+      # branch switch, the DEV-526 coverage poll/fetch/note, the template case,
+      # model resolution, the tool allowlists, the MCP config, the no-verdict
+      # escalation, and the cooking cleanup). A third `mode` value would fall off
+      # nine of them silently — wrong inference profile and wrong `Mode=` cost tag,
+      # no escalation, a permanently stale `pepper-cooking` label. `flavor`
+      # answers "what kind of change is this", is consumed ONLY by the template
+      # case below, and leaves all twelve `mode` sites untouched. It also gives a
+      # defined answer for `@pepper fix this` on a Renovate PR: mode=on-demand,
+      # flavor=dependency, which a flat enum could not express.
+      #
+      # Resolved from the PR AUTHOR, never the initiator. `allowed_bots` is an
+      # INITIATOR allowlist (DEV-504) and floor-pepper.yml now passes
+      # `pepper-pr-review` in it so the DEV-667 stranded sweep can fire — on a
+      # sweep-triggered run the initiator is Pepper's own App while the author is
+      # whoever opened the PR, so the two genuinely differ in production.
+      #
+      # The logins are enumerated, never a `*[bot]` glob. floor-automerge.yml arms
+      # auto-merge for exactly these two, and per ADR-0017 an approval on such a
+      # PR IS the merge; a glob would hand the dependency risk model (DEV-673) and
+      # the collapsed outcome set (DEV-674) to bots nobody vetted for it.
+      #
+      # The issue_comment fallback is defensive, not a live fix: no caller declares
+      # `issue_comment` today (pepper-self-review.yml, floor-pepper.yml), and
+      # ruleset injection drops it regardless (DEV-576). It costs nothing and keeps
+      # a future caller from silently resolving every comment-triggered run to
+      # `default`.
+      - name: Determine flavor
+        id: flavor
+        env:
+          PR_AUTHOR: ${{ github.event.pull_request.user.login || github.event.issue.user.login }}
+        run: |
+          set -euo pipefail
+          FLAVOR="default"
+          case "${PR_AUTHOR}" in
+            'renovate[bot]'|'dependabot[bot]') FLAVOR="dependency" ;;
+          esac
+          echo "Resolved flavor: ${FLAVOR} (PR author: ${PR_AUTHOR:-<unresolved>})"
+          echo "flavor=${FLAVOR}" >> "${GITHUB_OUTPUT}"
+
       # `gh pr edit --add-label "<name>"` errors with `"<name>" not found`
       # when the label doesn't exist in the repo — gh does not auto-create
       # labels on add. Pre-create the four labels Pepper applies so every
@@ -853,6 +895,7 @@ jobs:
           COVERAGE_MARKER: "<!-- COVERAGE_NOTE_PLACEHOLDER -->"
           COVERAGE_NOTE_PATH: ${{ steps.coverage-note.outputs.path }}
           MODE: ${{ steps.mode.outputs.mode }}
+          FLAVOR: ${{ steps.flavor.outputs.flavor }}
           COMMENT_BODY: ${{ github.event.comment.body }}
           REVIEW_TIMEOUT_MINUTES: ${{ inputs.review_timeout_minutes }}
           REVIEW_BUDGET_MARGIN_MINUTES: ${{ inputs.review_budget_margin_minutes }}
@@ -864,9 +907,30 @@ jobs:
           # own purpose-built prompt — sharing a prompt led to the model picking
           # the wrong mode and either reviewing on-demand requests or trying to
           # edit during auto-review.
+          # Within review mode, `flavor` selects the risk model the reviewer is
+          # given. This is the ONLY consumer of `flavor` — every `mode`-keyed step
+          # in this job is untouched by it.
           case "${MODE}" in
             review)
-              TEMPLATE=".pepper-pr-review-tpl/prompts/pr-review-default.md"
+              case "${FLAVOR}" in
+                dependency)
+                  # Deliberately the SAME template as `default` for now. DEV-673
+                  # publishes prompts/dependency-review-default.md and repoints
+                  # this arm at it. Pointing here at a file that does not exist
+                  # yet would trip the not-found `exit 1` below, failing the
+                  # `review` job — and floor-pepper is a REQUIRED workflow in
+                  # spice-ci-floor-code, so that would hard-fail a required check
+                  # on every Renovate and Dependabot PR in every code-tier repo
+                  # in the org. The mapping stays here until the file lands.
+                  TEMPLATE=".pepper-pr-review-tpl/prompts/pr-review-default.md"
+                  ;;
+                *)
+                  # `default`, plus any flavor a future edit forgets to handle:
+                  # fall open to the general review template rather than failing
+                  # a required check.
+                  TEMPLATE=".pepper-pr-review-tpl/prompts/pr-review-default.md"
+                  ;;
+              esac
               ;;
             on-demand)
               TEMPLATE=".pepper-pr-review-tpl/prompts/on-demand-default.md"
