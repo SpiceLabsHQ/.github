@@ -1316,12 +1316,23 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
-          # The PR's AUTHOR, never `github.actor`. The DEV-667 stranded sweep
-          # triggers reviews as Pepper's own App, so on that path the initiator is
-          # Pepper and the author is Renovate; keying on the initiator would miss
-          # every swept bot PR and could misfire on a human one. `issue.user.login`
-          # is the `issue_comment` fallback, where `pull_request` is absent.
-          PR_AUTHOR: ${{ github.event.pull_request.user.login || github.event.issue.user.login }}
+          # Author class comes from the `Determine flavor` step (DEV-672), not a
+          # second derivation here. That step keys on the PR's AUTHOR, never
+          # `github.actor`: the DEV-667 stranded sweep triggers reviews as
+          # Pepper's own App, so on that path the initiator is Pepper and the
+          # author is Renovate; keying on the initiator would miss every swept
+          # bot PR and could misfire on a human one.
+          #
+          # Single-sourcing matters beyond tidiness. A second copy of the
+          # dependency-bot logins in this same file is exactly the drift class
+          # DEV-679 exists to catch, in a location its checker does not inspect —
+          # the two could disagree silently. One enumeration, one site to audit.
+          #
+          # `Determine flavor` is unconditional, so this is populated for any run
+          # that reached it. This step is `always()`, so on a failure before that
+          # point it arrives empty and the collapse stands down — the safe
+          # direction, matching the empty-APP_SLUG rule below.
+          FLAVOR: ${{ steps.flavor.outputs.flavor }}
           # "<app-slug>[bot]" is Pepper's own review author. Same derivation as the
           # DEV-523 short-circuit in the gate job. Empty when the token action gave
           # no slug, which the decision program treats as "stand down" — dismissing
@@ -1331,14 +1342,12 @@ jobs:
           REPO_OWNER: ${{ github.repository_owner }}
         run: |
           set -uo pipefail
-          # Author class, resolved inline and enumerated. These two logins are the
-          # dependency bots this org runs (the same pair the `allowed_bots` input
-          # defaults to); any other author — human or bot — keeps the ordinary
+          # Author class from `Determine flavor` (DEV-672). Anything other than
+          # `dependency` — human, or a bot nobody enumerated — keeps the ordinary
           # outcome set, because it can read a change request and push a fix.
-          FLAVOR="default"
-          case "${PR_AUTHOR}" in
-            "renovate[bot]"|"dependabot[bot]") FLAVOR="dependency" ;;
-          esac
+          # Empty means we never reached that step; fall back to `default` so an
+          # early failure stands the collapse down rather than firing it blind.
+          FLAVOR="${FLAVOR:-default}"
           export FLAVOR
           PEPPER_BOT_LOGIN=""
           [ -n "${APP_SLUG}" ] && PEPPER_BOT_LOGIN="${APP_SLUG}[bot]"
