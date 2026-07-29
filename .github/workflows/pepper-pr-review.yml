@@ -923,15 +923,22 @@ jobs:
             review)
               case "${FLAVOR}" in
                 dependency)
-                  # Deliberately the SAME template as `default` for now. DEV-673
-                  # publishes prompts/dependency-review-default.md and repoints
-                  # this arm at it. Pointing here at a file that does not exist
-                  # yet would trip the not-found `exit 1` below, failing the
-                  # `review` job — and floor-pepper is a REQUIRED workflow in
-                  # spice-ci-floor-code, so that would hard-fail a required check
-                  # on every Renovate and Dependabot PR in every code-tier repo
-                  # in the org. The mapping stays here until the file lands.
-                  TEMPLATE=".pepper-pr-review-tpl/prompts/pr-review-default.md"
+                  # DEV-673. The dependency risk model — provenance, what rode
+                  # along in the lockfile, license drift, semver honesty, this
+                  # repo's usage surface, the CVE urgency asymmetry, repo
+                  # invariants, worst-member aggregation on grouped PRs — plus
+                  # the {approve, escalate} outcome set, which is the only one a
+                  # bot author can act on. The template itself gates on diff
+                  # shape, because these authors also open config-migration PRs.
+                  #
+                  # Safe to point at unconditionally: `.pepper-pr-review-tpl` is
+                  # checked out at `job.workflow_sha` — the commit of THIS
+                  # workflow file — so the template tree is always the one that
+                  # ships with these lines, never the caller's tree and never a
+                  # different ref. A caller pinned to an older tag runs that
+                  # tag's copy of this `case`, which has no `dependency` arm at
+                  # all. The not-found `exit 1` below cannot fire on this path.
+                  TEMPLATE=".pepper-pr-review-tpl/prompts/dependency-review-default.md"
                   ;;
                 *)
                   # `default`, plus any flavor a future edit forgets to handle:
