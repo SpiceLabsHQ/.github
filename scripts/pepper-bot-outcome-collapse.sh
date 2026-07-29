@@ -40,13 +40,29 @@
 # first and then failing to comment removes the block on a PR whose findings were
 # never re-filed anywhere a human is likely to look.
 #
-# Retries do not duplicate the comment: the comment carries an invisible marker
-# keyed to the newest change request's id, and the decision program clears
-# `comment_needed` once a Pepper COMMENT review carrying that marker exists.
+# The ordinary retry does not duplicate the comment: it carries an invisible
+# marker keyed to the newest change request's id, and the decision program clears
+# `comment_needed` once a Pepper COMMENT review carrying that marker exists. This
+# is NOT an unconditional one-comment-per-PR guarantee — if the newest change
+# request is dismissed and an older one survives, the marker rekeys to the
+# survivor and the next run posts a second comment. See the decision program's
+# header for why that is left as is.
+#
+# Only the NEWEST change request's body is re-filed inline. Older rounds survive
+# on their own dismissed reviews, which keep their bodies, and the human this
+# escalates to reads the review timeline.
 #
 # Nothing here exits non-zero: this runs after the verdict, and a failed cleanup
 # must not turn a completed review into a red required check (DEV-504 — the floor
 # treats this workflow as required).
+#
+# WHICH MEANS THE ONLY SIGNAL OF A BROKEN COLLAPSE IS A LABEL. If the App turns
+# out to be unable to dismiss under this repo's ruleset, every run warns inside a
+# green required check and nobody ever looks. So the incomplete path still adds
+# `pepper-needs-review` — it routes to a person — while deliberately NOT removing
+# `pepper-changes-requested`. Both labels together are the honest reading: changes
+# are still requested AND a human is needed. Only a confirmed, complete collapse
+# clears the change-requested label.
 #
 # Collapsing does NOT make the PR mergeable on its own: `reviewDecision` falls
 # back to REVIEW_REQUIRED against `required_approving_review_count: 1`, and a
@@ -230,27 +246,41 @@ done
 # the block is gone.
 request_human
 
-if [ "${DISMISS_FAILED}" -gt 0 ]; then
-  # At least one change request is still blocking, so leave the labels saying
-  # exactly that. `pepper-needs-review` on a still-deadlocked PR would read as
-  # "just needs a look" — the precise misreading this step exists to prevent. The
-  # surviving rows are still `CHANGES_REQUESTED`, which is what makes the next run
-  # select them again and retry.
-  echo "::warning::${DISMISS_FAILED} change request(s) on ${REPO}#${PR_NUMBER} could not be dismissed. No labels were changed, the PR is still blocked, and a later run will retry the collapse (DEV-674)."
-  result "dismiss-incomplete"
-fi
-
-# STEP 4 — labels last, and only now that every dismissal is confirmed. The
-# remove side is gated on the label actually being on the PR: `gh pr edit
-# --remove-label` errors when the label does not exist in the repo at all
-# (cold-start case), and under `set -u` an empty array expansion is a bash 3.2
-# footgun — ARGS always carries the --add-label pair, so the expansion is safe.
+# STEP 4 — labels. The remove side is gated on the label actually being on the
+# PR: `gh pr edit --remove-label` errors when the label does not exist in the repo
+# at all (cold-start case), and under `set -u` an empty array expansion is a bash
+# 3.2 footgun — ARGS always carries the --add-label pair, so the expansion is
+# safe.
+#
+# `pepper-needs-review` goes on either way: a human is needed whether the collapse
+# finished or jammed, and on the jammed path this label is the ONLY signal that
+# escapes a green required check.
+#
+# `pepper-changes-requested` comes off ONLY on a complete collapse, because only
+# then is it false. `pepper-approved` comes off too if some earlier round left it
+# behind: we would not be here unless a change request is newer than every
+# approval (the decision program's guard), so an approved label on this PR is
+# stale, and a PR carrying both `pepper-approved` and `pepper-needs-review` reads
+# as nonsense.
 CURRENT="$(gh pr view "${PR_NUMBER}" --repo "${REPO}" --json labels --jq '[.labels[].name] | join(",")' 2>/dev/null)" || CURRENT=""
 ARGS=(--add-label "pepper-needs-review")
-case ",${CURRENT}," in
-  *,pepper-changes-requested,*) ARGS+=(--remove-label "pepper-changes-requested") ;;
-esac
+if [ "${DISMISS_FAILED}" -eq 0 ]; then
+  for STALE in pepper-changes-requested pepper-approved; do
+    case ",${CURRENT}," in
+      *,"${STALE}",*) ARGS+=(--remove-label "${STALE}") ;;
+    esac
+  done
+fi
 gh pr edit "${PR_NUMBER}" --repo "${REPO}" "${ARGS[@]}" >/dev/null 2>&1 \
-  || echo "::warning::Could not swap outcome labels on ${REPO}#${PR_NUMBER} — the change request was dismissed and re-filed as a comment regardless (DEV-674)."
+  || echo "::warning::Could not update outcome labels on ${REPO}#${PR_NUMBER} (DEV-674)."
+
+if [ "${DISMISS_FAILED}" -gt 0 ]; then
+  # At least one change request is still blocking, so the PR keeps saying so:
+  # `pepper-changes-requested` stays on alongside `pepper-needs-review`. The
+  # surviving rows are still `CHANGES_REQUESTED`, which is what makes the next run
+  # select them again and retry.
+  echo "::warning::${DISMISS_FAILED} change request(s) on ${REPO}#${PR_NUMBER} could not be dismissed. The PR is still blocked and keeps its pepper-changes-requested label; a human has been requested and a later run will retry the collapse (DEV-674)."
+  result "dismiss-incomplete"
+fi
 
 result "collapsed"

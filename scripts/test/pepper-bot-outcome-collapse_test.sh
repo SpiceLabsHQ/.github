@@ -14,7 +14,9 @@
 #     the rest while the labels and the comment say it was handled;
 #   - firing on a PR whose block a later approval already cleared, dismissing
 #     settled history and commenting on a PR nobody is stuck on;
-#   - swapping the labels after a dismissal that did not actually take.
+#   - clearing `pepper-changes-requested` after a dismissal that did not take;
+#   - collapsing a PR a later approval already cleared, which on the ADR-0017
+#     auto-merge path is the happy path this work exists to protect.
 # None of them shows as a red check in production, so all of them are pinned here.
 #
 # The actor is driven against a stub `gh` on PATH that records every call AND
@@ -92,6 +94,24 @@ $(review 14 COMMENTED 2026-07-13T00:00:00Z)]"
 STALE_UNDER_APPROVAL="[$(review 11 CHANGES_REQUESTED 2026-07-10T00:00:00Z),\
 $(review 12 APPROVED 2026-07-11T00:00:00Z)]"
 
+# THE LIFECYCLE THAT BREAKS A NEWEST-REVIEW GUARD. `CHANGES_REQUESTED` -> fix ->
+# `APPROVED` -> Renovate rebase -> a routine `COMMENT` verdict. The newest row is
+# the COMMENT, so "is the newest review APPROVED" answers no and the collapse runs
+# on an approved PR that is about to auto-merge. Neither half is exotic:
+# prompts/pr-review-default.md drives `gh pr review --comment` as a normal
+# verdict, and floor-pepper.yml triggers on `synchronize`, which fires on every
+# Renovate force-push. The guard must compare the newest APPROVAL against the
+# newest CHANGE REQUEST, not look at the newest row.
+APPROVED_THEN_COMMENT="[$(review 11 CHANGES_REQUESTED 2026-07-10T00:00:00Z),\
+$(review 12 APPROVED 2026-07-11T00:00:00Z),\
+$(review 13 COMMENTED 2026-07-12T00:00:00Z)]"
+
+# The mirror image: a NEW change request after the approval. The block is back on
+# and both rows must be dismissed — the guard must not swallow this.
+APPROVED_THEN_CR="[$(review 11 CHANGES_REQUESTED 2026-07-10T00:00:00Z),\
+$(review 12 APPROVED 2026-07-11T00:00:00Z),\
+$(review 13 CHANGES_REQUESTED 2026-07-12T00:00:00Z)]"
+
 check_decision "bot PR + CHANGES_REQUESTED" collapse bot-pr-changes-requested \
   "$(decide dependency "$CR")"
 
@@ -102,6 +122,24 @@ check_decision "bot PR + approval" skip already-approved \
 # THE GUARD. A naive dismiss-all would fire here, on a PR nothing is blocking.
 check_decision "stale CHANGES_REQUESTED under a later approval" skip already-approved \
   "$(decide dependency "$STALE_UNDER_APPROVAL")"
+
+check_decision "approval, then a routine COMMENT verdict" skip already-approved \
+  "$(decide dependency "$APPROVED_THEN_COMMENT")"
+
+check_decision "approval, then a NEW change request" collapse bot-pr-changes-requested \
+  "$(decide dependency "$APPROVED_THEN_CR")"
+
+# A tie on submitted_at resolves in favour of the approval: do not collapse.
+check_decision "approval and change request with the same timestamp" skip already-approved \
+  "$(decide dependency "[$(review 11 CHANGES_REQUESTED 2026-07-10T00:00:00Z),$(review 12 APPROVED 2026-07-10T00:00:00Z)]")"
+
+GOT="$(decide dependency "$APPROVED_THEN_CR")"
+if [ "$(jq -c '.review_ids' <<<"$GOT")" = "[11,13]" ]; then
+  pass "a new change request after an approval selects BOTH rows"
+else
+  fail "a new change request after an approval selects BOTH rows" \
+    "actual: $(jq -c '.review_ids' <<<"$GOT")"
+fi
 
 # THE SELECTOR. A COMMENT clears nothing, so the change requests underneath it
 # are still live and must still collapse.
@@ -134,12 +172,23 @@ check_decision "already dismissed" skip no-changes-requested \
 check_decision "only a COMMENT from Pepper" skip no-changes-requested \
   "$(decide dependency "[$(review 11 COMMENTED 2026-07-10T00:00:00Z)]")"
 
-# A PENDING review carries a null submitted_at and would sort ahead of every real
-# one, reading as the newest verdict when it is not a verdict at all.
+# A PENDING review (null submitted_at, visible only to its author) is not a
+# verdict and must never be dismissed. This pins the SELECTOR, not a null-guard:
+# `PENDING` is neither `CHANGES_REQUESTED` nor `APPROVED`, so it cannot reach
+# either branch. The program carries no `submitted_at != null` filter, because
+# such a filter is unfalsifiable here — nothing selects on a state that could
+# carry a null timestamp.
 pending() { jq -cn --argjson id "$1" --arg who "$BOT" \
   '{id: $id, state: "PENDING", submitted_at: null, user: {login: $who}, body: ""}'; }
-check_decision "pending review does not mask the newest approval" skip already-approved \
-  "$(decide dependency "[$(review 11 APPROVED 2026-07-10T00:00:00Z),$(pending 99)]")"
+GOT="$(decide dependency "[$(review 11 CHANGES_REQUESTED 2026-07-10T00:00:00Z),$(pending 99)]")"
+if [ "$(jq -c '.review_ids' <<<"$GOT")" = "[11]" ]; then
+  pass "a PENDING review is never selected for dismissal"
+else
+  fail "a PENDING review is never selected for dismissal" \
+    "actual: $(jq -c '.review_ids' <<<"$GOT")"
+fi
+check_decision "a PENDING review is not an approval" collapse bot-pr-changes-requested \
+  "$(decide dependency "[$(review 11 CHANGES_REQUESTED 2026-07-10T00:00:00Z),$(pending 99)]")"
 
 # EVERY change request is selected: each one blocks independently, so dismissing
 # only the newest would leave five of #138's six still blocking.
@@ -207,6 +256,7 @@ mkdir -p "${BIN}"
 #                             keeps blocking (the write that lies)
 #   ${WORK}/fail_one        — only the dismissal of review 13 fails
 #   ${WORK}/fail_reviewer   — --add-reviewer fails
+#   ${WORK}/labels          — label list `gh pr view` returns (default below)
 cat > "${BIN}/gh" <<'STUB'
 #!/usr/bin/env bash
 echo "$*" >> "${WORK}/calls"
@@ -240,7 +290,7 @@ case "$*" in
     jq -r --argjson id "${id:-0}" '.[] | select(.id == $id) | .state' "$R"
     exit 0 ;;
   "pr view"*)
-    echo "pepper-changes-requested,pepper-cooking"
+    cat "${WORK}/labels" 2>/dev/null || echo "pepper-changes-requested,pepper-cooking"
     exit 0 ;;
   "pr edit"*--add-reviewer*)
     [ -f "${WORK}/fail_reviewer" ] && exit 1
@@ -339,6 +389,37 @@ not_called "/dismissals"; check_calls "actor: approved — no dismissal" $?
 not_called "--method POST"; check_calls "actor: approved — NO comment posted" $?
 not_called "--add-label"; check_calls "actor: approved — no label change" $?
 
+# THE LIFECYCLE CASE. Approved, then a routine COMMENT verdict on a rebase. A
+# newest-review guard reads the COMMENT and collapses an approved PR: it would
+# dismiss the settled change request, post a collapse comment, request the team,
+# and add `pepper-needs-review` next to a live `pepper-approved`.
+printf '%s' "pepper-approved" > "${WORK}/labels"
+OUT="$(run_collapse dependency "$APPROVED_THEN_COMMENT")"
+rm -f "${WORK}/labels"
+check_result "actor: approved, then a COMMENT — still untouched" \
+  "skipped:already-approved" "$OUT"
+not_called "/dismissals"; check_calls "actor: approved+comment — no dismissal" $?
+not_called "--method POST"; check_calls "actor: approved+comment — NO comment posted" $?
+not_called "--add-reviewer"; check_calls "actor: approved+comment — no human dragged in" $?
+not_called "--add-label"; check_calls "actor: approved+comment — pepper-approved survives alone" $?
+
+# The mirror image must still collapse, and must dismiss BOTH change requests.
+OUT="$(run_collapse dependency "$APPROVED_THEN_CR")"
+check_result "actor: a NEW change request after an approval collapses" collapsed "$OUT"
+called "/reviews/11/dismissals"; check_calls "actor: post-approval — the old change request is dismissed" $?
+called "/reviews/13/dismissals"; check_calls "actor: post-approval — the new change request is dismissed" $?
+not_called "/reviews/12/dismissals"; check_calls "actor: post-approval — the approval is not dismissed" $?
+
+# A stale `pepper-approved` from that earlier round must not survive alongside
+# `pepper-needs-review`: we only get here because a change request is newer than
+# every approval, so the approved label is false.
+printf '%s' "pepper-changes-requested,pepper-approved,pepper-cooking" > "${WORK}/labels"
+OUT="$(run_collapse dependency "$APPROVED_THEN_CR")"
+rm -f "${WORK}/labels"
+check_result "actor: collapse with a stale pepper-approved label" collapsed "$OUT"
+called "--remove-label pepper-approved"; check_calls "actor: a stale pepper-approved is removed" $?
+called "--add-label pepper-needs-review"; check_calls "actor: stale-approved — needs-review still added" $?
+
 # --- Bot PR + approval only ------------------------------------------------
 OUT="$(run_collapse dependency "[$(review 11 APPROVED 2026-07-10T00:00:00Z)]")"
 check_result "actor: bot PR + approval is untouched" "skipped:already-approved" "$OUT"
@@ -361,8 +442,10 @@ not_called "--add-label"; check_calls "actor: human PR — no label change" $?
 
 # --- Failure path A: no dismissal takes ------------------------------------
 # The findings are already re-filed (a COMMENT clears nothing, so posting it
-# first is free), but the PR is still blocked — so no label may move, and the
-# surviving CHANGES_REQUESTED rows must leave the collapse retryable.
+# first is free), but the PR is still blocked. `pepper-changes-requested` must
+# therefore stay ON — it is still true — while `pepper-needs-review` goes on as
+# well, because that label is the only signal of a jammed collapse that escapes a
+# green required check. The surviving rows leave the collapse retryable.
 touch "${WORK}/fail_dismiss"
 OUT="$(run_collapse dependency "$CR")"; RC=$?
 rm -f "${WORK}/fail_dismiss"
@@ -370,7 +453,8 @@ check_result "actor: rejected dismissal reports dismiss-incomplete" dismiss-inco
 [ "$RC" -eq 0 ] && pass "actor: rejected dismissal does not fail the run" \
   || fail "actor: rejected dismissal does not fail the run" "rc=${RC}"
 called "--method POST"; check_calls "actor: rejected dismissal — findings are re-filed anyway" $?
-not_called "--add-label"; check_calls "actor: rejected dismissal — labels NOT swapped" $?
+called "--add-label pepper-needs-review"; check_calls "actor: rejected dismissal — a jam is visible on the PR" $?
+not_called "--remove-label pepper-changes-requested"; check_calls "actor: rejected dismissal — the PR still says changes are requested" $?
 called "--add-reviewer SpiceLabsHQ/reviewers"; check_calls "actor: rejected dismissal — human still requested" $?
 grep -q '::warning::' <<<"$OUT" && pass "actor: rejected dismissal is annotated" \
   || fail "actor: rejected dismissal is annotated" "$OUT"
@@ -397,20 +481,20 @@ touch "${WORK}/silent_dismiss"
 OUT="$(run_collapse dependency "$CR")"
 rm -f "${WORK}/silent_dismiss"
 check_result "actor: silent no-op dismissal is caught by the read-back" dismiss-incomplete "$OUT"
-not_called "--add-label"; check_calls "actor: silent no-op — labels NOT swapped" $?
+not_called "--remove-label pepper-changes-requested"; check_calls "actor: silent no-op — the PR still says changes are requested" $?
 [ "$(states_of CHANGES_REQUESTED)" = "1" ] \
   && pass "actor: silent no-op leaves the PR retryable" \
   || fail "actor: silent no-op leaves the PR retryable" "reviews: $(cat "${WORK}/reviews.json")"
 
 # --- Failure path A': PARTIAL dismissal ------------------------------------
-# One of the four rows refuses. The PR is still blocked by that one, so the
-# labels must not move — this is the exact failure a dismiss-the-newest-only
-# implementation produces on every multi-round PR.
+# One of the four rows refuses. The PR is still blocked by that one, so
+# `pepper-changes-requested` must stay on — this is the exact failure a
+# dismiss-the-newest-only implementation produces on every multi-round PR.
 touch "${WORK}/fail_one"
 OUT="$(run_collapse dependency "$CR_THEN_COMMENT")"
 rm -f "${WORK}/fail_one"
 check_result "actor: a partial dismissal is not reported as collapsed" dismiss-incomplete "$OUT"
-not_called "--add-label"; check_calls "actor: partial — labels NOT swapped" $?
+not_called "--remove-label pepper-changes-requested"; check_calls "actor: partial — the PR still says changes are requested" $?
 [ "$(states_of CHANGES_REQUESTED)" = "1" ] \
   && pass "actor: partial — the surviving change request is still selectable" \
   || fail "actor: partial — the surviving change request is still selectable" \

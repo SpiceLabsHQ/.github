@@ -36,8 +36,21 @@
 # but does NOT rewrite the earlier change request's row: `4632652148` still reads
 # `CHANGES_REQUESTED` on a PR that merged two weeks ago. Selecting every
 # `CHANGES_REQUESTED` row with no guard would therefore fire on a PR that is not
-# blocked at all — posting a collapse comment and dismissing settled history. So:
-# act only when Pepper's NEWEST submitted review is not `APPROVED`.
+# blocked at all — posting a collapse comment and dismissing settled history.
+#
+# The guard is "is there an APPROVED newer than the newest CHANGES_REQUESTED",
+# NOT "is the newest review APPROVED". The second is a strictly weaker test and
+# misses the ordinary lifecycle it was written for:
+#
+#   CHANGES_REQUESTED -> APPROVED -> COMMENTED
+#
+# The newest row there is a COMMENT, so a newest-review test lets the collapse
+# run on a PR that is approved and about to auto-merge. That sequence is not
+# exotic: prompts/pr-review-default.md drives `gh pr review --comment` as a
+# routine verdict, and floor-pepper.yml triggers on `synchronize`, which fires on
+# every Renovate rebase. Comparing timestamps is the whole fix — GitHub's
+# `submitted_at` is ISO-8601 with a `Z` offset, so lexical `>=` on the strings is
+# chronological, and a tie resolves in favour of the approval (do not collapse).
 #
 # ALL OF THEM, not the newest one. Each `CHANGES_REQUESTED` blocks independently
 # and each needs its own dismissal. SpiceLabsHQ/.github#138 carries six:
@@ -61,21 +74,37 @@
 #    "body": "<newest change request's body>", "marker": "<html comment>",
 #    "comment_needed": true|false}
 #
+# `body` is the NEWEST change request's body only. On a PR with several rounds the
+# older findings are not concatenated into the comment — they survive on their own
+# dismissed reviews, which keep their bodies (see #119's `4632718270` above), and
+# the human this escalates to reads the review timeline. Re-filing all six of
+# #138's bodies inline would bury the current one.
+#
 # `marker` is an invisible HTML comment keyed to the newest change request's id,
 # carried in the comment this collapses to. `comment_needed` is false when a
-# Pepper `COMMENT` review already carries that marker, so a run retrying a failed
-# dismissal re-files nothing and the PR does not collect duplicates.
+# Pepper `COMMENT` review already carries that marker. It suppresses the ordinary
+# retry duplicate — same change requests, same newest id — but it is NOT an
+# unconditional guarantee of one comment per PR: if the newest change request is
+# dismissed and an older one survives, the marker rekeys to the survivor and the
+# next run posts a second comment. That is bounded at one extra comment, and it
+# carries a finding that had not been re-filed, so it is left alone rather than
+# papered over with a PR-wide marker that would also swallow a genuinely new
+# round's findings.
 
-# Pepper's SUBMITTED reviews. A pending (unsubmitted) review carries a null
-# submitted_at and would sort ahead of every real one, so drop it here.
+# Pepper's reviews. No `submitted_at` filter: only `CHANGES_REQUESTED` and
+# `APPROVED` rows are ever selected below, and a review that has not been
+# submitted carries `state: "PENDING"`, so it cannot reach either branch.
 def bot_reviews:
-  [$reviews[]? | select(.user.login == $bot and .submitted_at != null)];
-
-def newest_review:
-  (bot_reviews | sort_by(.submitted_at) | last);
+  [$reviews[]? | select(.user.login == $bot)];
 
 def change_requests:
   ([bot_reviews[] | select(.state == "CHANGES_REQUESTED")] | sort_by(.submitted_at));
+
+def newest_cr:
+  (change_requests | last);
+
+def newest_approval:
+  ([bot_reviews[] | select(.state == "APPROVED")] | sort_by(.submitted_at) | last);
 
 def skip($reason):
   {action: "skip", reason: $reason, review_ids: [], body: "",
@@ -96,18 +125,23 @@ elif ($bot | length) == 0 then
 elif (bot_reviews | length) == 0 then
   skip("no-pepper-review")
 
-elif (newest_review.state == "APPROVED") then
-  # THE GUARD. The block is already cleared; the stale CHANGES_REQUESTED rows
-  # underneath it are history, not a deadlock. Touching them would post a
-  # collapse comment on a PR nobody is stuck on — and on the auto-merge path
-  # (ADR-0017) an approval is the merge, so this is also the path that must never
-  # be disturbed.
+elif (newest_approval != null
+      and (newest_cr == null
+           or newest_approval.submitted_at >= newest_cr.submitted_at)) then
+  # THE GUARD. An approval no older than the newest change request means the
+  # block is already cleared; the CHANGES_REQUESTED rows underneath it are
+  # history, not a deadlock. Touching them would post a collapse comment on a PR
+  # nobody is stuck on — and on the auto-merge path (ADR-0017) an approval IS the
+  # merge, so this is also the path that must never be disturbed. Note this fires
+  # regardless of what came after the approval: a later COMMENT (a routine
+  # verdict, and a routine outcome of a Renovate rebase re-triggering the review)
+  # changes nothing about the fact that the PR is approved.
   skip("already-approved")
 
-elif ((change_requests | length) == 0) then
-  # No live change request: the newest review is a COMMENT, or every change
-  # request was already dismissed (by this step on an earlier run, by a human, or
-  # by the ruleset's dismiss-stale-reviews-on-push). Nothing to collapse.
+elif (newest_cr == null) then
+  # No live change request: Pepper has only commented, or every change request was
+  # already dismissed (by this step on an earlier run, by a human, or by the
+  # ruleset's dismiss-stale-reviews-on-push). Nothing to collapse.
   skip("no-changes-requested")
 
 else
