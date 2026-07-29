@@ -60,7 +60,14 @@ reusable_workflows() {
 workflow_assets() {
   case "$1" in
     pepper-pr-review)
-      for asset in prompts/*.md; do
+      # The review prompts, plus the DEV-674 post-verdict outcome-collapse
+      # programs. Both are fetched by the workflow from THIS repo at
+      # `job.workflow_sha` and both are behavior a caller pinned to the moving
+      # tag alias only receives via a release — so an edit to either has to route
+      # a commit to this package, exactly like a change to the YAML itself.
+      for asset in prompts/*.md \
+                   scripts/pepper-bot-outcome-collapse.sh \
+                   scripts/pepper-bot-outcome-collapse-decide.jq; do
         [ -f "$asset" ] && printf '%s\n' "$asset"
       done | sort
       ;;

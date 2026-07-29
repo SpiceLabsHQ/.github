@@ -1,0 +1,35 @@
+name: Pepper bot-PR outcome collapse — test
+
+# Runs the DEV-674 outcome-collapse fixture test (the decision program plus the
+# actor, driven against a stateful stub `gh`) on any PR that touches either half.
+#
+# WHY: this code only ever runs on a live PR, after a Bedrock-billed review, and
+# it makes API calls that change whether that PR is blocked. Its worst failures
+# are silent — collapsing a human's actionable change request, dismissing one of
+# several change requests and labelling the PR as handled while the rest still
+# block it, or firing on a PR whose block a later approval already cleared.
+# None shows up as a red check in production, so all are pinned pre-merge. Same
+# reasoning as pepper-stranded-sweep-test.yml and repo-settings-plan-test.yml.
+
+on:
+  pull_request:
+    paths:
+      - "scripts/pepper-bot-outcome-collapse.sh"
+      - "scripts/pepper-bot-outcome-collapse-decide.jq"
+      - "scripts/test/pepper-bot-outcome-collapse_test.sh"
+      - ".github/workflows/pepper-pr-review.yml"
+      - ".github/workflows/pepper-bot-outcome-collapse-test.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  collapse-fixtures:
+    name: pepper-bot-outcome-collapse fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Run outcome-collapse fixture test
+        run: scripts/test/pepper-bot-outcome-collapse_test.sh
