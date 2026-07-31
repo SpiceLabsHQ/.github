@@ -1319,6 +1319,19 @@ jobs:
       # not turn a completed review red (DEV-504).
       - name: Collapse bot-PR change request into comment + escalation (DEV-674)
         if: always() && steps.mode.outputs.mode == 'review'
+        # Backstop, not a budget. The step's `gh` calls are unbounded, and this
+        # workflow is a required check on the floor — a hung API call would
+        # otherwise hold that check open to the 6h job default in every
+        # code-tier repo. Generous enough that a slow-but-live run finishes.
+        #
+        # `continue-on-error` is load-bearing ALONGSIDE it: a timed-out step is a
+        # FAILED step, and without this the backstop would itself turn a
+        # completed review red — the exact outcome the `|| true` on the script
+        # invocation exists to prevent (DEV-504). Bounded and non-fatal, or
+        # neither. On timeout the change request simply stays filed and the next
+        # run retries, which is the same safe state as a rejected dismissal.
+        timeout-minutes: 5
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}

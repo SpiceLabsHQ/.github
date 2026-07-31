@@ -133,6 +133,13 @@ check_decision "approval, then a NEW change request" collapse bot-pr-changes-req
 check_decision "approval and change request with the same timestamp" skip already-approved \
   "$(decide dependency "[$(review 11 CHANGES_REQUESTED 2026-07-10T00:00:00Z),$(review 12 APPROVED 2026-07-10T00:00:00Z)]")"
 
+# Pins `newest_approval` to the LAST approval, not the first. With two approvals
+# straddling a change request, taking the first compares an approval that predates
+# the block and collapses a PR that is already cleared. Every other fixture here
+# has at most one approval, so nothing else distinguishes `last` from `first`.
+check_decision "the newest of two approvals straddling a change request wins" skip already-approved \
+  "$(decide dependency "[$(review 10 APPROVED 2026-07-09T00:00:00Z),$(review 11 CHANGES_REQUESTED 2026-07-10T00:00:00Z),$(review 12 APPROVED 2026-07-11T00:00:00Z)]")"
+
 GOT="$(decide dependency "$APPROVED_THEN_CR")"
 if [ "$(jq -c '.review_ids' <<<"$GOT")" = "[11,13]" ]; then
   pass "a new change request after an approval selects BOTH rows"
