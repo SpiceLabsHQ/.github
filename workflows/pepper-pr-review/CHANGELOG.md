@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.9.0](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.8.0...pepper-pr-review-v1.9.0) (2026-08-07)
+
+
+### Features
+
+* **pepper-pr-review:** remove the inert trigger_phrase input ([#181](https://github.com/SpiceLabsHQ/.github/issues/181)) ([bedee13](https://github.com/SpiceLabsHQ/.github/commit/bedee13d1cdbf8e1868045f0d49cc31d6a047aba))
+
 ## [1.8.0](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.7.0...pepper-pr-review-v1.8.0) (2026-08-07)
 
 
