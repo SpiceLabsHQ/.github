@@ -55,11 +55,12 @@ Every query below is a `--query-string` value; the start/end/poll scaffolding is
 the same each time. `-v-7d` is BSD `date` (macOS) and `-d '7 days ago'` is GNU
 `date` (Linux) — the fallback above covers both.
 
-> These queries are written against the schema below. They have not yet been run
-> against live records — there are none until the first review after the stack
-> and the IAM statement are deployed. Confirm each one on that first day's data
-> and correct this file in the same pass; a query that silently returns nothing
-> because a field name drifted looks exactly like a quiet week.
+> Every query below was run against the first live record on 2026-08-07 (the
+> day the stack and IAM statement were deployed): each field name resolved and
+> each aggregate matched the raw record. One observed behavior worth knowing
+> when reading results: grouping by a field that is `null` (e.g.
+> `standards_sha256` on a repo with no standards file) omits that column from
+> the result row entirely rather than printing a null bucket label.
 
 For a single run, skip Insights entirely and read the stream directly:
 
