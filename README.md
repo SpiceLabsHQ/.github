@@ -190,7 +190,7 @@ The bot operates in two modes:
 
 | Secret | Purpose |
 |---|---|
-| `AWS_CLAUDE_BEDROCK_ROLE_ARN` | Shared AWS role assumed via OIDC for Bedrock. Used by Pepper and any other Claude-on-Bedrock workload at the org |
+| `AWS_CLAUDE_BEDROCK_ROLE_ARN` | Shared AWS role assumed via OIDC for Bedrock. Used by Pepper and any other Claude-on-Bedrock workload at the org. **Scoped (DEV-875):** it can invoke only application inference profiles tagged `Product=pepper`, and only the foundation models behind them — and only *through* a profile, never a model ARN directly. A new Claude-on-Bedrock workload therefore needs its own tagged profile and an IAM grant for the model it wraps; pointing it at a raw model ID will fail with `AccessDenied` |
 | `PEPPER_PR_REVIEW_APP_ID` | GitHub App ID for the **Pepper PR Review** App. Required because `GITHUB_TOKEN` cannot approve PRs — the workflow mints an installation token from the App for formal approve / request-changes calls |
 | `PEPPER_PR_REVIEW_APP_PRIVATE_KEY` | PEM private key for the same App |
 
