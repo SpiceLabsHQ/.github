@@ -44,15 +44,6 @@ on:
         required: false
         type: string
         default: us-west-2
-      trigger_phrase:
-        description: |
-          Phrase passed through to claude-code-action. Retained because the action expects it;
-          it no longer selects a mode. Comment-triggered runs are not reachable — ruleset-injected
-          workflows only receive the default `pull_request` activity types (DEV-576), so no caller
-          declares `issue_comment` (DEV-876).
-        required: false
-        type: string
-        default: "@pepper"
       standards_path:
         description: Path (relative to the calling repo) to the optional review standards file.
         required: false
@@ -431,20 +422,16 @@ jobs:
     needs: gate
     runs-on: ubuntu-latest
     # See "Security model" comment at top of file.
-    # `issue_comment` is gated to org members so non-members can't trigger
-    # secret-bearing runs by typing the trigger phrase on a public PR.
+    # The `pull_request` check is the load-bearing guard: it is the only event
+    # that may start a secret-bearing run. The comment-triggered branch this
+    # condition used to carry was removed with `trigger_phrase` (DEV-882) — it
+    # gated `issue_comment` to org members, but no caller declares that event
+    # and ruleset injection drops it anyway (DEV-576), so it could never fire.
     # `needs.gate` skips runs whose pull_request initiator is a non-allowlisted
     # bot (DEV-504) before claude-code-action can hard-fail on them.
     if: >-
       needs.gate.outputs.run == 'true' &&
-      (
-        github.event_name == 'pull_request' ||
-        (github.event_name == 'issue_comment' &&
-         github.event.issue.pull_request != null &&
-         contains(github.event.comment.body, inputs.trigger_phrase) &&
-         contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'),
-                  github.event.comment.author_association))
-      )
+      github.event_name == 'pull_request'
     steps:
       - name: Generate App installation token
         id: app-token
@@ -1125,7 +1112,6 @@ jobs:
         with:
           github_token: ${{ steps.app-token.outputs.token }}
           use_bedrock: "true"
-          trigger_phrase: ${{ inputs.trigger_phrase }}
           # Dependency-update bots may trigger reviews (DEV-494; Renovate is
           # the org's version-update tool, Dependabot still authors security
           # updates). Named bots only — never '*': this repo is public, and
@@ -1291,15 +1277,15 @@ jobs:
 
           gh pr edit "${PR_NUMBER}" --add-label "pepper-needs-review" --remove-label "pepper-cooking" || true
 
-          # This body MUST NOT contain the trigger phrase (default `@pepper`).
-          # It is posted by the Pepper App bot via `gh pr comment`, which fires
-          # an `issue_comment` event; a body matching `contains(body, @pepper)`
-          # would spawn a fresh workflow run every time Pepper escalates. The
-          # review job then skips (the bot's author_association is NONE, failing
-          # the OWNER/MEMBER gate), so it doesn't loop — but each spawned run
-          # churns the `pepper-pr-review-<PR>` concurrency group and can evict a
-          # legitimately pending review. So invite the re-run generically, and
-          # never hardcode the (configurable) trigger phrase here. DEV-526.
+          # Invite the re-run generically — never name a trigger phrase here.
+          # This is posted by the Pepper App bot via `gh pr comment`, which
+          # fires an `issue_comment` event. Pepper no longer matches on comment
+          # bodies at all (DEV-876 removed on-demand mode, DEV-882 removed the
+          # `trigger_phrase` input and the gate branch that read it), so a
+          # phrase in this body can no longer spawn a run. The habit still
+          # holds: a caller that ever wires `issue_comment` would otherwise
+          # churn the `pepper-pr-review-<PR>` concurrency group on every
+          # escalation and could evict a legitimately pending review. DEV-526.
           #
           # DEV-721: name the commit the abandoned run was reading. Without it a
           # reader can't tell whether the stalled pass even covered the code
