@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.8.0](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.7.0...pepper-pr-review-v1.8.0) (2026-08-07)
+
+
+### Features
+
+* **pepper-pr-review:** remove dead on-demand mode ([#180](https://github.com/SpiceLabsHQ/.github/issues/180)) ([897b52d](https://github.com/SpiceLabsHQ/.github/commit/897b52d1c5ea875c2dc346acfbe82cd8d1e11931))
+
+
+### Bug Fixes
+
+* **pepper-pr-review:** bound the collapse step with a non-fatal timeout (DEV-674) ([#177](https://github.com/SpiceLabsHQ/.github/issues/177)) ([13cc6ca](https://github.com/SpiceLabsHQ/.github/commit/13cc6caa483dc88bc91d04fb969c57cf9679771d))
+
 ## [1.7.0](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.6.0...pepper-pr-review-v1.7.0) (2026-07-29)
 
 
