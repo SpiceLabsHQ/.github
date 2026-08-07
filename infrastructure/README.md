@@ -109,6 +109,15 @@ aws iam put-role-policy \
   --profile spice-admin
 ```
 
+Do not try to validate the `WritePepperReviewAuditLog` statement with the
+simulator: `simulate-custom-policy` fails to wildcard-match log-*stream* ARNs
+(the extra `:log-stream:` colons defeat its matcher, so even a policy resource
+of `log-group:*` returns `implicitDeny` against a stream ARN, with no matched
+statements). Real IAM evaluation matches `log-group:/pepper/pr-review/audit:*`
+against stream ARNs fine — the live-run check below is the authoritative one
+for that statement. Note also the simulator caps each policy at 2,000
+characters, which is why the `jq -c` minify in step 2 is not optional.
+
 ### Verifying it took
 
 Open a PR in this repo and let Pepper review it. A green review is the real
