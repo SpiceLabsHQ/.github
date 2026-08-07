@@ -1,0 +1,61 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "InvokePepperTaggedProfilesOnly",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream"
+      ],
+      "Resource": "arn:aws:bedrock:*:618640261060:application-inference-profile/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/Product": "pepper"
+        }
+      }
+    },
+    {
+      "Sid": "AuthorizedModelsReachableOnlyThroughAProfile",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream"
+      ],
+      "Resource": [
+        "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-sonnet-5",
+        "arn:aws:bedrock:us-east-2::foundation-model/anthropic.claude-sonnet-5",
+        "arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-sonnet-5",
+        "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "arn:aws:bedrock:us-east-2::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0"
+      ],
+      "Condition": {
+        "StringLike": {
+          "bedrock:InferenceProfileArn": "arn:aws:bedrock:*:618640261060:application-inference-profile/*"
+        }
+      }
+    },
+    {
+      "Sid": "DiscoverProfiles",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:ListInferenceProfiles",
+        "bedrock:GetInferenceProfile"
+      ],
+      "Resource": [
+        "arn:aws:bedrock:*:618640261060:application-inference-profile/*",
+        "arn:aws:bedrock:*:618640261060:inference-profile/*"
+      ]
+    },
+    {
+      "Sid": "MarketplaceModelAccess",
+      "Effect": "Allow",
+      "Action": [
+        "aws-marketplace:ViewSubscriptions",
+        "aws-marketplace:Subscribe"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
