@@ -100,6 +100,10 @@
 #
 # Prints a single `collapse-result=<slug>` line last, which is what the fixture
 # test asserts on.
+#
+# DEV-653: when `GITHUB_OUTPUT` is set it ALSO writes `collapse_fired=true|false`
+# as a step output, so the audit record can say whether this step rewrote the
+# verdict. See `result()` for why the stdout contract is left untouched.
 
 set -uo pipefail
 
@@ -113,7 +117,29 @@ FLAVOR="${FLAVOR:-default}"
 REVIEWERS_TEAM="${REVIEWERS_TEAM:-}"
 REPO_OWNER="${REPO_OWNER:-}"
 
-result() { echo "collapse-result=$1"; exit 0; }
+# The single exit point. The `collapse-result=<slug>` line on stdout is the
+# original contract and is UNCHANGED — the fixture test and any log reader still
+# see exactly what they did before.
+#
+# DEV-653 adds a step output alongside it, guarded on `GITHUB_OUTPUT` being set
+# so nothing changes for the fixture test (which runs the script directly) or
+# for a consumer pinned to an older tag. `collapse_fired` is true only for a
+# CONFIRMED, complete collapse: `dismiss-incomplete` means at least one change
+# request is still standing, so the verdict was NOT rewritten and the audit
+# record must not claim it was. The write is best-effort for the same reason
+# nothing else here exits non-zero — a failed audit hint must not turn a
+# completed review red (DEV-504).
+result() {
+  if [ -n "${GITHUB_OUTPUT:-}" ]; then
+    if [ "$1" = "collapsed" ]; then
+      echo "collapse_fired=true" >> "${GITHUB_OUTPUT}" 2>/dev/null || true
+    else
+      echo "collapse_fired=false" >> "${GITHUB_OUTPUT}" 2>/dev/null || true
+    fi
+  fi
+  echo "collapse-result=$1"
+  exit 0
+}
 
 # Best-effort human escalation, used on the success path and on both failure
 # paths. A team that lacks read access to this repo, or a token that cannot

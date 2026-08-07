@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "ts": "TS",
+  "repo": "SpiceLabsHQ/example",
+  "pr_number": 123,
+  "run_id": 17123456789,
+  "run_attempt": 1,
+  "event": "pull_request",
+  "head_sha": "abc1234def567890abc1234def567890abc1234d",
+  "pr_author": "octocat",
+  "flavor": "default",
+  "workflow_sha": "3fd28051d0e4c8b6a1f2e3d4c5b6a7988990a1b2",
+  "standards_sha256": null,
+  "model": "arn:aws:bedrock:us-west-2:618640261060:application-inference-profile/xda66yqkegz4",
+  "model_executed": "us.anthropic.claude-sonnet-5",
+  "effort": "high",
+  "max_turns": 80,
+  "review_timeout_minutes": 50,
+  "cli_version": "2.1.223",
+  "outcome": "approved",
+  "collapse_fired": false,
+  "turns_used": 34,
+  "duration_ms": 723000,
+  "cost_usd": 1.21,
+  "tokens": {
+    "input": 51234,
+    "output": 98765,
+    "cache_read": 401234,
+    "cache_creation": 12345
+  }
+}

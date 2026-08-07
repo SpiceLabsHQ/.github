@@ -1,0 +1,40 @@
+name: Pepper audit record — test
+
+# Runs the DEV-653 audit-record fixture test (the shell actor plus both jq
+# programs, in dry-run mode against committed fixtures) on any PR that touches
+# any of them.
+#
+# WHY: this code runs on every review inside a step that is `continue-on-error`
+# by HARD REQUIREMENT — pepper-pr-review is a required check org-wide
+# (DEV-502/DEV-504), so an audit failure must never fail a PR. That contract is
+# exactly what makes production blind to its bugs: a dropped field, a source
+# preferred in the wrong order, or a crash on a missing execution file all
+# produce a green check and a silently wrong dataset — the dataset DEV-884's
+# effort before/after depends on. None of it shows up as a red check in
+# production, so all of it is pinned pre-merge. Same reasoning as
+# pepper-bot-outcome-collapse-test.yml and pepper-stranded-sweep-test.yml.
+
+on:
+  pull_request:
+    paths:
+      - "scripts/pepper-audit-record.sh"
+      - "scripts/pepper-audit-record.jq"
+      - "scripts/pepper-audit-collect.jq"
+      - "scripts/test/pepper-audit-record_test.sh"
+      - "scripts/test/fixtures/pepper-audit/**"
+      - ".github/workflows/pepper-pr-review.yml"
+      - ".github/workflows/pepper-audit-record-test.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  audit-fixtures:
+    name: pepper-audit-record fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Run audit-record fixture test
+        run: scripts/test/pepper-audit-record_test.sh

@@ -1,0 +1,5 @@
+{"type":"summary","summary":"Review SpiceLabsHQ/example#123","leafUuid":"aaaa-0001"}
+{"type":"user","uuid":"aaaa-0002","message":{"role":"user","content":"<review prompt>"}}
+{"type":"assistant","uuid":"aaaa-0003","version":"2.1.220","effort":"medium","costUSD":null,"message":{"model":"us.anthropic.claude-sonnet-5","usage":{"input_tokens":100,"output_tokens":200,"cache_read_input_tokens":300,"cache_creation_input_tokens":40,"cache_creation":{"ephemeral_5m_input_tokens":40,"ephemeral_1h_input_tokens":0}}}}
+{"type":"user","uuid":"aaaa-0004","message":{"role":"user","content":[{"type":"tool_result","content":"ok"}]}}
+{"type":"assistant","uuid":"aaaa-0005","version":"2.1.220","effort":"medium","costUSD":null,"message":{"model":"us.anthropic.claude-sonnet-5","usage":{"input_tokens":11,"output_tokens":22,"cache_read_input_tokens":33,"cache_creation":{"ephemeral_5m_input_tokens":3,"ephemeral_1h_input_tokens":1}}}}
