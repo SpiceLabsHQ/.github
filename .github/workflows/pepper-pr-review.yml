@@ -19,38 +19,37 @@ on:
     inputs:
       model:
         description: |
-          Override the model used for both review and on-demand. When set, this wins over `review_model`
-          and `on_demand_model`. Leave empty to keep per-mode defaults, which carry cost-allocation tags
-          (Product=pepper, Mode=review|on-demand) — overriding here forfeits that attribution.
+          Override the model. When set, this wins over `review_model`. Leave empty to keep the
+          default, which carries the cost-allocation tags (Product=pepper, Mode=review) — overriding
+          here forfeits that attribution.
         required: false
         type: string
         default: ""
       review_model:
         description: |
-          Model used in review mode (auto-triggered on pull_request, or `@pepper review` comment).
-          Defaults to the `pepper-pr-review-sonnet-5` Application Inference Profile, tagged
-          Mode=review for AWS cost allocation. The profile wraps the `us.anthropic.claude-sonnet-5`
-          cross-region inference profile (DEV-492; Application Inference Profiles are immutable, so
-          a model upgrade means a new profile ARN here, not an edit to the old one).
+          Model used for the review. Defaults to the `pepper-pr-review-sonnet-5` Application
+          Inference Profile, tagged Mode=review for AWS cost allocation. The profile wraps the
+          `us.anthropic.claude-sonnet-5` cross-region inference profile (DEV-492; Application
+          Inference Profiles are immutable, so a model upgrade means a new profile ARN here, not
+          an edit to the old one).
+
+          The IAM role behind AWS_CLAUDE_BEDROCK_ROLE_ARN only permits application inference
+          profiles tagged Product=pepper, and only the models those profiles wrap (DEV-875), so a
+          replacement profile must carry the same tags.
         required: false
         type: string
         default: arn:aws:bedrock:us-west-2:618640261060:application-inference-profile/xda66yqkegz4
-      on_demand_model:
-        description: |
-          Model used in on-demand mode (`@pepper <task>` comments with edit/write/push tools).
-          Defaults to the `pepper-on-demand-sonnet-5` Application Inference Profile, tagged
-          Mode=on-demand for AWS cost allocation. Same underlying Claude Sonnet 5 as review mode;
-          tagged separately so we can see which flow drives spend.
-        required: false
-        type: string
-        default: arn:aws:bedrock:us-west-2:618640261060:application-inference-profile/lk2br1cu7fkj
       aws_region:
         description: AWS region where the Bedrock role and models live.
         required: false
         type: string
         default: us-west-2
       trigger_phrase:
-        description: Comment phrase that triggers an on-demand run.
+        description: |
+          Phrase passed through to claude-code-action. Retained because the action expects it;
+          it no longer selects a mode. Comment-triggered runs are not reachable — ruleset-injected
+          workflows only receive the default `pull_request` activity types (DEV-576), so no caller
+          declares `issue_comment` (DEV-876).
         required: false
         type: string
         default: "@pepper"
@@ -460,31 +459,12 @@ jobs:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
 
-      # `pull_request` always means review. `issue_comment` splits by body:
-      # `@pepper review` (or whatever trigger_phrase is) followed by the word
-      # `review` routes to the review prompt with read-only tools; anything
-      # else routes to on-demand mode with edit/write/push tools. Keeping the
-      # split here means downstream steps stay branch-free on event_name.
-      - name: Determine mode
-        id: mode
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          COMMENT_BODY: ${{ github.event.comment.body }}
-          TRIGGER_PHRASE: ${{ inputs.trigger_phrase }}
-        run: |
-          set -euo pipefail
-          MODE="on-demand"
-          if [ "${EVENT_NAME}" = "pull_request" ]; then
-            MODE="review"
-          elif [ "${EVENT_NAME}" = "issue_comment" ]; then
-            NORMALIZED=$(printf '%s' "${COMMENT_BODY}" | tr -s '[:space:]' ' ' | tr '[:upper:]' '[:lower:]')
-            TRIGGER_LOWER=$(printf '%s' "${TRIGGER_PHRASE}" | tr '[:upper:]' '[:lower:]')
-            case "${NORMALIZED}" in
-              *"${TRIGGER_LOWER} review"*) MODE="review" ;;
-            esac
-          fi
-          echo "Resolved mode: ${MODE}"
-          echo "mode=${MODE}" >> "${GITHUB_OUTPUT}"
+      # There is no mode axis any more (DEV-876). Every reachable trigger is a
+      # review: ruleset-injected workflows only receive the default
+      # `pull_request` activity types, and other events are silently dropped
+      # (DEV-576), so no caller declares `issue_comment` and the comment-driven
+      # on-demand flow was unreachable. Restoring it means solving the injection
+      # constraint first, not merely re-adding a branch here.
 
       # DEV-721 — pin the commit this run is reviewing, and expose its short
       # form so Pepper can stamp it on the review body.
@@ -531,18 +511,12 @@ jobs:
           echo "sha=${SHA}" >> "${GITHUB_OUTPUT}"
           echo "short=${SHORT}" >> "${GITHUB_OUTPUT}"
 
-      # `flavor` is a SECOND, orthogonal axis, deliberately not a third `mode`
-      # value. `mode` answers "what is Pepper being asked to do" and is consumed
-      # at twelve sites in this job (label creation, the cooking marker, the
-      # branch switch, the DEV-526 coverage poll/fetch/note, the template case,
-      # model resolution, the tool allowlists, the MCP config, the no-verdict
-      # escalation, and the cooking cleanup). A third `mode` value would fall off
-      # nine of them silently — wrong inference profile and wrong `Mode=` cost tag,
-      # no escalation, a permanently stale `pepper-cooking` label. `flavor`
-      # answers "what kind of change is this", is consumed ONLY by the template
-      # case below, and leaves all twelve `mode` sites untouched. It also gives a
-      # defined answer for `@pepper fix this` on a Renovate PR: mode=on-demand,
-      # flavor=dependency, which a flat enum could not express.
+      # `flavor` answers "what kind of change is this" and is consumed ONLY by
+      # the template case below. It was introduced as an axis orthogonal to the
+      # old `mode` (DEV-672) precisely so it could not silently change model
+      # resolution, tool allowlists, or the `Mode=` cost tag. `mode` is gone
+      # (DEV-876); that containment is still the property worth keeping — a new
+      # flavor must stay confined to template selection.
       #
       # Resolved from the PR AUTHOR, never the initiator. `allowed_bots` is an
       # INITIATOR allowlist (DEV-504) and floor-pepper.yml now passes
@@ -581,8 +555,7 @@ jobs:
       # `gh label create` errors when a label already exists; the `|| true`
       # makes the call a no-op so we don't clobber per-repo customization
       # of color or description on existing labels.
-      - name: Ensure Pepper labels exist (review mode only)
-        if: steps.mode.outputs.mode == 'review'
+      - name: Ensure Pepper labels exist
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
@@ -602,8 +575,7 @@ jobs:
       # always-on cleanup at the end of the job removes the marker if
       # Pepper never finished. Net: `pepper-cooking` only appears on a
       # PR that is currently being reviewed, never as a stale leftover.
-      - name: Mark PR as cooking (review mode only)
-        if: steps.mode.outputs.mode == 'review'
+      - name: Mark PR as cooking
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
@@ -622,48 +594,6 @@ jobs:
           done
           gh pr edit "${PR_NUMBER}" "${ARGS[@]}"
 
-      # `issue_comment` events check out the default branch by default. For on-demand
-      # mode (Pepper making edits the user asked for) we need to be on the PR's head
-      # branch so commits land on the right ref. Fork PRs aren't supported in
-      # on-demand mode — the App token can't push to forks, and we don't want to
-      # silently no-op.
-      #
-      # Gated on resolved mode rather than event name so a `@pepper review`
-      # comment on a fork PR isn't blocked by the fork-fail below — review mode
-      # doesn't need branch switching at all (it reads the diff via gh).
-      - name: Switch to PR head branch (on-demand mode only)
-        if: steps.mode.outputs.mode == 'on-demand'
-        env:
-          PR_NUMBER: ${{ github.event.issue.number }}
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          # The action's app-slug output is the App's URL slug. If a future
-          # minor of actions/create-github-app-token drops the output (or this
-          # workflow is called via an older pin), fall back to a hardcoded slug
-          # for the SpiceLabsHQ App.
-          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
-        run: |
-          set -euo pipefail
-          PR_JSON=$(gh pr view "${PR_NUMBER}" --json headRefName,headRepositoryOwner,isCrossRepository)
-          HEAD_REF=$(echo "${PR_JSON}" | jq -r '.headRefName')
-          IS_FORK=$(echo "${PR_JSON}" | jq -r '.isCrossRepository')
-          if [ "${IS_FORK}" = "true" ]; then
-            echo "::error::PR #${PR_NUMBER} is from a fork; on-demand mode is not supported for fork PRs (App token cannot push to forks)."
-            exit 1
-          fi
-          git fetch origin "${HEAD_REF}":"${HEAD_REF}"
-          git checkout "${HEAD_REF}"
-
-          if [ -z "${APP_SLUG}" ]; then
-            echo "::error::actions/create-github-app-token did not produce app-slug. Pin to a newer minor of the action that exposes it."
-            exit 1
-          fi
-          BOT_LOGIN="${APP_SLUG}[bot]"
-          # Public users endpoint, accessible to install tokens. Brackets URL-encoded.
-          BOT_USER_ID=$(gh api "users/${APP_SLUG}%5Bbot%5D" --jq '.id')
-          git config user.name "${BOT_LOGIN}"
-          git config user.email "${BOT_USER_ID}+${BOT_LOGIN}@users.noreply.github.com"
-          echo "Switched to PR branch: ${HEAD_REF} (committer: ${BOT_LOGIN})"
-
       # Coverage consumer, part 1 — SHELL-ONLY poll (DEV-526). No inference is
       # running yet, so waiting here costs build minutes, not model time. Wait
       # (bounded) for the repo's test job to upload its coverage artifact for
@@ -672,11 +602,11 @@ jobs:
       # resolves the moment tests+coverage are done, not when all of CI is.
       # Early-exit once no OTHER CI run for the head SHA is still active: nothing
       # is left to produce the artifact, so a no-coverage repo resolves fast
-      # instead of burning the full timeout. Review mode only; a missing artifact
+      # instead of burning the full timeout. A missing artifact
       # is a clean fallback (Pepper reviews off the diff, as before).
-      - name: Poll for coverage artifact (review mode only)
+      - name: Poll for coverage artifact
         id: coverage-poll
-        if: inputs.coverage_review_enabled && steps.mode.outputs.mode == 'review'
+        if: inputs.coverage_review_enabled
         env:
           # Default job token, not the App token: reading artifacts + run status
           # needs only `actions: read`, which the job's permissions block already
@@ -777,7 +707,7 @@ jobs:
       # SHA (version-matched, like the prompt) so the next step runs the exact
       # program the fixture test verifies. Coverage mode only.
       - name: Fetch coverage note renderer (coverage mode only)
-        if: inputs.coverage_review_enabled && steps.mode.outputs.mode == 'review'
+        if: inputs.coverage_review_enabled
         uses: actions/checkout@v7
         with:
           repository: SpiceLabsHQ/.github
@@ -787,9 +717,9 @@ jobs:
           sparse-checkout-cone-mode: false
           fetch-depth: 1
 
-      - name: Build coverage note (review mode only)
+      - name: Build coverage note
         id: coverage-note
-        if: inputs.coverage_review_enabled && steps.mode.outputs.mode == 'review'
+        if: inputs.coverage_review_enabled
         env:
           FOUND: ${{ steps.coverage-poll.outputs.found }}
           COV_FILE: ${{ steps.coverage-poll.outputs.file }}
@@ -900,60 +830,40 @@ jobs:
           REVIEWERS_TEAM: ${{ inputs.reviewers_team }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
           GUIDELINES_MARKER: "<!-- PROJECT_GUIDELINES_PLACEHOLDER -->"
-          TASK_MARKER: "<!-- TASK_PLACEHOLDER -->"
           COVERAGE_MARKER: "<!-- COVERAGE_NOTE_PLACEHOLDER -->"
           COVERAGE_NOTE_PATH: ${{ steps.coverage-note.outputs.path }}
-          MODE: ${{ steps.mode.outputs.mode }}
           FLAVOR: ${{ steps.flavor.outputs.flavor }}
-          COMMENT_BODY: ${{ github.event.comment.body }}
           REVIEW_TIMEOUT_MINUTES: ${{ inputs.review_timeout_minutes }}
           REVIEW_BUDGET_MARGIN_MINUTES: ${{ inputs.review_budget_margin_minutes }}
           HEAD_SHA_SHORT: ${{ steps.head-sha.outputs.short }}
         run: |
           set -euo pipefail
 
-          # Pick the right template for the resolved mode. Each mode has its
-          # own purpose-built prompt — sharing a prompt led to the model picking
-          # the wrong mode and either reviewing on-demand requests or trying to
-          # edit during auto-review.
-          # Within review mode, `flavor` selects the risk model the reviewer is
-          # given. This is the ONLY consumer of `flavor` — every `mode`-keyed step
-          # in this job is untouched by it.
-          case "${MODE}" in
-            review)
-              case "${FLAVOR}" in
-                dependency)
-                  # DEV-673. The dependency risk model — provenance, what rode
-                  # along in the lockfile, license drift, semver honesty, this
-                  # repo's usage surface, the CVE urgency asymmetry, repo
-                  # invariants, worst-member aggregation on grouped PRs — plus
-                  # the {approve, escalate} outcome set, which is the only one a
-                  # bot author can act on. The template itself gates on diff
-                  # shape, because these authors also open config-migration PRs.
-                  #
-                  # Safe to point at unconditionally: `.pepper-pr-review-tpl` is
-                  # checked out at `job.workflow_sha` — the commit of THIS
-                  # workflow file — so the template tree is always the one that
-                  # ships with these lines, never the caller's tree and never a
-                  # different ref. A caller pinned to an older tag runs that
-                  # tag's copy of this `case`, which has no `dependency` arm at
-                  # all. The not-found `exit 1` below cannot fire on this path.
-                  TEMPLATE=".pepper-pr-review-tpl/prompts/dependency-review-default.md"
-                  ;;
-                *)
-                  # `default`, plus any flavor a future edit forgets to handle:
-                  # fall open to the general review template rather than failing
-                  # a required check.
-                  TEMPLATE=".pepper-pr-review-tpl/prompts/pr-review-default.md"
-                  ;;
-              esac
-              ;;
-            on-demand)
-              TEMPLATE=".pepper-pr-review-tpl/prompts/on-demand-default.md"
+          # `flavor` selects the risk model the reviewer is given.
+          case "${FLAVOR}" in
+            dependency)
+              # DEV-673. The dependency risk model — provenance, what rode
+              # along in the lockfile, license drift, semver honesty, this
+              # repo's usage surface, the CVE urgency asymmetry, repo
+              # invariants, worst-member aggregation on grouped PRs — plus
+              # the {approve, escalate} outcome set, which is the only one a
+              # bot author can act on. The template itself gates on diff
+              # shape, because these authors also open config-migration PRs.
+              #
+              # Safe to point at unconditionally: `.pepper-pr-review-tpl` is
+              # checked out at `job.workflow_sha` — the commit of THIS
+              # workflow file — so the template tree is always the one that
+              # ships with these lines, never the caller's tree and never a
+              # different ref. A caller pinned to an older tag runs that
+              # tag's copy of this `case`, which has no `dependency` arm at
+              # all. The not-found `exit 1` below cannot fire on this path.
+              TEMPLATE=".pepper-pr-review-tpl/prompts/dependency-review-default.md"
               ;;
             *)
-              echo "Unsupported mode: ${MODE}" >&2
-              exit 1
+              # `default`, plus any flavor a future edit forgets to handle:
+              # fall open to the general review template rather than failing
+              # a required check.
+              TEMPLATE=".pepper-pr-review-tpl/prompts/pr-review-default.md"
               ;;
           esac
 
@@ -980,13 +890,13 @@ jobs:
             { print }
           ' "${TEMPLATE}" > "${ASSEMBLED}"
 
-          # Fold the DEV-526 diff-coverage note into the review template
-          # (review mode only). The coverage-note step always writes a file —
-          # a real note or a "no coverage this run" marker — so the placeholder
-          # is always resolved. If the tagged template predates the marker, the
-          # awk finds no marker line and the note is simply not injected: a
-          # clean degradation, never an error.
-          if [ "${MODE}" = "review" ] && [ -n "${COVERAGE_NOTE_PATH:-}" ] && [ -f "${COVERAGE_NOTE_PATH}" ]; then
+          # Fold the DEV-526 diff-coverage note into the review template. The
+          # coverage-note step always writes a file — a real note or a "no
+          # coverage this run" marker — so the placeholder is always resolved.
+          # If the tagged template predates the marker, the awk finds no marker
+          # line and the note is simply not injected: a clean degradation,
+          # never an error.
+          if [ -n "${COVERAGE_NOTE_PATH:-}" ] && [ -f "${COVERAGE_NOTE_PATH}" ]; then
             COVERAGE_ASSEMBLED="$(mktemp)"
             awk -v marker="${COVERAGE_MARKER}" -v block_file="${COVERAGE_NOTE_PATH}" '
               $0 == marker {
@@ -997,22 +907,6 @@ jobs:
               { print }
             ' "${ASSEMBLED}" > "${COVERAGE_ASSEMBLED}"
             mv "${COVERAGE_ASSEMBLED}" "${ASSEMBLED}"
-          fi
-
-          # For on-demand, substitute the user's comment in for the task placeholder.
-          if [ "${MODE}" = "on-demand" ]; then
-            TASK_FILE="$(mktemp)"
-            printf '%s\n' "${COMMENT_BODY}" > "${TASK_FILE}"
-            ASSEMBLED2="$(mktemp)"
-            awk -v marker="${TASK_MARKER}" -v block_file="${TASK_FILE}" '
-              $0 == marker {
-                while ((getline line < block_file) > 0) print line
-                close(block_file)
-                next
-              }
-              { print }
-            ' "${ASSEMBLED}" > "${ASSEMBLED2}"
-            mv "${ASSEMBLED2}" "${ASSEMBLED}"
           fi
 
           # Substitute scalar placeholders. reviewers_team is a team slug,
@@ -1026,8 +920,8 @@ jobs:
           # inference tail and its final file-verdict/label actions — the model
           # has no clock and the stop is an ungraceful kill. Clamp to a floor so a
           # small timeout or large margin can't hand the prompt a zero/negative
-          # budget. The on-demand template has no {{REVIEW_BUDGET_MINUTES}} token,
-          # so this sed is a no-op there.
+          # budget. A tagged template predating the token degrades to no
+          # substitution rather than erroring.
           REVIEW_BUDGET_MINUTES=$(( REVIEW_TIMEOUT_MINUTES - REVIEW_BUDGET_MARGIN_MINUTES ))
           if [ "${REVIEW_BUDGET_MINUTES}" -lt 5 ]; then
             REVIEW_BUDGET_MINUTES=5
@@ -1036,9 +930,8 @@ jobs:
 
           # DEV-721: the head SHA this run is reviewing, for the review body's
           # commit stamp. Hex or the literal `unknown` — nothing sed would treat
-          # specially. The on-demand template carries no {{HEAD_SHA_SHORT}}
-          # token, so this sed is a no-op there, and a tagged review template
-          # predating the token degrades to no stamp rather than erroring.
+          # specially. A tagged review template predating the token degrades
+          # to no stamp rather than erroring.
           sed -i "s|{{HEAD_SHA_SHORT}}|${HEAD_SHA_SHORT}|g" "${ASSEMBLED}"
 
           {
@@ -1047,41 +940,39 @@ jobs:
             echo 'PEPPER_PROMPT_EOF'
           } >> "${GITHUB_OUTPUT}"
 
-      # Pick the model identifier the SDK will pass to Bedrock. Per-mode
-      # defaults are AWS Application Inference Profiles tagged for cost
-      # allocation (Product=pepper, Mode=review|on-demand) so AWS Cost
-      # Explorer can attribute spend by flow. The `model` input is an
-      # explicit override that wins for both modes — useful for testing a
-      # different model on a debug branch, but it forfeits the per-mode
-      # cost attribution because override values bypass the tagged profiles.
+      # Pick the model identifier the SDK will pass to Bedrock. The default is
+      # an AWS Application Inference Profile tagged for cost allocation
+      # (Product=pepper, Mode=review) so AWS Cost Explorer can attribute spend.
+      # The `model` input is an explicit override — useful for testing a
+      # different model on a debug branch, but it forfeits cost attribution
+      # because override values bypass the tagged profile.
+      #
+      # An override must still be an application inference profile tagged
+      # Product=pepper wrapping an authorized model: the IAM role permits
+      # nothing else (DEV-875). A raw model ARN fails with AccessDenied.
       - name: Resolve model for this run
         id: model
         env:
-          MODE: ${{ steps.mode.outputs.mode }}
           OVERRIDE: ${{ inputs.model }}
           REVIEW_MODEL: ${{ inputs.review_model }}
-          ON_DEMAND_MODEL: ${{ inputs.on_demand_model }}
         run: |
           set -euo pipefail
           if [ -n "${OVERRIDE}" ]; then
             RESOLVED="${OVERRIDE}"
             echo "Using override model (cost attribution disabled): ${RESOLVED}"
-          elif [ "${MODE}" = "review" ]; then
-            RESOLVED="${REVIEW_MODEL}"
-            echo "Using review-mode profile: ${RESOLVED}"
           else
-            RESOLVED="${ON_DEMAND_MODEL}"
-            echo "Using on-demand-mode profile: ${RESOLVED}"
+            RESOLVED="${REVIEW_MODEL}"
+            echo "Using review profile: ${RESOLVED}"
           fi
           echo "model=${RESOLVED}" >> "${GITHUB_OUTPUT}"
 
       # Emits four outputs consumed by the Run Pepper step's claude_args:
-      #   allowed     — the --allowedTools list for this mode
-      #   disallowed  — the --disallowedTools list (review mode only; empty on-demand)
+      #   allowed     — the --allowedTools list
+      #   disallowed  — the --disallowedTools list
       #   max_turns   — turn cap so a looping run can't run away
-      #   effort      — reasoning effort (--effort); `high` for both modes
+      #   effort      — reasoning effort (--effort)
       #
-      # Why the review-mode list is shaped this way (DEV-235): the model routes
+      # Why the allowlist is shaped this way (DEV-235): the model routes
       # the large majority of its work through Bash and reaches for grep/sed/ls/
       # find and compound commands. A tight Bash allowlist denies those, and in
       # CI there is no human to approve — every denial is a wasted model turn.
@@ -1093,8 +984,6 @@ jobs:
       # otherwise be auto-included regardless of the allowlist.
       - name: Determine allowed tools for this run
         id: tools
-        env:
-          MODE: ${{ steps.mode.outputs.mode }}
         run: |
           set -euo pipefail
           # Native read + search tools. These do NOT go through the Bash
@@ -1131,9 +1020,8 @@ jobs:
           # accept a tool glob only after a literal `mcp__<server>__` prefix). A
           # bare `mcp__linear` is not the validated form.
           LINEAR_TOOLS='mcp__linear__*'
-          ON_DEMAND_TOOLS='Edit,Write,Bash'
           # claude-code-action auto-includes built-in tools (Read, and the file
-          # writers) regardless of --allowedTools. To keep review mode truly
+          # writers) regardless of --allowedTools. To keep the review truly
           # read-only on the filesystem we must DENY the writers explicitly.
           # We also deny the Linear MCP MUTATION tools by glob. LINEAR_TOOLS
           # above grants the whole `mcp__linear__*` server for maintenance-free
@@ -1152,35 +1040,27 @@ jobs:
           # exactly the recall a review depends on. Per-invocation latency x turn
           # count is the real wall-clock cost (DEV-235), and this is the one safe
           # lever on it. Passed via `--effort` in claude_args below.
-          if [ "${MODE}" = "on-demand" ]; then
-            echo "allowed=${ON_DEMAND_TOOLS}" >> "${GITHUB_OUTPUT}"
-            echo "disallowed=" >> "${GITHUB_OUTPUT}"
-            echo "max_turns=60" >> "${GITHUB_OUTPUT}"
-            echo "effort=high" >> "${GITHUB_OUTPUT}"
-          else
-            echo "allowed=${AUTO_TOOLS},${LINEAR_TOOLS}" >> "${GITHUB_OUTPUT}"
-            echo "disallowed=${REVIEW_DISALLOWED}" >> "${GITHUB_OUTPUT}"
-            # 80, raised from an initial guess of 40 (DEV-235). A large PR (~700
-            # changed lines) legitimately exhausted 40 turns with ZERO tool
-            # denials — a fast-fail on a healthy review, not a runaway loop. The
-            # cap only spends turns a review actually needs, so small PRs are
-            # unaffected; it just stops cutting large reviews off before a
-            # verdict. Kept below the wall-clock timeout so max-turns stays the
-            # graceful primary stop (see the Run Pepper timeout note).
-            echo "max_turns=80" >> "${GITHUB_OUTPUT}"
-            echo "effort=high" >> "${GITHUB_OUTPUT}"
-          fi
+          echo "allowed=${AUTO_TOOLS},${LINEAR_TOOLS}" >> "${GITHUB_OUTPUT}"
+          echo "disallowed=${REVIEW_DISALLOWED}" >> "${GITHUB_OUTPUT}"
+          # 80, raised from an initial guess of 40 (DEV-235). A large PR (~700
+          # changed lines) legitimately exhausted 40 turns with ZERO tool
+          # denials — a fast-fail on a healthy review, not a runaway loop. The
+          # cap only spends turns a review actually needs, so small PRs are
+          # unaffected; it just stops cutting large reviews off before a
+          # verdict. Kept below the wall-clock timeout so max-turns stays the
+          # graceful primary stop (see the Run Pepper timeout note).
+          echo "max_turns=80" >> "${GITHUB_OUTPUT}"
+          echo "effort=high" >> "${GITHUB_OUTPUT}"
 
       # Wire up Linear's hosted MCP server when LINEAR_API_KEY is set. The
       # action consumes this via `--mcp-config <path>` in claude_args. The bot
       # then has read-only access to Linear via mcp__linear__* tools, which
       # supports graph traversal (sub-issues, parents, related, comments)
       # without the bot needing to write GraphQL or auth headers itself.
-      # Runs for any review-mode invocation (pull_request or `@pepper review`
-      # comment) so re-reviews get the same Linear context as auto-review.
-      - name: Build MCP config (review mode only)
+      # Runs for every invocation, so re-reviews get the same Linear context
+      # as the first review.
+      - name: Build MCP config
         id: mcp
-        if: steps.mode.outputs.mode == 'review'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         run: |
@@ -1219,7 +1099,7 @@ jobs:
       # tail) multiplied by turn count. The `always()` cleanup below still runs
       # when this step times out, so `pepper-cooking` never gets stuck on.
       #
-      # `--max-turns` (80 review / 60 on-demand) is the PRIMARY stop and it is
+      # `--max-turns` (80) is the PRIMARY stop and it is
       # graceful: the agent loop ends cleanly and Pepper can still post its
       # verdict. This timeout is only a hang-catcher for a genuinely wedged run.
       # It is sized to NOT trip before max-turns on a healthy review — 80 turns
@@ -1263,8 +1143,7 @@ jobs:
           # `claude_args` (CLI flags passed to the underlying Claude Code SDK).
           # Without these, the action silently uses defaults, which results in
           # permission denials when Pepper runs gh / git from the prompt.
-          # --disallowedTools is omitted for on-demand (empty output) so its
-          # Edit/Write grant survives; --max-turns caps runaway loops per mode.
+          # --max-turns caps runaway loops.
           claude_args: >-
             --model ${{ steps.model.outputs.model }}
             --effort ${{ steps.tools.outputs.effort }}
@@ -1318,7 +1197,7 @@ jobs:
       # is a required check on the floor, and a failed post-verdict cleanup must
       # not turn a completed review red (DEV-504).
       - name: Collapse bot-PR change request into comment + escalation (DEV-674)
-        if: always() && steps.mode.outputs.mode == 'review'
+        if: always()
         # Backstop, not a budget. The step's `gh` calls are unbounded, and this
         # workflow is a required check on the floor — a hung API call would
         # otherwise hold that check open to the 6h job default in every
@@ -1391,8 +1270,8 @@ jobs:
       # ending at once: timeout SIGKILL, cancellation, mid-run error, AND a clean
       # out-of-turns stop. This runs before the always-on cooking cleanup below,
       # so the marker is still readable at decision time.
-      - name: Escalate if Pepper posted no verdict (review mode only)
-        if: always() && steps.mode.outputs.mode == 'review'
+      - name: Escalate if Pepper posted no verdict
+        if: always()
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
@@ -1449,7 +1328,7 @@ jobs:
       # the corner case where the cooking step itself failed and the
       # label is not in the repo (would otherwise error on --remove-label).
       - name: Clear pepper-cooking marker
-        if: always() && steps.mode.outputs.mode == 'review'
+        if: always()
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}

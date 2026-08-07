@@ -155,12 +155,13 @@ Pepper is the Spice Labs PR review bot, powered by Claude Sonnet 5 on AWS Bedroc
 
 **Naming legend:** workflow display name is **Pepper PR Review**, status check appears as **Pepper PR Review / Pepper review**, and formal approves and request-changes are authored by the **Pepper PR Review** GitHub App (the reviewer name shown on the PR, not the workflow bot account).
 
-The bot operates in two modes:
+The bot has one mode — auto-review:
 
 - **Auto-review** (PR `opened` / `synchronize` / `reopened` — the only events GitHub delivers to ruleset-injected workflows; `ready_for_review` and `issue_comment` are dropped, see DEV-576): performs a full review and chooses one of three outcomes — formal approve, formal request-changes, or comment-with-reviewer-assignment. Read-only on the filesystem. **Pushing a commit is what triggers a fresh review** — a draft marked ready is reviewed on its next push.
-- **On-demand** (`@pepper` mention in a PR comment): **dormant — no caller in the org wires `issue_comment`.** Floor repos never receive the event, and this repository's own `pepper-self-review.yml` deliberately matches the floor's event set so Pepper behaves one way everywhere (DEV-576). Pushing a commit is the only way to drive a review; removing the mode from the reusable is a DEV-576 follow-up.
 
-**Draft guidance (DEV-666).** Neither mode reviews a draft, and from the PR surface that skip is indistinguishable from "Pepper never ran". So on a draft, Pepper posts a **sticky comment** saying how to get reviewed — mark it ready, then push a commit. One comment per PR, updated in place across pushes, and deleted once the PR is no longer a draft so a "still a draft" note never sits above an actual verdict. Non-blocking by construction: every step is `continue-on-error`, so it cannot fail the required floor check.
+There was once a second, comment-triggered **on-demand** mode (`@pepper <task>`, carrying edit/write/push tools). It was removed in DEV-876 because it was unreachable: floor repos never receive `issue_comment`, and this repository's own `pepper-self-review.yml` deliberately matches the floor's event set so Pepper behaves one way everywhere. Restoring it means solving the DEV-576 injection constraint first, not merely re-adding the code path.
+
+**Draft guidance (DEV-666).** Pepper does not review a draft, and from the PR surface that skip is indistinguishable from "Pepper never ran". So on a draft, Pepper posts a **sticky comment** saying how to get reviewed — mark it ready, then push a commit. One comment per PR, updated in place across pushes, and deleted once the PR is no longer a draft so a "still a draft" note never sits above an actual verdict. Non-blocking by construction: every step is `continue-on-error`, so it cannot fail the required floor check.
 
 **Commit stamp (DEV-721).** Every review body ends with `Reviewed at <short-sha>.` — the PR head commit as it stood when the run started. A review can outlive the commit that started it: push while Pepper is still reading and GitHub stamps the filed verdict's `commit_id` with the *newer* head, so the PR surface credits the verdict to code Pepper never saw. The stamped line is the fixed record; compare it against the PR's current head to spot a stale verdict at a glance. The no-verdict escalation comment names the same SHA. Both drop the stamp rather than guess if the head can't be resolved.
 
@@ -172,11 +173,10 @@ The bot operates in two modes:
 
 | Input | Default | Notes |
 |---|---|---|
-| `review_model` | `arn:…application-inference-profile/xda66yqkegz4` (`pepper-pr-review-sonnet-5`) | Model used in review mode. Default is an AWS Application Inference Profile wrapping Claude Sonnet 5, tagged `Product=pepper, Mode=review` for cost allocation |
-| `on_demand_model` | `arn:…application-inference-profile/lk2br1cu7fkj` (`pepper-on-demand-sonnet-5`) | Model used in on-demand mode. Same Claude Sonnet 5 underneath, tagged `Mode=on-demand` so AWS Cost Explorer can split spend by flow |
-| `model` | `""` | Override that wins for **both** modes. Set only when testing a different model on a debug branch — bypassing the per-mode profiles forfeits cost attribution |
+| `review_model` | `arn:…application-inference-profile/xda66yqkegz4` (`pepper-pr-review-sonnet-5`) | Model used for the review. Default is an AWS Application Inference Profile wrapping Claude Sonnet 5, tagged `Product=pepper, Mode=review` for cost allocation |
+| `model` | `""` | Override. Set only when testing a different model on a debug branch — bypassing the tagged profile forfeits cost attribution. Must still be a `Product=pepper` application inference profile wrapping an authorized model, or Bedrock returns `AccessDenied` (DEV-875) |
 | `aws_region` | `us-west-2` | AWS region where the Bedrock role and inference profiles live |
-| `trigger_phrase` | `@pepper` | Comment phrase that triggers on-demand mode |
+| `trigger_phrase` | `@pepper` | Passed through to `claude-code-action`; retained because the action expects it. Comment-triggered runs are not reachable — ruleset-injected workflows only receive the default `pull_request` activity types (DEV-576) |
 | `standards_path` | `.pepper/pr-review-standards.md` | Override if your repo stores standards elsewhere |
 | `reviewers_team` | `reviewers` | Slug of the org team Pepper requests review from on escalation. Must be a team in the repo's own org with read access to the repo; the App token needs org `members: read` to resolve it |
 | `show_full_output` | `false` | When `true`, Pepper's tool calls + reasoning + tool results stream into Actions logs. Useful for diagnosing permission denials or wasted turns. **Public-repo callers: anyone who can see the Actions run sees the full output** — use only on debug branches |

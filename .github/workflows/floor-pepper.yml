@@ -27,9 +27,9 @@ on:
     # ruleset-injected workflows on the DEFAULT pull_request types only; extra
     # declared types (ready_for_review) and other events (issue_comment) are
     # silently dropped (DEV-576), so declaring them here would be dead config
-    # that reads like capability. Consequences: a draft marked ready gets its
-    # review on the next push (synchronize), and on-demand `@pepper` comments
-    # work only where a caller is committed (pepper-self-review.yml, this repo).
+    # that reads like capability. Consequence: a draft marked ready gets its
+    # review on the next push (synchronize). Comment-triggered runs are not
+    # reachable anywhere, which is why on-demand mode was removed (DEV-876).
     types: [opened, synchronize, reopened]
 
 jobs:
