@@ -49,6 +49,15 @@
       ]
     },
     {
+      "Sid": "WritePepperReviewAuditLog",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": "arn:aws:logs:us-west-2:618640261060:log-group:/pepper/pr-review/audit:*"
+    },
+    {
       "Sid": "MarketplaceModelAccess",
       "Effect": "Allow",
       "Action": [

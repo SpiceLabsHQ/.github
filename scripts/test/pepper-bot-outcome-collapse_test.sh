@@ -308,9 +308,17 @@ STUB
 chmod +x "${BIN}/gh"
 
 # Re-run the actor against whatever review list the previous run left behind.
+#
+# GITHUB_OUTPUT is pointed at a work file rather than inherited: this test runs
+# inside an Actions step, so the real one is set, and the DEV-653 step output
+# would otherwise be appended to the fixture job's own outputs a few dozen times.
+# Redirecting it also makes that output assertable (see step_output below).
+STEP_OUTPUT="${WORK}/step-output"
+
 rerun_collapse() { # <flavor> [reviewers_team]
-  rm -f "${WORK}/calls"
+  rm -f "${WORK}/calls" "${STEP_OUTPUT}"
   WORK="${WORK}" PATH="${BIN}:${PATH}" \
+    GITHUB_OUTPUT="${STEP_OUTPUT}" \
     REPO="SpiceLabsHQ/.github" PR_NUMBER=138 PEPPER_BOT_LOGIN="${BOT}" \
     FLAVOR="$1" REVIEWERS_TEAM="${2-reviewers}" REPO_OWNER="SpiceLabsHQ" \
     "${COLLAPSE}"
@@ -322,6 +330,21 @@ run_collapse() { # <flavor> <reviews-json> [reviewers_team]
 }
 
 calls() { cat "${WORK}/calls" 2>/dev/null; }
+step_output() { cat "${STEP_OUTPUT}" 2>/dev/null; }
+
+# DEV-653. The audit record's `collapse_fired` field comes from this step output,
+# and its meaning is narrow: the verdict was actually rewritten. A jammed
+# collapse (`dismiss-incomplete`) leaves a change request standing, so it must
+# read false — otherwise the audit would report a rewrite that did not happen.
+check_fired() { # <label> <expected true|false>
+  local got
+  got="$(step_output | grep -o 'collapse_fired=.*' | tail -n1)"
+  if [ "${got}" = "collapse_fired=$2" ]; then
+    pass "$1"
+  else
+    fail "$1" "expected: collapse_fired=$2" "actual:   ${got:-<none>}"
+  fi
+}
 called()     { calls | grep -qF -- "$1"; }
 not_called() { ! called "$1"; }
 
@@ -356,6 +379,7 @@ called "--remove-label pepper-changes-requested"; check_calls "actor: removes pe
 [ "$(states_of CHANGES_REQUESTED)" = "0" ] \
   && pass "actor: no change request is left blocking" \
   || fail "actor: no change request is left blocking" "reviews: $(cat "${WORK}/reviews.json")"
+check_fired "actor: a complete collapse reports collapse_fired=true (DEV-653)" true
 
 # --- ALL of them. Six live change requests, each blocking independently -----
 OUT="$(run_collapse dependency "$SIX")"
@@ -443,6 +467,7 @@ not_called "--add-label"; check_calls "actor: no review — no label change" $?
 # --- Human PR + change request: nothing may be touched ---------------------
 OUT="$(run_collapse default "$CR")"
 check_result "actor: human PR + CHANGES_REQUESTED is untouched" "skipped:not-a-bot-pr" "$OUT"
+check_fired "actor: a skipped collapse reports collapse_fired=false (DEV-653)" false
 not_called "/dismissals"; check_calls "actor: human PR — no dismissal" $?
 not_called "--method POST"; check_calls "actor: human PR — no comment review" $?
 not_called "--add-label"; check_calls "actor: human PR — no label change" $?
@@ -465,6 +490,7 @@ not_called "--remove-label pepper-changes-requested"; check_calls "actor: reject
 called "--add-reviewer SpiceLabsHQ/reviewers"; check_calls "actor: rejected dismissal — human still requested" $?
 grep -q '::warning::' <<<"$OUT" && pass "actor: rejected dismissal is annotated" \
   || fail "actor: rejected dismissal is annotated" "$OUT"
+check_fired "actor: a jammed collapse reports collapse_fired=false (DEV-653)" false
 
 # THE REGRESSION FIXTURE (DEV-674). A failed dismissal must leave the PR in a
 # state a LATER run retries. The comment this run posted is now Pepper's NEWEST

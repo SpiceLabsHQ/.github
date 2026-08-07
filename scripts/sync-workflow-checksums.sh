@@ -60,14 +60,20 @@ reusable_workflows() {
 workflow_assets() {
   case "$1" in
     pepper-pr-review)
-      # The review prompts, plus the DEV-674 post-verdict outcome-collapse
-      # programs. Both are fetched by the workflow from THIS repo at
-      # `job.workflow_sha` and both are behavior a caller pinned to the moving
-      # tag alias only receives via a release — so an edit to either has to route
-      # a commit to this package, exactly like a change to the YAML itself.
+      # The review prompts, the DEV-674 post-verdict outcome-collapse programs,
+      # and the DEV-653 audit-record programs. All are fetched by the workflow
+      # from THIS repo at `job.workflow_sha` and all are behavior a caller pinned
+      # to the moving tag alias only receives via a release — so an edit to any
+      # of them has to route a commit to this package, exactly like a change to
+      # the YAML itself. For the audit programs that also keeps the record schema
+      # pinned to the workflow version a consumer is on, so a series does not
+      # change shape underneath an in-flight comparison.
       for asset in prompts/*.md \
                    scripts/pepper-bot-outcome-collapse.sh \
-                   scripts/pepper-bot-outcome-collapse-decide.jq; do
+                   scripts/pepper-bot-outcome-collapse-decide.jq \
+                   scripts/pepper-audit-record.sh \
+                   scripts/pepper-audit-record.jq \
+                   scripts/pepper-audit-collect.jq; do
         [ -f "$asset" ] && printf '%s\n' "$asset"
       done | sort
       ;;

@@ -1,0 +1,225 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >-
+  Pepper PR review audit log (DEV-653): the CloudWatch log group every review run
+  writes one schema-v1 JSON record to, plus the alarm that detects the pipeline
+  going quiet. Hand-deployed — see infrastructure/README.md.
+
+# WHY PLAIN CLOUDFORMATION AND NOT SAM. There are no Lambdas and no build step
+# here, so SAM would add a transform and a packaging stage to buy nothing. Plain
+# CFN gives reviewable, idempotent, drift-detectable infrastructure with zero
+# pipeline.
+#
+# WHY THERE IS NO DEPLOY WORKFLOW. infrastructure/README.md's standing rule is
+# that nothing in this directory is deployed by CI. That is deliberate: with no
+# deploy workflow, no merge can ever trigger a deployment. Deploy by hand with
+# admin credentials, per the runbook.
+#
+# WHY THESE RESOURCES ARE BORN IN IaC WHEN THE ROLE NEXT DOOR IS NOT. They are
+# new — create, not import — so none of DEV-693's import complexity applies. The
+# IAM statement that lets Pepper write here stays in the hand-applied inline
+# policy (infrastructure/bedrock-role-policy.json) because that is how the role
+# is managed today; it rides along when DEV-693 imports the role.
+
+Parameters:
+  LogGroupName:
+    Type: String
+    Default: /pepper/pr-review/audit
+    Description: >-
+      Log group the pepper-pr-review workflow writes audit records to. Changing
+      it means changing the ARN in infrastructure/bedrock-role-policy.json and
+      the PEPPER_AUDIT_LOG_GROUP default in scripts/pepper-audit-record.sh — the
+      three are a set.
+
+  RetentionInDays:
+    Type: Number
+    Default: 731
+    # Two years. The dataset's whole purpose is longitudinal comparison across
+    # model, prompt and CLI versions (DEV-884), and a series that expires is a
+    # comparison you can only run for as long as the shorter arm survives. 731
+    # is CloudWatch's two-year retention value; it must be one of the allowed
+    # retention values or the stack fails to create.
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653]
+    Description: Retention for the audit log group, in days.
+
+  BedrockModelIdDimension:
+    Type: String
+    Default: xda66yqkegz4
+    Description: >-
+      Value of the AWS/Bedrock `ModelId` dimension for the review inference
+      profile. For an APPLICATION inference profile this is the bare profile id
+      (not the ARN, not the wrapped foundation-model id) — confirmed against live
+      metrics in this account on 2026-08-07, where `ModelId=xda66yqkegz4` carries
+      real daily invocation counts. Note there is ALSO a sibling series
+      dimensioned `ModelId` + `ContextWindow=1M`; this alarm deliberately uses
+      the ModelId-only series, which aggregates every context window. RE-CONFIRM
+      AT DEPLOY TIME and after any profile replacement: application inference
+      profiles are immutable, so a model upgrade mints a new id (DEV-492), and a
+      stale value here makes the alarm silently un-fireable — the one failure
+      this alarm cannot tolerate. The runbook has the list-metrics command.
+
+  WindowSeconds:
+    Type: Number
+    Default: 21600
+    MinValue: 60
+    Description: >-
+      Trailing window, in seconds, over which "reviews ran" and "records landed"
+      are compared. Default 21600 = 6h. Long enough that an ordinary quiet stretch
+      between PRs does not read as a broken pipeline, short enough that a real
+      break is a same-day ticket. Tune against real review cadence. CloudFormation
+      cannot do arithmetic on parameters, so this is seconds rather than hours.
+
+  AlarmTopicArn:
+    Type: String
+    Default: arn:aws:sns:us-west-2:618640261060:insights-to-linear-alarms
+    Description: >-
+      SNS topic the alarm notifies. Defaults to the existing insights-to-linear
+      topic so a broken audit pipeline becomes a Linear ticket rather than a
+      discovery months later during analysis. The topic is owned by the
+      insights-to-linear stacks and is only REFERENCED here — nothing in that
+      project changes. Verify its access policy permits CloudWatch alarms from
+      this account before relying on it (runbook).
+
+Resources:
+  # The log group is created here, not by the workflow: the Bedrock role holds
+  # CreateLogStream + PutLogEvents and deliberately nothing else. Append-only
+  # means a compromised role can add junk lines it cannot then erase — and it
+  # cannot delete the group or shorten its retention either.
+  AuditLogGroup:
+    Type: AWS::Logs::LogGroup
+    # Retain on stack delete. The records are the evidence base for tuning
+    # decisions; tearing down the stack should never be the thing that discards
+    # two years of them.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Ref LogGroupName
+      RetentionInDays: !Ref RetentionInDays
+
+  # ---------------------------------------------------------------------------
+  # Missing-records detection.
+  #
+  # The audit step is `continue-on-error` by hard requirement (DEV-502/DEV-504):
+  # an IAM denial, a CloudWatch outage or a malformed record must never fail a
+  # PR. That contract means the WORKFLOW can never be the thing that tells us
+  # the pipeline broke — every failed write is a warning inside a green required
+  # check, which nobody reads. Detection therefore lives account-side, where it
+  # also cannot affect a PR.
+  #
+  # The condition is "reviews ran AND no records landed", over a trailing window.
+  #
+  # WHY THIS IS THREE ALARMS AND NOT ONE METRIC-MATH ALARM. The obvious form —
+  # a single expression alarm on `IF(m_bedrock > 0 AND m_logs < 1, 1, 0)` —
+  # cannot fire in the case that matters. CloudWatch metric math evaluates
+  # element-wise over ALIGNED time series and yields no data wherever either
+  # input has none, and neither AWS/Bedrock nor AWS/Logs publishes an explicit
+  # zero: a metric with no activity has no datapoints at all, not datapoints
+  # worth 0. `FILL(m, 0)` does not rescue it either — FILL interpolates gaps in a
+  # series that has some data and cannot manufacture points for a series that is
+  # entirely empty. So in the exact failure state (reviews ran, ZERO records
+  # landed, IncomingLogEvents therefore absent) the expression would evaluate to
+  # no data and the alarm would sit silently in INSUFFICIENT_DATA forever.
+  #
+  # `TreatMissingData: breaching` on a per-metric alarm is the one primitive that
+  # does treat an absent datapoint as a breach, so the check is split into two
+  # child alarms — each with the missing-data treatment its own metric needs —
+  # and ANDed by a composite alarm. Same logic, expressed where the semantics
+  # actually hold.
+  #
+  # Neither child carries an action; only the composite notifies.
+  # ---------------------------------------------------------------------------
+
+  # "Reviews ran in the window." Missing data = no invocations = nothing to
+  # check, so notBreaching: a quiet weekend must not page anyone.
+  ReviewsRanAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AWS::StackName}-reviews-ran"
+      AlarmDescription: >-
+        Helper for the pepper-audit missing-records composite alarm (DEV-653):
+        in ALARM when the review inference profile was invoked at all during the
+        window. Carries no action on its own.
+      Namespace: AWS/Bedrock
+      MetricName: Invocations
+      Dimensions:
+        - Name: ModelId
+          Value: !Ref BedrockModelIdDimension
+      Statistic: Sum
+      Period: !Ref WindowSeconds
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      ActionsEnabled: false
+
+  # "No records landed in the window." Missing data = breaching is the whole
+  # point: CloudWatch Logs publishes no IncomingLogEvents datapoint at all when a
+  # group receives nothing, and "received nothing" IS the condition being
+  # detected. On its own this alarm sits in ALARM through every quiet stretch,
+  # which is harmless — it has no action, and the composite below only fires when
+  # reviews demonstrably ran at the same time.
+  NoRecordsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AWS::StackName}-no-records"
+      AlarmDescription: >-
+        Helper for the pepper-audit missing-records composite alarm (DEV-653):
+        in ALARM when the audit log group received no events during the window.
+        Carries no action on its own.
+      Namespace: AWS/Logs
+      MetricName: IncomingLogEvents
+      Dimensions:
+        - Name: LogGroupName
+          Value: !Ref LogGroupName
+      Statistic: Sum
+      Period: !Ref WindowSeconds
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      ActionsEnabled: false
+
+  # The actual signal: reviews ran AND nothing was recorded. This is the only
+  # resource here that notifies.
+  MissingRecordsAlarm:
+    Type: AWS::CloudWatch::CompositeAlarm
+    DependsOn:
+      - ReviewsRanAlarm
+      - NoRecordsAlarm
+    Properties:
+      AlarmName: !Sub "${AWS::StackName}-missing-records"
+      AlarmDescription: >-
+        Pepper PR reviews invoked Bedrock but no audit records reached
+        /pepper/pr-review/audit over the trailing window (DEV-653). The capture
+        step is non-fatal by design, so this alarm is the ONLY signal that the
+        audit pipeline has broken — investigate the role's
+        logs:CreateLogStream/PutLogEvents grant in
+        infrastructure/bedrock-role-policy.json first, then the ::warning::
+        annotations on recent pepper-pr-review runs.
+      AlarmRule: !Sub "ALARM(${ReviewsRanAlarm}) AND ALARM(${NoRecordsAlarm})"
+      AlarmActions:
+        - !Ref AlarmTopicArn
+      # Deliberately NO OKActions. The composite leaves ALARM whenever EITHER
+      # child does — including when reviews simply stop for a quiet stretch
+      # while the pipeline is still broken — so an OK notification can report
+      # "recovered" for a pipeline that merely went idle, and the sink's
+      # handling of OK-state messages is not a contract this template should
+      # bet on. Recovery is confirmed by records landing (docs/pepper-audit.md
+      # housekeeping query), and a still-broken pipeline re-alarms on the next
+      # active window.
+      ActionsEnabled: true
+
+Outputs:
+  AuditLogGroupName:
+    Description: Log group the pepper-pr-review workflow writes audit records to.
+    Value: !Ref AuditLogGroup
+
+  AuditLogGroupArn:
+    Description: >-
+      Log group ARN. The statement in infrastructure/bedrock-role-policy.json
+      grants CreateLogStream/PutLogEvents on this ARN suffixed with `:*`.
+    Value: !GetAtt AuditLogGroup.Arn
+
+  MissingRecordsAlarmName:
+    Description: Composite alarm that fires when reviews ran but no records landed.
+    Value: !Ref MissingRecordsAlarm

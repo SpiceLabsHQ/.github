@@ -798,6 +798,12 @@ jobs:
         # workflow's behavior, they run on the CALLER's runner where this repo's
         # `scripts/` does not exist, and a fix to them must reach a consumer
         # pinned to `@pepper-pr-review-v1` on that tag's commit, not float.
+        #
+        # So do the DEV-653 audit programs, and version-matching matters MORE for
+        # them, not less: the record's schema is what every committed Logs
+        # Insights query in docs/pepper-audit.md addresses by field name, and a
+        # consumer floating onto a newer schema mid-series would silently change
+        # the shape of the dataset a before/after comparison is being run over.
         uses: actions/checkout@v7
         with:
           repository: SpiceLabsHQ/.github
@@ -807,6 +813,9 @@ jobs:
             prompts
             scripts/pepper-bot-outcome-collapse.sh
             scripts/pepper-bot-outcome-collapse-decide.jq
+            scripts/pepper-audit-record.sh
+            scripts/pepper-audit-record.jq
+            scripts/pepper-audit-collect.jq
           sparse-checkout-cone-mode: false
           fetch-depth: 1
 
@@ -1183,6 +1192,7 @@ jobs:
       # is a required check on the floor, and a failed post-verdict cleanup must
       # not turn a completed review red (DEV-504).
       - name: Collapse bot-PR change request into comment + escalation (DEV-674)
+        id: collapse
         if: always()
         # Backstop, not a budget. The step's `gh` calls are unbounded, and this
         # workflow is a required check on the floor — a hung API call would
@@ -1237,6 +1247,12 @@ jobs:
           PEPPER_BOT_LOGIN=""
           [ -n "${APP_SLUG}" ] && PEPPER_BOT_LOGIN="${APP_SLUG}[bot]"
           export PEPPER_BOT_LOGIN
+          # DEV-653: the script writes `collapse_fired=true|false` to
+          # GITHUB_OUTPUT (which Actions exports into this step's environment) so
+          # the audit record can state whether this step rewrote the verdict
+          # rather than re-deriving it from labels that several other steps also
+          # touch. `|| true` still stands: an audit hint is not worth a red
+          # required check (DEV-504).
           bash .pepper-pr-review-tpl/scripts/pepper-bot-outcome-collapse.sh || true
 
       # No-verdict escalation (DEV-235). If Run Pepper ended without posting a
@@ -1256,7 +1272,17 @@ jobs:
       # ending at once: timeout SIGKILL, cancellation, mid-run error, AND a clean
       # out-of-turns stop. This runs before the always-on cooking cleanup below,
       # so the marker is still readable at decision time.
+      #
+      # DEV-653: this step is also the AUTHORITY on the `no_verdict` outcome, and
+      # emits it as an output rather than letting the audit step re-derive it.
+      # Re-derivation is impossible after the fact: the escalation applies
+      # `pepper-needs-review`, the same label Pepper applies when it deliberately
+      # escalates a review it did form a judgment about, so from the label alone
+      # a stalled run and an honest "needs a human" are indistinguishable. They
+      # are opposite signals — one is a failure, the other is the review working
+      # — and DEV-884's tuning reads them differently.
       - name: Escalate if Pepper posted no verdict
+        id: escalation
         if: always()
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -1270,10 +1296,17 @@ jobs:
           # itself, so cooking is already gone: nothing to escalate. (A cold-start
           # PR where the cooking step never ran also lands here — also nothing to
           # do.) Only escalate when cooking is still on, i.e. no verdict posted.
+          # DEV-653: `no_verdict` is written on BOTH branches, and false is the
+          # fail-open value. An unreadable label list takes the branch below and
+          # records false — the same direction this step already fails in (it
+          # would rather skip an escalation than fire a spurious one), so the
+          # audit never invents a failure that did not happen.
           if ! gh pr view "${PR_NUMBER}" --json labels --jq '.labels[].name' 2>/dev/null | grep -Fxq "pepper-cooking"; then
             echo "Pepper posted a verdict (pepper-cooking already cleared) — no escalation needed."
+            echo "no_verdict=false" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
+          echo "no_verdict=true" >> "${GITHUB_OUTPUT}"
 
           gh pr edit "${PR_NUMBER}" --add-label "pepper-needs-review" --remove-label "pepper-cooking" || true
 
@@ -1304,6 +1337,107 @@ jobs:
           if [ -n "${REVIEWERS_TEAM}" ]; then
             gh pr edit "${PR_NUMBER}" --add-reviewer "${REPO_OWNER}/${REVIEWERS_TEAM}" || true
           fi
+
+      # Audit record (DEV-653). One structured JSON row per review — the
+      # configuration it ran under, the outcome it reached, and what it cost —
+      # appended to the CloudWatch log group `/pepper/pr-review/audit` and
+      # rendered into the job summary.
+      #
+      # WHY THE WORKFLOW AND NOT AWS TELEMETRY. The question this exists to
+      # answer is "did that change make Pepper better or just different"
+      # (DEV-884 gates lowering `effort` on being able to compare before/after),
+      # and `effort` is invisible to every AWS-side source: `AWS/Bedrock` metrics
+      # are dimensioned by model/profile only, CloudTrail carries no request
+      # body, and Bedrock model-invocation logging would persist full prompts and
+      # responses to capture one config field. The workflow already HOLDS every
+      # dimension at this point in the run, so emitting them here is both cheaper
+      # and the only practical source. Same for claude-cli's version, which
+      # `claude-code-action@v1` does not pin — four versions in 25 days, one of
+      # which materially changed request behavior (DEV-875/DEV-881) while the
+      # action version sat still.
+      #
+      # PLACED AFTER THE ESCALATION so the outcome is FINAL: this step consumes
+      # `steps.escalation.outputs.no_verdict` and `steps.collapse.outputs.
+      # collapse_fired`, both of which are only decided once those steps have
+      # run, and it reads the PR's settled outcome labels.
+      #
+      # HARD REQUIREMENT — THIS MAY NEVER FAIL, BLOCK, OR DELAY A PR. This
+      # workflow is a required check org-wide (DEV-502/DEV-504), so an audit
+      # failure would deadlock auto-merge over a telemetry row. Four independent
+      # layers, none of which is redundant with the others:
+      #   * `continue-on-error` — a timed-out step is a FAILED step, so the
+      #     timeout below needs this or the backstop becomes the outage;
+      #   * `timeout-minutes: 5` — the AWS and gh calls are unbounded, and
+      #     without a cap a hung endpoint would hold a required check open to the
+      #     6h job default in every code-tier repo;
+      #   * `|| true` on the invocation;
+      #   * the script itself never exits non-zero and turns every missing input
+      #     into a `null` field (see its header).
+      # A failed write loses ONE row. That loss is surfaced by the account-side
+      # missing-records alarm in infrastructure/pepper-audit.cfn.yml, never by
+      # this check.
+      #
+      # `always()` for the same reason the collapse and escalation steps use it:
+      # a review that timed out, errored, or exhausted its turns is exactly the
+      # run worth recording — those are the no-verdict rows DEV-884's analysis
+      # needs, and a `success()` gate would drop every one of them.
+      #
+      # Everything travels by env, never by shell interpolation of a `${{ }}`
+      # expression, so no step output or PR field can be parsed as shell.
+      - name: Emit audit record (DEV-653)
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          # Config, as PASSED. The script prefers the as-EXECUTED values it reads
+          # off the SDK stream (DEV-881: a CLI that silently rewrites a flag is
+          # only visible in what it actually sent) and falls back to these.
+          MODEL: ${{ steps.model.outputs.model }}
+          EFFORT: ${{ steps.tools.outputs.effort }}
+          MAX_TURNS: ${{ steps.tools.outputs.max_turns }}
+          REVIEW_TIMEOUT_MINUTES: ${{ inputs.review_timeout_minutes }}
+          FLAVOR: ${{ steps.flavor.outputs.flavor }}
+          # The prompt/template/script version this run actually used — the same
+          # SHA the `.pepper-pr-review-tpl` checkout above pins, so a prompt edit
+          # is attributable without guessing which release a caller was on.
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+          # Hashed by the script when the file exists in the caller's checkout.
+          # The per-repo prompt-customization identity: it separates "this repo's
+          # PRs are big" from "this repo's custom standards drive long reviews".
+          STANDARDS_PATH: ${{ inputs.standards_path }}
+          # Run identity.
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_SHA: ${{ steps.head-sha.outputs.sha }}
+          # The PR AUTHOR, not the initiator — same rule as `Determine flavor`.
+          # The DEV-667 stranded sweep triggers reviews as Pepper's own App, so
+          # on that path the two genuinely differ and the initiator would make
+          # every swept row read as Pepper reviewing itself.
+          PR_AUTHOR: ${{ github.event.pull_request.user.login || github.event.issue.user.login }}
+          # Outcome inputs from the two post-verdict steps above. Empty (a step
+          # that never ran) reads as false, which is the safe direction: the
+          # audit does not invent a failure or a rewrite that did not happen.
+          NO_VERDICT: ${{ steps.escalation.outputs.no_verdict }}
+          COLLAPSE_FIRED: ${{ steps.collapse.outputs.collapse_fired }}
+          # Read-only: the PR's final outcome labels.
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          # Telemetry source, preferred over the CLI session transcript because
+          # its final `result` record is the SDK's own accounting rather than a
+          # sum. Empty on a run that never reached Pepper, which is why the
+          # transcript fallback exists.
+          PEPPER_AUDIT_EXECUTION_FILE: ${{ steps.pepper.outputs.execution_file }}
+          # The region the credentials were minted for. Passed explicitly rather
+          # than leaning on the AWS_REGION that configure-aws-credentials
+          # exports, because this step is `always()` and therefore also runs on
+          # the paths where that step never completed — where AWS_REGION is
+          # absent and the write would otherwise be skipped for no reason.
+          PEPPER_AUDIT_REGION: ${{ inputs.aws_region }}
+        run: |
+          set -uo pipefail
+          bash .pepper-pr-review-tpl/scripts/pepper-audit-record.sh || true
 
       # Always-on cleanup — `pepper-cooking` is purely a "currently being
       # reviewed" marker, so it must come off no matter how this job ended

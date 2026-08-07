@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "ts": "TS",
+  "repo": "SpiceLabsHQ/example",
+  "pr_number": 123,
+  "run_id": 17123456789,
+  "run_attempt": 1,
+  "event": "pull_request",
+  "head_sha": "abc1234def567890abc1234def567890abc1234d",
+  "pr_author": "octocat",
+  "flavor": "default",
+  "workflow_sha": "3fd28051d0e4c8b6a1f2e3d4c5b6a7988990a1b2",
+  "standards_sha256": null,
+  "model": "arn:aws:bedrock:us-west-2:618640261060:application-inference-profile/xda66yqkegz4",
+  "model_executed": null,
+  "effort": "high",
+  "max_turns": 80,
+  "review_timeout_minutes": 50,
+  "cli_version": null,
+  "outcome": null,
+  "collapse_fired": false,
+  "turns_used": null,
+  "duration_ms": null,
+  "cost_usd": null,
+  "tokens": {
+    "input": null,
+    "output": null,
+    "cache_read": null,
+    "cache_creation": null
+  }
+}
