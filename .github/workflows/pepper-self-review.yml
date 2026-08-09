@@ -46,8 +46,13 @@ jobs:
       # Debug: stream full SDK output so we can inspect tool calls and
       # tune the allowlist. Revisit after the rollout stabilizes.
       show_full_output: true
+    # `PEPPER_PR_REVIEW_APP_ID` is deliberately absent: the App's Client ID moved
+    # to the reusable's `app_client_id` input (DEV-797), leaving that secret
+    # inert. This caller can drop it immediately — the `./` reference above means
+    # it moves in lockstep with the reusable — whereas floor-pepper.yml must keep
+    # passing it until its `@pepper-pr-review-v1` pin advances. See the note
+    # there before assuming the two callers should match.
     secrets:
       AWS_CLAUDE_BEDROCK_ROLE_ARN: ${{ secrets.AWS_CLAUDE_BEDROCK_ROLE_ARN }}
-      PEPPER_PR_REVIEW_APP_ID: ${{ secrets.PEPPER_PR_REVIEW_APP_ID }}
       PEPPER_PR_REVIEW_APP_PRIVATE_KEY: ${{ secrets.PEPPER_PR_REVIEW_APP_PRIVATE_KEY }}
       LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}

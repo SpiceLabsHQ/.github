@@ -104,15 +104,17 @@ jobs:
         with:
           persist-credentials: false
 
+      # Only the private key is checked. The App's identity is no longer a secret
+      # — it moved to a literal Client ID below (DEV-797) — so the key is the
+      # only thing that can be absent.
       - name: Guard on App credentials presence
         id: guard
         env:
-          APP_ID: ${{ secrets.PEPPER_PR_REVIEW_APP_ID }}
           APP_KEY: ${{ secrets.PEPPER_PR_REVIEW_APP_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          if [ -z "${APP_ID}" ] || [ -z "${APP_KEY}" ]; then
-            echo "::warning::PEPPER_PR_REVIEW_APP_ID / PEPPER_PR_REVIEW_APP_PRIVATE_KEY are not set — skipping the sweep. See this workflow's header for the one-time App setup."
+          if [ -z "${APP_KEY}" ]; then
+            echo "::warning::PEPPER_PR_REVIEW_APP_PRIVATE_KEY is not set — skipping the sweep. See this workflow's header for the one-time App setup."
             echo "ok=false" >> "${GITHUB_OUTPUT}"
           else
             echo "ok=true" >> "${GITHUB_OUTPUT}"
@@ -125,7 +127,13 @@ jobs:
         if: steps.guard.outputs.ok == 'true'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ secrets.PEPPER_PR_REVIEW_APP_ID }}
+          # Client ID of the `pepper-pr-review` App, superseding the deprecated
+          # `app-id` (DEV-797). A literal, not a secret: a Client ID is a public
+          # identifier and only the private key is a credential. Actions has no
+          # cross-workflow literal sharing, so this duplicates the
+          # `app_client_id` default in pepper-pr-review.yml — same App, and the
+          # two must be changed together.
+          client-id: Iv23limzNKGGfg5MOKxm
           private-key: ${{ secrets.PEPPER_PR_REVIEW_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
 
