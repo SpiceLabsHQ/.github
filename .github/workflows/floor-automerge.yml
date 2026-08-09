@@ -125,13 +125,27 @@ jobs:
       # in the deployment standard (DEV-514). An App-authored merge DOES trigger
       # those workflows, closing the gap org-wide.
       #
-      # DEDICATED APP: this mints from `spice-automerge` (AUTOMERGE_APP_*), an app
-      # scoped to exactly contents:write + pull-requests:write and nothing else.
-      # It is NOT another workflow's app — per the least-privilege / no-credential-
-      # reuse rule in the secrets-and-configuration standard (ADR-0007), each CI
-      # capability gets its own narrowly-scoped identity. AUTOMERGE_APP_* are
-      # org-level secrets so they resolve in the ruleset-injected required-workflow
-      # context on every code-tier repo (repo-scoped secrets would be empty here).
+      # DEDICATED APP: this mints from `spice-automerge`, an app scoped to exactly
+      # contents:write + pull-requests:write and nothing else. It is NOT another
+      # workflow's app — per the least-privilege / no-credential-reuse rule in the
+      # secrets-and-configuration standard (ADR-0007), each CI capability gets its
+      # own narrowly-scoped identity.
+      #
+      # The Client ID is a LITERAL, not a secret. A Client ID is a public
+      # identifier — only the private key is a credential — and inlining it leaves
+      # `AUTOMERGE_APP_PRIVATE_KEY` as the single value that must be delivered to
+      # the run. That matters because org *Actions* secrets are never delivered to
+      # Dependabot-triggered runs: GitHub keeps two org secret stores and serves
+      # those runs exclusively from the Dependabot one, so every Actions-scoped
+      # `secrets.*` reference interpolates to an empty string there, whatever its
+      # visibility. `AUTOMERGE_APP_ID` lived only under Actions, so the mint failed
+      # on every Dependabot PR and the fallback below quietly took over — meaning
+      # the DEV-514 gap this app exists to close was never closed on the Dependabot
+      # path (DEV-902). The private key must therefore exist in BOTH stores.
+      #
+      # This is a top-level ruleset-injected workflow, not a reusable, so there is
+      # no `inputs:` block to carry the Client ID the way pepper-pr-review.yml does
+      # (DEV-797) — hence the literal, as in pepper-stranded-sweep.yml.
       #
       # SAFETY: this is a *required* check that must always go green or it would
       # deadlock merge. The token mint is best-effort (continue-on-error), and the
@@ -144,7 +158,7 @@ jobs:
         continue-on-error: true
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ secrets.AUTOMERGE_APP_ID }}
+          client-id: Iv23liIYUFfJ6HfbIRTB
           private-key: ${{ secrets.AUTOMERGE_APP_PRIVATE_KEY }}
       - name: Enable auto-merge (squash)
         env:
@@ -169,7 +183,7 @@ jobs:
             fi
             echo "::warning::App-token auto-merge enable failed — retrying with GITHUB_TOKEN (this merge will NOT trigger deploys)"
           else
-            echo "::warning::No app token minted (AUTOMERGE_APP_* absent or mint failed) — using GITHUB_TOKEN (merge will NOT trigger deploys)"
+            echo "::warning::No app token minted (AUTOMERGE_APP_PRIVATE_KEY absent from this run's secret store, or mint failed) — using GITHUB_TOKEN (merge will NOT trigger deploys)"
           fi
           if GH_TOKEN="$GH_FALLBACK" gh pr merge --auto --squash "$PR_URL"; then
             echo "Auto-merge enabled (squash, github-token fallback) on $PR_URL"
