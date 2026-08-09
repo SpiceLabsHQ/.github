@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.10.0](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.9.0...pepper-pr-review-v1.10.0) (2026-08-09)
+
+
+### Features
+
+* **pepper-pr-review:** emit a per-run audit record to CloudWatch (DEV-653) ([#184](https://github.com/SpiceLabsHQ/.github/issues/184)) ([e34b6e6](https://github.com/SpiceLabsHQ/.github/commit/e34b6e67e17ac1aad0faeb520732090789b3746c))
+
+
+### Bug Fixes
+
+* **pepper-pr-review:** mint App tokens with client-id, not the deprecated app-id ([#187](https://github.com/SpiceLabsHQ/.github/issues/187)) ([402b45d](https://github.com/SpiceLabsHQ/.github/commit/402b45dc70e05a538b859f2ea3e01da61349bb58))
+
 ## [1.9.0](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.8.0...pepper-pr-review-v1.9.0) (2026-08-07)
 
 
