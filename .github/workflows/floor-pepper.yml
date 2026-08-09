@@ -25,14 +25,10 @@ name: CI Floor — Pepper review
 # restores the Actions store. Any new secret added here needs the same
 # treatment.
 #
-# `PEPPER_PR_REVIEW_APP_ID` is now inert — the App's Client ID moved to the
-# reusable's `app_client_id` input (a Client ID is public, not a credential), so
-# nothing reads this secret any more. It is still passed on purpose: this caller
-# pins the reusable at `@pepper-pr-review-v1`, and this file reaches every repo
-# the moment it lands on main, while the tag only moves at the next release.
-# Between those two points the tagged reusable still declares the secret
-# `required: true`, and a caller that stopped passing it would fail EVERY floor
-# run org-wide. Drop it only after the tag has moved past DEV-797.
+# The App's identity is NOT among them: it travels as the reusable's
+# `app_client_id` input, not a secret, because a Client ID is a public
+# identifier and only the private key is a credential (DEV-797). That is also
+# why this list is one entry shorter than a Dependabot run once needed.
 #
 # Bot handling: the reusable's `allowed_bots: renovate,dependabot` lets those
 # bots' PRs be reviewed. Any other bot-initiated event skips the review cleanly
@@ -82,6 +78,5 @@ jobs:
       issues: read
     secrets:
       AWS_CLAUDE_BEDROCK_ROLE_ARN: ${{ secrets.AWS_CLAUDE_BEDROCK_ROLE_ARN }}
-      PEPPER_PR_REVIEW_APP_ID: ${{ secrets.PEPPER_PR_REVIEW_APP_ID }}
       PEPPER_PR_REVIEW_APP_PRIVATE_KEY: ${{ secrets.PEPPER_PR_REVIEW_APP_PRIVATE_KEY }}
       LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
