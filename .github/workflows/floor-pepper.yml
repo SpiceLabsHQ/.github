@@ -9,8 +9,30 @@ name: CI Floor — Pepper review
 # `synchronize` is deliberately in the trigger list: every Renovate rebase
 # force-pushes the PR branch, and without `synchronize` the review would never
 # re-run (the DEV-497 root cause). Cost note: one Bedrock run per PR event
-# org-wide is accepted (DEV-499). Secrets are org-level (visibility=all), so no
-# per-repo secret setup is required.
+# org-wide is accepted (DEV-499).
+#
+# Secrets are org-level (visibility=all), so no per-repo secret setup is
+# required — but visibility is not the whole story. GitHub keeps TWO org secret
+# stores, and a Dependabot-triggered run is served only from the Dependabot one:
+# every `secrets.*` reference to an Actions-scoped secret interpolates to an
+# empty string, whatever its visibility. So each secret below must exist in BOTH
+# stores to survive a Dependabot PR. Pepper failed on every genuinely
+# Dependabot-triggered run for months because the App private key existed only
+# under Actions — the token step died on the empty value and, this being a
+# required check, the PR could not be merged by any means (DEV-797). It looked
+# intermittent only because the DEV-667 stranded-PR sweep reopens such PRs as
+# the Pepper App, which re-fires the event as a non-Dependabot actor and
+# restores the Actions store. Any new secret added here needs the same
+# treatment.
+#
+# `PEPPER_PR_REVIEW_APP_ID` is now inert — the App's Client ID moved to the
+# reusable's `app_client_id` input (a Client ID is public, not a credential), so
+# nothing reads this secret any more. It is still passed on purpose: this caller
+# pins the reusable at `@pepper-pr-review-v1`, and this file reaches every repo
+# the moment it lands on main, while the tag only moves at the next release.
+# Between those two points the tagged reusable still declares the secret
+# `required: true`, and a caller that stopped passing it would fail EVERY floor
+# run org-wide. Drop it only after the tag has moved past DEV-797.
 #
 # Bot handling: the reusable's `allowed_bots: renovate,dependabot` lets those
 # bots' PRs be reviewed. Any other bot-initiated event skips the review cleanly

@@ -178,6 +178,7 @@ There was once a second, comment-triggered **on-demand** mode (`@pepper <task>`,
 | `aws_region` | `us-west-2` | AWS region where the Bedrock role and inference profiles live |
 | `standards_path` | `.pepper/pr-review-standards.md` | Override if your repo stores standards elsewhere |
 | `reviewers_team` | `reviewers` | Slug of the org team Pepper requests review from on escalation. Must be a team in the repo's own org with read access to the repo; the App token needs org `members: read` to resolve it |
+| `app_client_id` | `Iv23limzNKGGfg5MOKxm` (the org's `pepper-pr-review` App) | Client ID of the App whose installation token Pepper mints, passed to `actions/create-github-app-token` as `client-id` — the replacement for the deprecated `app-id`, which warns on every run and will be dropped in a future major (DEV-797). An input rather than a secret because a Client ID is a public identifier; only the private key is a credential. Override only when running a fork against a different App |
 | `show_full_output` | `false` | When `true`, Pepper's tool calls + reasoning + tool results stream into Actions logs. Useful for diagnosing permission denials or wasted turns. **Public-repo callers: anyone who can see the Actions run sees the full output** — use only on debug branches |
 | `coverage_review_enabled` | `false` | Opt in to the non-gating diff-coverage note (DEV-526). **Off by default** — a repo that doesn't publish coverage pays nothing (no poll, no added latency). Turn on only in repos that add the [`coverage-surface`](#diff-coverage--pepper-coverage-surface) step to their test job |
 | `coverage_artifact` | `coverage-report` | Artifact Pepper polls for when `coverage_review_enabled` is on. Must match the `artifact-name` on the `coverage-surface` step |
@@ -185,13 +186,25 @@ There was once a second, comment-triggered **on-demand** mode (`@pepper <task>`,
 | `coverage_poll_grace_seconds` | `45` | Minimum wait before the "no active CI runs" early-exit can fire — lets sibling CI register after the PR event |
 | `coverage_poll_interval_seconds` | `15` | Seconds between coverage-artifact poll attempts |
 
-**4. Required secrets** (set once at the org level — they don't auto-inherit, the caller passes them explicitly):
+**4. Required secrets** (set at the org level in **both** the Actions and Dependabot stores — see the note below; they don't auto-inherit, the caller passes them explicitly):
 
 | Secret | Purpose |
 |---|---|
 | `AWS_CLAUDE_BEDROCK_ROLE_ARN` | Shared AWS role assumed via OIDC for Bedrock. Used by Pepper and any other Claude-on-Bedrock workload at the org. **Scoped (DEV-875):** it can invoke only application inference profiles tagged `Product=pepper`, and only the foundation models behind them — and only *through* a profile, never a model ARN directly. A new Claude-on-Bedrock workload therefore needs its own tagged profile and an IAM grant for the model it wraps; pointing it at a raw model ID will fail with `AccessDenied`. The role's policy documents and the apply/rollback runbook live in [`infrastructure/`](infrastructure/) |
-| `PEPPER_PR_REVIEW_APP_ID` | GitHub App ID for the **Pepper PR Review** App. Required because `GITHUB_TOKEN` cannot approve PRs — the workflow mints an installation token from the App for formal approve / request-changes calls |
-| `PEPPER_PR_REVIEW_APP_PRIVATE_KEY` | PEM private key for the same App |
+| `PEPPER_PR_REVIEW_APP_PRIVATE_KEY` | PEM private key for the **Pepper PR Review** App. Needed because `GITHUB_TOKEN` cannot approve PRs — the workflow mints an installation token from the App for formal approve / request-changes calls. The App's identity is no longer a secret: its Client ID is the `app_client_id` **input** (DEV-797) |
+
+> **Both stores, or Dependabot PRs deadlock.** GitHub keeps org **Actions** secrets and org **Dependabot** secrets in two separate stores, and a Dependabot-triggered run reads only the Dependabot one — an Actions-scoped secret interpolates to an empty string there no matter its visibility. Every secret above must therefore be set **twice**. Pepper failed on every genuinely Dependabot-triggered run for months because the private key existed only under Actions; since `floor-pepper.yml` is a required check, the affected PRs could not be merged at all (DEV-797). Set the Dependabot copies with `--app dependabot`:
+>
+> ```bash
+> gh secret set PEPPER_PR_REVIEW_APP_PRIVATE_KEY --org SpiceLabsHQ --app dependabot \
+>   --visibility all < path/to/pepper-pr-review.private-key.pem
+> ```
+>
+> Verify with `gh api /orgs/SpiceLabsHQ/dependabot/secrets --jq '.secrets[].name'`. `LINEAR_API_KEY` is intentionally left out of the Dependabot store — Dependabot PRs carry no Linear ticket. Confirm a fix only on a run whose `triggering_actor` is actually `dependabot[bot]`; a run reopened by the DEV-667 sweep passes either way and proves nothing:
+>
+> ```bash
+> gh api repos/<owner>/<repo>/actions/runs/<id> --jq '.triggering_actor.login'
+> ```
 
 **5. Optional secret:**
 

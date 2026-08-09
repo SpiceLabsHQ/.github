@@ -66,6 +66,25 @@ on:
         required: false
         type: boolean
         default: false
+      app_client_id:
+        description: |
+          Client ID of the GitHub App used to mint installation tokens (`Iv23…` form, from the App's
+          settings page). Passed to `actions/create-github-app-token` as `client-id`, which supersedes
+          the deprecated `app-id` input — the action warns on every run that still uses `app-id`, and a
+          future major will drop it (DEV-797).
+
+          An INPUT, not a secret, and deliberately so. A Client ID is a public identifier, not a
+          credential; the private key is the credential. Carrying it as an input rather than as
+          `PEPPER_PR_REVIEW_APP_ID` removes one secret from the set a caller must have available —
+          which matters on Dependabot-triggered runs, where GitHub delivers only Dependabot-scoped
+          secrets and every Actions secret interpolates to an empty string (DEV-797). One fewer secret
+          in that path is one fewer thing to mirror into the Dependabot store.
+
+          The default is the org's own `pepper-pr-review` App. Override only when running a fork of
+          this workflow against a different App.
+        required: false
+        type: string
+        default: Iv23limzNKGGfg5MOKxm
       allowed_bots:
         description: |
           Comma-separated bot logins (without the `[bot]` suffix) whose PRs Pepper
@@ -147,13 +166,27 @@ on:
         description: ARN of the AWS role to assume via OIDC for Bedrock access.
         required: true
       PEPPER_PR_REVIEW_APP_ID:
-        description: GitHub App ID used to mint a token capable of formal PR approvals.
-        required: true
+        description: |
+          DEPRECATED and unused as of DEV-797 — superseded by the `app_client_id` INPUT, which carries
+          the App's Client ID instead. Still declared (and now optional) so callers pinned to an older
+          tag can keep passing it without erroring; drop it from your caller's `secrets:` block at
+          leisure. Do not re-wire anything to it.
+        required: false
       PEPPER_PR_REVIEW_APP_PRIVATE_KEY:
-        description: Private key (PEM) for the GitHub App used for approvals.
+        description: |
+          Private key (PEM) for the GitHub App used for approvals. The one true credential in this
+          workflow, and the only secret whose absence is fatal.
+
+          Must exist in BOTH org secret stores. Dependabot-triggered runs are served exclusively from
+          the Dependabot store — org *Actions* secrets are never delivered to them, regardless of
+          visibility — so a key present only under Actions leaves every Dependabot PR failing at the
+          token step and, because floor-pepper is a required check, unmergeable (DEV-797).
         required: true
       LINEAR_API_KEY:
-        description: Linear API key for issue verification. Optional; if absent, Linear checks are skipped.
+        description: |
+          Linear API key for issue verification. Optional; if absent, Linear checks are skipped. Not
+          mirrored into the Dependabot store on purpose: Dependabot PRs carry no Linear ticket, so the
+          checks it feeds have nothing to verify there anyway (DEV-797).
         required: false
 
 permissions:
@@ -215,7 +248,7 @@ jobs:
         continue-on-error: true
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.PEPPER_PR_REVIEW_APP_ID }}
+          client-id: ${{ inputs.app_client_id }}
           private-key: ${{ secrets.PEPPER_PR_REVIEW_APP_PRIVATE_KEY }}
 
       - name: Decide whether to run the review
@@ -380,7 +413,7 @@ jobs:
         continue-on-error: true
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.PEPPER_PR_REVIEW_APP_ID }}
+          client-id: ${{ inputs.app_client_id }}
           private-key: ${{ secrets.PEPPER_PR_REVIEW_APP_PRIVATE_KEY }}
 
       # This body MUST NOT contain the trigger phrase (default `@pepper`).
@@ -437,7 +470,7 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.PEPPER_PR_REVIEW_APP_ID }}
+          client-id: ${{ inputs.app_client_id }}
           private-key: ${{ secrets.PEPPER_PR_REVIEW_APP_PRIVATE_KEY }}
 
       - name: Checkout caller repo
