@@ -1,9 +1,1 @@
-{
-  "enabledPlugins": {
-    "spice-statusline@spice-labs": true
-  },
-  "statusLine": {
-    "type": "command",
-    "command": "node .claude/spice-statusline.cjs"
-  }
-}
+{}
