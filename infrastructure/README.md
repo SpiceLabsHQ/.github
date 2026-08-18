@@ -251,12 +251,18 @@ aws cloudwatch list-metrics --namespace AWS/Bedrock --metric-name Invocations \
   --profile spice-ro --region us-west-2 \
   --query 'Metrics[].Dimensions' --output json
 
-# 2. Confirm the alarm topic exists and its access policy permits CloudWatch
-#    alarms from THIS account. The default SNS topic policy allows Publish under
-#    `AWS:SourceOwner = 618640261060`, which a same-account alarm satisfies; if
-#    the policy has been narrowed to named principals, add cloudwatch.amazonaws.com.
+# 2. Confirm the shared critical-alerts export exists in this account and
+#    region. The template imports it by name, so a missing export fails the
+#    deploy outright rather than producing an alarm that notifies nothing.
+aws cloudformation list-exports \
+  --profile spice-ro --region us-west-2 \
+  --query "Exports[?Name=='critical-alerts-topic-arn'].Value" --output text
+
+#    Its topic policy must permit CloudWatch alarms from THIS account. The
+#    channel ships a statement that does exactly that, pinned with
+#    aws:SourceAccount; confirm it is still present before relying on it.
 aws sns get-topic-attributes \
-  --topic-arn arn:aws:sns:us-west-2:618640261060:insights-to-linear-alarms \
+  --topic-arn arn:aws:sns:us-west-2:618640261060:critical-alerts \
   --profile spice-ro --region us-west-2 --query 'Attributes.Policy' --output text
 
 # 3. Deploy. Idempotent — re-run it after any edit to the template.

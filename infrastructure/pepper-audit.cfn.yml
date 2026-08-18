@@ -69,17 +69,6 @@ Parameters:
       break is a same-day ticket. Tune against real review cadence. CloudFormation
       cannot do arithmetic on parameters, so this is seconds rather than hours.
 
-  AlarmTopicArn:
-    Type: String
-    Default: arn:aws:sns:us-west-2:618640261060:insights-to-linear-alarms
-    Description: >-
-      SNS topic the alarm notifies. Defaults to the existing insights-to-linear
-      topic so a broken audit pipeline becomes a Linear ticket rather than a
-      discovery months later during analysis. The topic is owned by the
-      insights-to-linear stacks and is only REFERENCED here — nothing in that
-      project changes. Verify its access policy permits CloudWatch alarms from
-      this account before relying on it (runbook).
-
 Resources:
   # The log group is created here, not by the workflow: the Bedrock role holds
   # CreateLogStream + PutLogEvents and deliberately nothing else. Append-only
@@ -197,8 +186,22 @@ Resources:
         infrastructure/bedrock-role-policy.json first, then the ::warning::
         annotations on recent pepper-pr-review runs.
       AlarmRule: !Sub "ALARM(${ReviewsRanAlarm}) AND ALARM(${NoRecordsAlarm})"
+      # The account's shared critical-alerts channel (DEV-1086), imported rather
+      # than named. This alarm previously pointed at insights-to-linear-alarms,
+      # a topic owned by another project's stacks in another repository: this
+      # template carried a hardcoded ARN for a resource it did not own and could
+      # not see change, so that project retiring its topic would have left this
+      # alarm publishing into nothing — silently, since SNS accepts a publish to
+      # a deleted ARN no differently than it rejects one.
+      #
+      # `!ImportValue` is the documented contract for a CloudFormation stack in
+      # the same account and region (see "Consuming the topic from an app" in
+      # SpiceLabsHQ/Shared-Cloud-Infra). It is also a lock: CloudFormation
+      # refuses to delete or rename an export while an import exists, so the
+      # channel cannot be pulled out from under this alarm the way the old topic
+      # could have been.
       AlarmActions:
-        - !Ref AlarmTopicArn
+        - !ImportValue critical-alerts-topic-arn
       # Deliberately NO OKActions. The composite leaves ALARM whenever EITHER
       # child does — including when reviews simply stop for a quiet stretch
       # while the pipeline is still broken — so an OK notification can report
