@@ -36,8 +36,28 @@ set -euo pipefail
 
 ORG="SpiceLabsHQ"
 BRANCH="chore/renovate-extend-org-preset"
-COMMIT_MSG="chore(ci): extend the shared Renovate preset [DEV-1155]"
-PR_TITLE="Extend the shared Renovate preset [DEV-1155]"
+# The PR title is load-bearing twice over, so do not "tidy" it (DEV-1171):
+#
+#   1. It MUST be a Conventional Commit. `pr-hygiene / Conventional Commits
+#      title` is a blocking required check on every tier, and merges are
+#      squash-only with squash_merge_commit_title=PR_TITLE — so this string, not
+#      COMMIT_MSG, is both what the check reads and what lands on main. The
+#      previous title here was plain prose and would have failed on all 24 PRs.
+#
+#   2. The type MUST be `chore`. It is what makes these PRs exempt from the
+#      issue-reference policy: Pepper's intent_verification exempts a diff that
+#      is "unambiguously chore-shaped … repo housekeeping with no changes to
+#      application source or tests", which a lone renovate.json is. (The diff is
+#      the deciding signal there, not the prefix — but the prefix is the
+#      supporting evidence and should agree with it.) `fix` or `feat` would also
+#      cut a release in every target repo running release-please; `chore` does
+#      not bump a version.
+#
+# The (DEV-1155) reference is kept even though the chore exemption does not
+# require one — it gives traceability back to the sweep and is the fallback if a
+# reviewer judges a particular diff not chore-shaped.
+COMMIT_MSG="chore(ci): extend the shared Renovate preset (DEV-1155)"
+PR_TITLE="chore(ci): extend the shared Renovate preset (DEV-1155)"
 
 command -v gh >/dev/null || { echo "gh not found" >&2; exit 2; }
 command -v jq >/dev/null || { echo "jq not found" >&2; exit 2; }
@@ -68,6 +88,10 @@ fi
 
 echo "Sweep mode: $([ "$DRY_RUN" = true ] && echo 'DRY RUN' || echo 'APPLY')"
 echo "Preset: $RENOVATE_PRESET"
+# Show the exact PR title up front. It is the string a blocking required check
+# reads and the one that becomes the squash commit, so an operator should see it
+# before firing rather than discovering it on 24 red PRs (DEV-1171).
+echo "PR title: $PR_TITLE"
 echo "Targets (${#TARGETS[@]})"
 echo
 
