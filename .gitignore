@@ -1,0 +1,6 @@
+# Python bytecode. scripts/lib/ ships a .py helper, and running `py_compile`
+# against it (or importing it) leaves a __pycache__ next to the source. Compiled
+# artifacts go stale the moment the source beside them changes and nobody ever
+# updates them deliberately, so they must not be tracked.
+__pycache__/
+*.py[cod]
