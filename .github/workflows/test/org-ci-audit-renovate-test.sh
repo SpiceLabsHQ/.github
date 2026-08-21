@@ -10,10 +10,13 @@
 # is pinned down here rather than eyeballed once.
 #
 # To test the EXACT function that ships without duplicating it, this harness
-# extracts `extends_has_preset` straight out of the audit script and sources it.
+# sources `extends_has_preset` straight out of the shared library it lives in.
 # The function is pure (jq/grep/printf/tr, no globals, no network), which is why
 # it can be tested this way; `renovate_state` around it is not covered here
 # because it calls the GitHub API and CI has no org-scoped token.
+#
+# The library is shared with scripts/sweep-renovate-preset.sh (DEV-1167), so
+# this one harness pins the detection for the reporter and the fixer at once.
 #
 # The load-bearing case is the `matchPackageNames` trap: default.json itself
 # contains "SpiceLabsHQ/.github**" as a PACKAGE SELECTOR, so a naive substring
@@ -24,16 +27,16 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-AUDIT="${HERE}/../../../scripts/org-ci-audit.sh"
+LIB="${HERE}/../../../scripts/lib/renovate-preset.sh"
 
-[ -r "$AUDIT" ] || { echo "FAIL: cannot read ${AUDIT}" >&2; exit 1; }
+[ -r "$LIB" ] || { echo "FAIL: cannot read ${LIB}" >&2; exit 1; }
 
 # Extract the function definition from the shipping script and source it. If the
 # function is ever renamed or reshaped, this fails loudly rather than silently
 # testing nothing.
-FN="$(awk '/^extends_has_preset\(\) \{$/,/^\}$/' "$AUDIT")"
+FN="$(awk '/^extends_has_preset\(\) \{$/,/^\}$/' "$LIB")"
 if [ -z "$FN" ]; then
-  echo "FAIL: could not extract extends_has_preset() from ${AUDIT}" >&2
+  echo "FAIL: could not extract extends_has_preset() from ${LIB}" >&2
   echo "      (was it renamed? update this harness alongside, consciously)" >&2
   exit 1
 fi
