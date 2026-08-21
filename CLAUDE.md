@@ -35,3 +35,24 @@ the claude-cli version moved either.
 
 Note that `cost_usd` may be `null`: the capture step never invents a price, so
 cost is derived from the token split at query time.
+
+## Renovate policy lives in two repos
+
+Changing org Renovate policy usually means touching one of two files, and they
+are not interchangeable:
+
+- [`default.json`](default.json) (this repo) — the **shared preset**. Opt-in: a
+  repo receives it only by naming it in `"extends": ["github>SpiceLabsHQ/.github"]`.
+- `org-inherited-config.json` in
+  [`SpiceLabsHQ/renovate-config`](https://github.com/SpiceLabsHQ/renovate-config)
+  — the **org-inherited config** (DEV-1140). Renovate reads it for every repo
+  *before* that repo's own config, so it reaches repos with no config at all.
+  It extends the preset above, so a preset edit changes both paths at once.
+
+Put dependency policy in the preset. Put org-wide bot behaviour that would be
+surprising in an explicit `extends` — onboarding config, silent/full mode — in
+the inherited config. Neither file can carry per-repo rules; those belong in the
+repo's own `renovate.json`, which is merged over both and wins on conflict.
+
+A per-repo `renovate.json` is still a MUST under `dependency-management.md`
+rule 2. The inherited config removes the *silent* failure mode, not the rule.
