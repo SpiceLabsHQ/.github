@@ -34,9 +34,9 @@ set -euo pipefail
 ORG="SpiceLabsHQ"
 BRANCH="chore/migrate-legacy-v1-pins"
 COMMIT_MSG="chore(ci): migrate reusable workflow pins to per-workflow tags [DEV-494]"
-PR_TITLE="Migrate reusable workflow pins off frozen legacy @v1 [DEV-494]"
+PR_TITLE="chore(ci): migrate reusable workflow pins off frozen legacy @v1 (DEV-494)"
 SEED_COMMIT_MSG="chore(ci): seed Renovate config extending the org preset [DEV-1155]"
-SEED_PR_TITLE="Seed Renovate config extending the org preset [DEV-1155]"
+SEED_PR_TITLE="chore(ci): seed Renovate config extending the org preset (DEV-1155)"
 read -r -d '' SEED_PR_BODY <<'EOF' || true
 Seeds `.github/renovate.json` so this repo's dependencies get update PRs instead
 of going stale silently. Today nothing proposes an update here at all.

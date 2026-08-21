@@ -24,6 +24,9 @@ on:
       - ".github/workflows/test/org-ci-audit-renovate-test.sh"
       - ".github/workflows/test/renovate-sweep-rewrite-test.sh"
       - ".github/workflows/org-ci-audit-renovate-test.yml"
+      # The rewrite suite reads pr-hygiene's allowed-type list rather than
+      # restating it, so a change there must re-run these fixtures.
+      - ".github/workflows/pr-hygiene.yml"
 
 permissions:
   contents: read

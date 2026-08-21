@@ -141,5 +141,44 @@ else
   fail=$((fail + 1)); printf 'FAIL %s\n     got: %s\n' "seed config is wrong" "$seed"
 fi
 
+# --- the PR title the sweep opens 24 PRs with (DEV-1171) ---------------------
+# A regression here does not fail quietly: it breaks every PR the sweep opens,
+# all at once, on a blocking required check. Both properties are pinned.
+#
+# The allowed type list is read out of pr-hygiene.yml rather than restated, so
+# this cannot pass while disagreeing with the check that actually gates merges.
+SWEEP="${HERE}/../../../scripts/sweep-renovate-preset.sh"
+HYGIENE="${HERE}/../pr-hygiene.yml"
+
+pr_title="$(sed -n 's/^PR_TITLE="\(.*\)"$/\1/p' "$SWEEP")"
+types="$(sed -n 's/^ *default: \(feat,fix,chore[a-z,]*\) *$/\1/p' "$HYGIENE" | head -1)"
+
+if [ -z "$pr_title" ]; then
+  fail=$((fail + 1)); printf 'FAIL %s\n' "could not extract PR_TITLE from ${SWEEP}"
+elif [ -z "$types" ]; then
+  fail=$((fail + 1)); printf 'FAIL %s\n' "could not extract the allowed type list from ${HYGIENE}"
+else
+  type_re="$(printf '%s' "$types" | tr ',' '|')"
+  if printf '%s' "$pr_title" | grep -qE "^(${type_re})(\([^)]+\))?!?: .+"; then
+    pass=$((pass + 1)); printf 'ok   %s\n' "sweep PR title is a Conventional Commit ($pr_title)"
+  else
+    fail=$((fail + 1))
+    printf 'FAIL %s\n     title: %s\n     allowed types: %s\n' \
+      "sweep PR title is not a Conventional Commit — pr-hygiene would fail every sweep PR" \
+      "$pr_title" "$types"
+  fi
+
+  # `chore` specifically: it is what carries the intent_verification exemption
+  # for these issue-less housekeeping PRs, and it is the only type that does not
+  # cut a release in target repos running release-please.
+  if printf '%s' "$pr_title" | grep -qE '^chore(\([^)]+\))?: '; then
+    pass=$((pass + 1)); printf 'ok   %s\n' "sweep PR title uses the chore type"
+  else
+    fail=$((fail + 1))
+    printf 'FAIL %s\n     title: %s\n' \
+      "sweep PR title must use the chore type (exemption + no release bump)" "$pr_title"
+  fi
+fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
