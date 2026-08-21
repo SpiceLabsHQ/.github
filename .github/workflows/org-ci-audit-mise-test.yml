@@ -1,7 +1,9 @@
 name: Org CI audit mise — test
 
-# Runs the org-ci-audit-mise.jq fixture test (the toolchain-compliance decision
-# behind the audit dashboard's `mise` column) on any PR that touches it.
+# Runs the org-ci-audit-mise.jq fixture test — the development-environment
+# compliance decision behind the audit dashboard's `mise` column, which scores
+# repos against the auditable rules of the Eng-Cookbook standard
+# `standards/development-environment.md` (ADR-0024).
 #
 # WHY: the audit only ever runs on a weekly schedule against the live org, so a
 # defect here does not surface as a red PR — it surfaces as a dashboard that
