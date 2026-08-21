@@ -278,6 +278,16 @@ check_removal "removing a scalar-valued key works too" timezone \
   "extends": ["github>SpiceLabsHQ/.github"]
 }'
 
+# Pepper caught this one in review on #206: with no preceding comma to absorb,
+# `start` never moved and the object was left holding a bare whitespace line —
+# valid JSON, so the re-parse guard passed it, but the exact shape
+# `prettier --check` rejects. Collapsing to `{}` is the only correct rendering.
+check_removal "removing the only key collapses the object" extends \
+  '{
+  "extends": ["github>SpiceLabsHQ/.github"]
+}' \
+  '{}'
+
 check_removal "removing an absent key is a no-op" packageRules \
   '{
   "extends": ["github>SpiceLabsHQ/.github"]

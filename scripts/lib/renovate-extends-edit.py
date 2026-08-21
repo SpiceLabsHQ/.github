@@ -140,8 +140,27 @@ def remove_key(text, key):
             k -= 1
         if k >= 0 and text[k] == ",":
             start = k
+        else:
+            # The ONLY member: there is no comma to absorb, so take the newline
+            # and indent before it instead. Without this the object is left
+            # holding a bare whitespace line — valid JSON, so the re-parse guard
+            # below passes it, but exactly the shape `prettier --check` rejects,
+            # which is the failure this tool exists to prevent.
+            line_start = text.rfind("\n", 0, start)
+            if line_start != -1 and text[line_start + 1 : start].strip() == "":
+                start = line_start
 
-    return text[:start] + text[end:]
+    result = text[:start] + text[end:]
+
+    # Removing the last remaining key leaves `{\n}`, which still fails
+    # `prettier --check`. An empty object has exactly one correct rendering, so
+    # collapse it rather than emit something this tool exists to prevent.
+    try:
+        if json.loads(result) == {}:
+            return "{}"
+    except ValueError:
+        pass
+    return result
 
 
 def add_preset(text, preset):
