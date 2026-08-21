@@ -19,6 +19,10 @@
 # .github repo). Changing this changes what every consumer considers compliant.
 RENOVATE_PRESET="github>SpiceLabsHQ/.github"
 
+# This library's own directory, so the `extends` editor beside it is found
+# regardless of the caller's working directory.
+RENOVATE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Renovate accepts several config filenames/locations, and when a repo has more
 # than one it uses the FIRST in its documented resolution order and silently
 # ignores the rest. This list must therefore match that order exactly, not just
@@ -115,7 +119,8 @@ renovate_state() {
 }
 
 # Rewrites a Renovate config so it extends the shared preset, echoing the new
-# JSON. Deliberately MINIMAL — it touches `extends` and nothing else:
+# config. MINIMAL in the literal sense: every byte outside the `extends` value is
+# unchanged.
 #
 #   - `enabledManagers` is PRESERVED. Dropping it would silently enable npm on
 #     repos whose engines floor has not been settled yet (DEV-1103), turning a
@@ -128,12 +133,16 @@ renovate_state() {
 #     extends it, so keeping it is noise that invites the "which one wins?"
 #     confusion this whole effort exists to remove.
 #
-# Idempotent: a config already naming the preset comes back unchanged in effect.
+# The edit is a text-level splice rather than a jq round-trip (DEV-1178). jq
+# re-renders the whole document in its own style, expanding every array to
+# multi-line; Prettier keeps short arrays inline, so a round-trip rewrote lines
+# the sweep never meant to touch and failed `prettier --check` in repos that lint
+# JSON — Atelier#262 and Lumen-BI#382 both went red on it. jq still READS these
+# configs elsewhere in this library; it must not be what writes them.
+#
+# Idempotent: a config already naming the preset comes back unchanged.
 apply_preset_to_config() {
-  printf '%s' "$1" | jq --arg preset "$RENOVATE_PRESET" '
-    .extends = ([$preset] + ((.extends // [])
-      | map(select(. != "config:recommended" and . != $preset))))
-  '
+  printf '%s' "$1" | python3 "${RENOVATE_LIB_DIR}/renovate-extends-edit.py" "$RENOVATE_PRESET"
 }
 
 # The config seeded into a repo that has none. Matches what Template-Code and

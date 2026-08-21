@@ -141,6 +141,81 @@ else
   fail=$((fail + 1)); printf 'FAIL %s\n     got: %s\n' "seed config is wrong" "$seed"
 fi
 
+# --- formatting preservation (DEV-1178) -------------------------------------
+# Every assertion above compares PARSED JSON, which is exactly how the original
+# defect shipped: apply_preset_to_config round-tripped through jq, re-rendered
+# the whole document, and stayed semantically perfect while failing
+# `prettier --check` in every repo that lints JSON (Atelier#262, Lumen-BI#382).
+# These assert on the TEXT, so a return to whole-document rendering fails here.
+
+# check_text <description> <input> <expected-exact-output>
+check_text() {
+  local desc="$1" input="$2" expected="$3" got
+  got="$(apply_preset_to_config "$input")"
+  if [ "$got" = "$expected" ]; then
+    pass=$((pass + 1)); printf 'ok   %s\n' "$desc"
+  else
+    fail=$((fail + 1))
+    printf 'FAIL %s\n--- expected ---\n%s\n--- got ---\n%s\n' "$desc" "$expected" "$got"
+  fi
+}
+
+check_text "an inline extends array stays inline" \
+  '{
+  "$schema": "x",
+  "extends": ["config:recommended"],
+  "enabledManagers": ["github-actions"]
+}' \
+  '{
+  "$schema": "x",
+  "extends": ["github>SpiceLabsHQ/.github"],
+  "enabledManagers": ["github-actions"]
+}'
+
+check_text "a multi-line extends array stays multi-line at its own indent" \
+  '{
+  "extends": [
+    "config:recommended"
+  ],
+  "timezone": "America/Los_Angeles"
+}' \
+  '{
+  "extends": [
+    "github>SpiceLabsHQ/.github"
+  ],
+  "timezone": "America/Los_Angeles"
+}'
+
+check_text "a missing extends key is inserted inline, other keys untouched" \
+  '{
+  "enabledManagers": ["github-actions"]
+}' \
+  '{
+  "extends": ["github>SpiceLabsHQ/.github"],
+  "enabledManagers": ["github-actions"]
+}'
+
+# The real Group A config, byte for byte. Only the extends line may differ —
+# brackets inside the versioning regex and the matchPackageNames glob must not
+# confuse the value-span scan.
+check_text "the real Group A config changes exactly one line" \
+  "$SEEDED" \
+  '{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["github>SpiceLabsHQ/.github"],
+  "enabledManagers": ["github-actions"],
+  "packageRules": [
+    {
+      "description": "SpiceLabsHQ reusable workflows: release-please monorepo tags like pepper-pr-review-v1.2.3",
+      "matchManagers": ["github-actions"],
+      "matchDatasources": ["github-tags"],
+      "matchPackageNames": ["SpiceLabsHQ/.github**"],
+      "versionCompatibility": "^(?<compatibility>.*)-v(?<version>.*)$",
+      "versioning": "semver"
+    }
+  ]
+}'
+
 # --- the PR title the sweep opens 24 PRs with (DEV-1171) ---------------------
 # A regression here does not fail quietly: it breaks every PR the sweep opens,
 # all at once, on a blocking required check. Both properties are pinned.
