@@ -216,6 +216,76 @@ check_text "the real Group A config changes exactly one line" \
   ]
 }'
 
+# --- top-level key removal (DEV-1182) ---------------------------------------
+# Used to prune the duplicated -vN packageRule from repos that inherited it from
+# the 2026-07-04 seed. The comma handling is the whole risk: swallow the wrong
+# one and the result is either a dangling comma or a missing one, shipped to
+# nine repos at once. The helper re-parses its own output and refuses on invalid
+# JSON, but these pin the two positional cases directly.
+
+EDITOR="${HERE}/../../../scripts/lib/renovate-extends-edit.py"
+
+# check_removal <description> <key> <input> <expected-exact-output>
+check_removal() {
+  local desc="$1" key="$2" input="$3" expected="$4" got
+  got="$(printf '%s' "$input" | python3 "$EDITOR" --remove-key "$key" 2>/dev/null)"
+  if [ "$got" = "$expected" ]; then
+    pass=$((pass + 1)); printf 'ok   %s\n' "$desc"
+  else
+    fail=$((fail + 1))
+    printf 'FAIL %s\n--- expected ---\n%s\n--- got ---\n%s\n' "$desc" "$expected" "$got"
+  fi
+}
+
+# The real shape being pruned: packageRules is the LAST member, so the comma
+# before it must go with it. Brackets inside the versioning regex and the
+# matchPackageNames glob must not confuse the span scan.
+check_removal "removing a trailing key takes the comma before it" packageRules \
+  '{
+  "$schema": "x",
+  "extends": ["github>SpiceLabsHQ/.github"],
+  "enabledManagers": ["github-actions"],
+  "packageRules": [
+    {
+      "matchPackageNames": ["SpiceLabsHQ/.github**"],
+      "versionCompatibility": "^(?<compatibility>.*)-v(?<version>.*)$"
+    }
+  ]
+}' \
+  '{
+  "$schema": "x",
+  "extends": ["github>SpiceLabsHQ/.github"],
+  "enabledManagers": ["github-actions"]
+}'
+
+check_removal "removing a middle key takes the comma after it" enabledManagers \
+  '{
+  "extends": ["github>SpiceLabsHQ/.github"],
+  "enabledManagers": ["github-actions"],
+  "timezone": "America/Los_Angeles"
+}' \
+  '{
+  "extends": ["github>SpiceLabsHQ/.github"],
+  "timezone": "America/Los_Angeles"
+}'
+
+check_removal "removing a scalar-valued key works too" timezone \
+  '{
+  "extends": ["github>SpiceLabsHQ/.github"],
+  "timezone": "America/Los_Angeles"
+}' \
+  '{
+  "extends": ["github>SpiceLabsHQ/.github"]
+}'
+
+check_removal "removing an absent key is a no-op" packageRules \
+  '{
+  "extends": ["github>SpiceLabsHQ/.github"]
+}' \
+  '{
+  "extends": ["github>SpiceLabsHQ/.github"]
+}'
+
 # --- the PR title the sweep opens 24 PRs with (DEV-1171) ---------------------
 # A regression here does not fail quietly: it breaks every PR the sweep opens,
 # all at once, on a blocking required check. Both properties are pinned.
