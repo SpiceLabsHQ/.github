@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.11.0](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.10.0...pepper-pr-review-v1.11.0) (2026-08-21)
+
+
+### Features
+
+* **pepper:** review against released Eng-Cookbook standards ([#195](https://github.com/SpiceLabsHQ/.github/issues/195)) ([28b6096](https://github.com/SpiceLabsHQ/.github/commit/28b6096b8b9989bbe801098edc328eee35b1cb15))
+
+
+### Bug Fixes
+
+* **pepper:** read a cross-repo 404 as unverifiable, not missing ([#194](https://github.com/SpiceLabsHQ/.github/issues/194)) ([c51e210](https://github.com/SpiceLabsHQ/.github/commit/c51e210b804cb0be3366c6e18dd4d0d9ca303314))
+
 ## [1.10.0](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.9.0...pepper-pr-review-v1.10.0) (2026-08-09)
 
 
