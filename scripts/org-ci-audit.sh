@@ -15,9 +15,11 @@
 #     extends the shared org preset (floor; a ruleset can't require a file, so
 #     the audit is its enforcement point). Three states, because presence alone
 #     is not compliance — see renovate_state() in scripts/lib/renovate-preset.sh
-#   - mise toolchain coverage: whether every language runtime the repo actually
-#     has is pinned by a mise config. Deliberately three-state — a repo with no
-#     runtime at all reads `—`, not a violation (see org-ci-audit-mise.jq)
+#   - development environment: the auditable rules of the Eng-Cookbook standard
+#     `standards/development-environment.md` (ADR-0024) — rule 1 (root mise.toml
+#     pinning every runtime), rule 2 (no .devcontainer/), rule 4 (a `setup`
+#     task). A repo with nothing to assess reads `—`, not a violation, which is
+#     what keeps the gap list credible (see org-ci-audit-mise.jq)
 #   - Silver/Gold rungs: installed callers for scorecard (Silver),
 #     release-please + release-artifacts (Gold)
 #   - next missing rung (the guidance action)
@@ -70,27 +72,36 @@ is_static_lang() {
 # for a dozen manifest filenames individually would cost a dozen API calls per
 # repo and still miss monorepo sub-packages.
 
-# Tool names declared by a mise config. Handles the two `[tools]` spellings
-# (`node = "20"` and a `[tools.node]` sub-table) plus asdf's `.tool-versions`.
-# TOML by awk is only safe because these tables are flat key/value; anything
-# richer belongs in a real parser.
-mise_tools_from_config() {
-  local body="$1" path="$2"
+# Keys declared under one top-level table of a mise config — `tools` for rule 1,
+# `tasks` for rule 4. Handles both spellings: a flat `node = "20"` under
+# `[tools]`, and a `[tools.node]` / `[tasks."test:fast"]` sub-table.
+#
+# TOML by awk is only safe because these two tables are flat key/value; anything
+# richer belongs in a real parser. The section filter is what makes it safe at
+# all: BQE-Collector's real mise.toml carries an `[env]` block and seven
+# `[tasks.*]` tables, and a parser that grabbed every `key =` line would credit
+# `_.path` and `PHP_EXTRA_CONFIGURE_OPTIONS` as pinned tools, then report every
+# runtime as pinned — a silent false pass, the worst outcome this audit has.
+mise_section_keys() {
+  local body="$1" path="$2" section="$3"
   if [ "$path" = ".tool-versions" ]; then
+    # asdf's format pins tools and has no notion of tasks.
+    [ "$section" = "tools" ] || return 0
     printf '%s\n' "$body" | awk '!/^[[:space:]]*#/ && NF { print $1 }'
     return
   fi
-  printf '%s\n' "$body" | awk '
+  printf '%s\n' "$body" | awk -v want="$section" '
+    BEGIN { plen = length(want) + 1 }
     /^[[:space:]]*#/ { next }
     /^[[:space:]]*\[/ {
       s = $0
       sub(/^[[:space:]]*\[+/, "", s); sub(/\]+.*$/, "", s)
       gsub(/[[:space:]]/, "", s); gsub(/"/, "", s); gsub(/\047/, "", s)
       sect = s
-      if (sect ~ /^tools\./ && length(sect) > 6) print substr(sect, 7)
+      if (index(sect, want ".") == 1 && length(sect) > plen) print substr(sect, plen + 1)
       next
     }
-    sect == "tools" && /=/ {
+    sect == want && /=/ {
       k = $0; sub(/=.*$/, "", k)
       gsub(/[[:space:]]/, "", k); gsub(/"/, "", k); gsub(/\047/, "", k)
       if (k != "") print k
@@ -103,47 +114,58 @@ mise_tools_from_config() {
 # tree runs to megabytes, and passing that through argv (`jq --argjson`) would
 # hit ARG_MAX and fail the repo — reported as `unknown` rather than judged.
 mise_facts() {
-  local tree_file="$1" repo="$2" tools="$3"
-  jq -c --arg repo "$repo" --argjson tools "$tools" '{
+  local tree_file="$1" repo="$2" tools="$3" tasks="$4"
+  jq -c --arg repo "$repo" --argjson tools "$tools" --argjson tasks "$tasks" '{
     repo: $repo,
     truncated: (if .truncated then true else false end),
     paths: [.tree[] | select(.type == "blob") | .path],
-    mise_tools: $tools
+    mise_tools: $tools,
+    mise_tasks: $tasks
   }' <"$tree_file"
 }
 
 # Emit the decision JSON for one repo. Any API failure (empty repo, no default
 # branch, revoked read) degrades to `unknown` rather than a false `missing`.
 mise_decision() {
-  local repo="$1" branch="$2" tree_file="${MISE_TREE_TMP}" decision config body tools_json
+  local repo="$1" branch="$2" tree_file="${MISE_TREE_TMP}" decision config body tools_json tasks_json
 
   gh api "repos/${ORG}/${repo}/git/trees/${branch}?recursive=1" >"$tree_file" 2>/dev/null || true
   if ! jq -e '.tree' <"$tree_file" >/dev/null 2>&1; then
-    jq -nc --arg repo "$repo" \
-      '{repo:$repo, config:null, detected:[], unmanaged:[], state:"unknown"}'
+    jq -nc --arg repo "$repo" '{
+      repo: $repo, config: null, canonical: false, detected: [], unmanaged: [],
+      devcontainer: null, violations: [], headline: null, state: "unknown"
+    }'
     return
   fi
 
   # Two passes so the config-path list stays owned solely by the jq module: the
-  # first tells us WHICH config file exists (if any), the second judges coverage
-  # once its [tools] are known. No extra API call — the tree is already in hand,
-  # and a repo with no config never reads a file at all.
-  decision="$(mise_facts "$tree_file" "$repo" '[]' | jq -c -f "${MISE_DECIDE}")"
+  # first tells us WHICH config file exists (if any), the second judges the rules
+  # once its [tools] and [tasks] are known. No extra API call — the tree is
+  # already in hand, and a repo with no config never reads a file at all. The
+  # first pass already decides rule 2 (`.devcontainer/`), which needs no config.
+  decision="$(mise_facts "$tree_file" "$repo" '[]' '[]' | jq -c -f "${MISE_DECIDE}")"
   config="$(printf '%s' "$decision" | jq -r '.config // ""')"
   if [ -z "$config" ]; then printf '%s\n' "$decision"; return; fi
 
   body="$(gh api "repos/${ORG}/${repo}/contents/${config}" --jq '.content' 2>/dev/null \
           | base64 -d 2>/dev/null || true)"
-  tools_json="$(mise_tools_from_config "$body" "$config" | jq -R . | jq -sc 'map(select(length>0))')"
-  mise_facts "$tree_file" "$repo" "$tools_json" | jq -c -f "${MISE_DECIDE}"
+  tools_json="$(mise_section_keys "$body" "$config" tools | jq -R . | jq -sc 'map(select(length>0))')"
+  tasks_json="$(mise_section_keys "$body" "$config" tasks | jq -R . | jq -sc 'map(select(length>0))')"
+  mise_facts "$tree_file" "$repo" "$tools_json" "$tasks_json" | jq -c -f "${MISE_DECIDE}"
 }
 
-# Debug/test entry point: read a mise config on stdin, print the tool names the
-# audit would credit it with. Exists so scripts/test/org-ci-audit-mise_test.sh
-# can exercise the REAL parser rather than a copy that drifts from it.
+# Debug/test entry point: read a mise config on stdin, print the keys the audit
+# would credit it with under `[tools]` (rule 1) or `[tasks]` (rule 4). Exists so
+# scripts/test/org-ci-audit-mise_test.sh can exercise the REAL parser rather
+# than a copy that drifts from it.
 #   scripts/org-ci-audit.sh --mise-tools mise.toml < mise.toml
+#   scripts/org-ci-audit.sh --mise-tasks mise.toml < mise.toml
 if [ "${1:-}" = "--mise-tools" ]; then
-  mise_tools_from_config "$(cat)" "${2:-mise.toml}"
+  mise_section_keys "$(cat)" "${2:-mise.toml}" tools
+  exit 0
+fi
+if [ "${1:-}" = "--mise-tasks" ]; then
+  mise_section_keys "$(cat)" "${2:-mise.toml}" tasks
   exit 0
 fi
 
@@ -212,7 +234,8 @@ printf '_Auto-generated by [`scripts/org-ci-audit.sh`](../blob/main/scripts/org-
 printf '_Renovate column (DEV-1153): **✅** = config extends the shared preset `github>SpiceLabsHQ/.github`; **⚠️** = a config exists but does not, so the repo inherits no org dependency policy (no auto-merge, no release-age soak, and no `vulnerabilityAlerts` carve-out to fast-path a CVE fix); **❌** = no config at all. Presence alone is not compliance._\n\n'
 printf '_Gold column = release automation (both `release-please` **and** `release-artifacts` installed); the ladder'"'"'s SHA-pinning criterion is not auto-checked here._\n\n'
 printf '_Auto-merge coverage (DEV-505): **Auto-merge** = repo `allow_auto_merge` is enabled; **AM-fires** = the mechanism that actually merges — code-tier `floor-automerge`, or Renovate `platformAutomerge` via the shared preset (`preset`); **Req-test** = a `spice-required-tests` ruleset gates the default branch on a real test check. Docs-tier repos have no `floor-automerge`/`floor-pepper` injected, so `preset` auto-merge there still needs an approver._\n\n'
-printf '_**mise** = toolchain pinning. Three-state on purpose: `—` means the repo has no language runtime for mise to manage (docs, PowerShell, markdown) and is **not** a violation; `✅` every detected runtime is pinned by a mise config; `⚠️` a mise config exists but leaves a runtime unpinned; `❌` the repo has a runtime and no mise config; `?` the file listing was truncated, so no judgment was made. Detection reads manifests (`package.json`, `composer.json`, `go.mod`, `*.tf`, …) up to two directories deep, ignoring vendored and fixture paths. See [Toolchain (mise) gaps](#toolchain-mise-gaps) for which runtime is unpinned where._\n\n'
+printf '_**mise** column = the auditable rules of [`standards/development-environment.md`](https://github.com/SpiceLabsHQ/Eng-Cookbook/blob/main/standards/development-environment.md) (ADR-0024), whose Enforcement section marks them "audited, not blocked". Checked here: **rule 1** (toolchain pinned in a committed root `mise.toml`, covering every runtime the repo has), **rule 2** (no `.devcontainer/` — unconditional, so it applies even to a repo with no runtime), **rule 4** (a `setup` task where a checkout needs a dependency install). Not checked: rules 5-6 need Dockerfile/workflow inspection, rule 3 is a SHOULD, rules 8-9 need judgment (DEV-1177)._\n\n'
+printf '_Cell values: `—` nothing to assess — no language runtime and no devcontainer, which is **not** a violation; `✅` compliant on every checked rule; `⚠️` compliant enough to have a config but violating a rule; `❌` has a runtime and no mise config at all; `?` file listing truncated, so no judgment was made. Detection reads manifests (`package.json`, `composer.json`, `go.mod`, `*.tf`, …) up to two directories deep, ignoring vendored and fixture paths. See [Development-environment gaps](#development-environment-gaps) for the rule each repo violates._\n\n'
 printf '| Repo | Vis | Tier | Renovate | mise | Auto-merge | AM-fires | Req-test | Silver (scorecard) | Gold (release) | Next rung |\n'
 printf '|---|---|---|---|---|---|---|---|---|---|---|\n'
 
@@ -240,19 +263,16 @@ while IFS= read -r repo; do
     *)          renov="❌" ;;
   esac
 
-  # mise toolchain coverage. `mstate` drives both the cell and the next-rung
-  # guidance; `munmanaged` names the runtimes nothing is pinning.
+  # Development-environment compliance (DEV-1177). `mstate` drives the cell and
+  # the next-rung guidance; `mhead` is the most severe violation's short label.
   mdec="$(mise_decision "$repo" "$branch")"
   mstate="$(printf '%s' "$mdec" | jq -r '.state')"
+  mhead="$(printf '%s' "$mdec" | jq -r '.headline // ""')"
   munmanaged="$(printf '%s' "$mdec" | jq -r '.unmanaged | join(", ")')"
-  # Evidence for the unmanaged runtimes only — the file that proves the gap is
-  # real, so a maintainer can check the call rather than trust the checkmark.
-  mevidence="$(printf '%s' "$mdec" | jq -r '
-    . as $d | [$d.detected[] | select(.tool as $t | $d.unmanaged | index($t)) | "`\(.evidence)`"] | join(", ")')"
   case "$mstate" in
     ok)      mise_cell="✅" ;;
-    partial) mise_cell="⚠️ ${munmanaged}" ;;
-    missing) mise_cell="❌ ${munmanaged}" ;;
+    partial) mise_cell="⚠️ ${mhead}" ;;
+    missing) mise_cell="❌ ${mhead}" ;;
     unknown) mise_cell="?" ;;
     *)       mise_cell="—" ;;
   esac
@@ -276,15 +296,16 @@ while IFS= read -r repo; do
   has_caller "$callers" "release-artifacts" && ga=true
   if $gp && $ga; then gold="✅"; else gold="—"; fi
 
-  # Next rung: Renovate (floor) > mise > Silver > Gold. mise sits above the
-  # guidance rungs because an unpinned runtime makes every rung above it
-  # irreproducible — but only where a runtime actually exists, so `na` repos
-  # never generate an action.
+  # Next rung: Renovate (floor) > development-environment > Silver > Gold. The
+  # dev-environment rules sit above the guidance rungs because an unpinned
+  # runtime makes every rung above it irreproducible — but they only fire on a
+  # real violation, so a repo with nothing to assess never generates an action.
   next="—"
   if [ "$renov" = "❌" ]; then next="add renovate.json (floor)";
   elif [ "$renov" = "⚠️" ]; then next="extend the org preset (\`github>SpiceLabsHQ/.github\`)";
   elif [ "$mstate" = "missing" ]; then next="adopt mise (pin ${munmanaged})";
-  elif [ "$mstate" = "partial" ]; then next="mise: pin ${munmanaged}";
+  elif [ "$mstate" = "partial" ]; then
+    next="dev-env rule $(printf '%s' "$mdec" | jq -r '.violations[0].rule'): ${mhead}";
   elif [ "$tier" != "docs" ] && [ "$silver" = "—" ]; then next="Silver: add scorecard caller";
   elif [ "$tier" != "docs" ] && [ "$gold" = "—" ]; then
     miss=""
@@ -299,15 +320,25 @@ while IFS= read -r repo; do
     honesty_flags="${honesty_flags}- **${repo}** tagged \`docs\` but primary language is \`${lang}\` — confirm it hasn't grown code.\n"
   fi
 
-  # mise gap detail — only for repos that demonstrably have a runtime. A `na`
-  # repo is silent here by design; that silence is what keeps the list credible.
+  # Gap detail — one line per violated rule, naming the rule number so a reader
+  # can go check it. Only repos with an actual violation appear; a compliant or
+  # runtime-free repo is silent here by design, and that silence is what keeps
+  # the list worth reading.
   case "$mstate" in
-    missing)
-      mise_gaps="${mise_gaps}- **${repo}** — no mise config; unpinned: \`${munmanaged}\` (seen in ${mevidence}).\n" ;;
-    partial)
-      mise_gaps="${mise_gaps}- **${repo}** — has \`$(printf '%s' "$mdec" | jq -r '.config')\` but leaves \`${munmanaged}\` unpinned (seen in ${mevidence}).\n" ;;
     unknown)
-      mise_gaps="${mise_gaps}- **${repo}** — file listing unavailable or truncated; toolchain not assessed.\n" ;;
+      mise_gaps="${mise_gaps}- **${repo}** — file listing unavailable or truncated; not assessed.\n" ;;
+    missing|partial)
+      mise_gaps="${mise_gaps}- **${repo}**\n"
+      while IFS= read -r vline; do
+        [ -z "$vline" ] && continue
+        mise_gaps="${mise_gaps}  - ${vline}\n"
+      done < <(printf '%s' "$mdec" | jq -r '.violations[] | "rule \(.rule): \(.text)"')
+      # Evidence for the unpinned runtimes — the file that proves the gap is
+      # real, so a maintainer can check the call rather than trust the cell.
+      mevidence="$(printf '%s' "$mdec" | jq -r '
+        . as $d | [$d.detected[] | select(.tool as $t | $d.unmanaged | index($t)) | "`\(.evidence)`"] | join(", ")')"
+      [ -n "$mevidence" ] && mise_gaps="${mise_gaps}  - evidence: ${mevidence}\n"
+      ;;
   esac
 
   printf '| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n' \
@@ -317,12 +348,12 @@ done < <(printf '%s' "$repos_json" | jq -r '.[].name' | sort)
 printf '\n## Next-rung actions\n\n'
 if [ -n "$next_actions" ]; then printf '%b' "$next_actions"; else printf '_Everything is at or above its floor._\n'; fi
 
-printf '\n## Toolchain (mise) gaps\n\n'
+printf '\n## Development-environment gaps\n\n'
 if [ -n "$mise_gaps" ]; then
   printf '%b' "$mise_gaps"
-  printf '\n_Only repos with a detected language runtime appear here. Repos with nothing for mise to manage are omitted, not passed._\n'
+  printf '\n_Rule numbers refer to [`standards/development-environment.md`](https://github.com/SpiceLabsHQ/Eng-Cookbook/blob/main/standards/development-environment.md). Only repos with an actual violation appear here — a repo with no language runtime and no devcontainer is omitted, not passed._\n'
 else
-  printf '_Every repo with a detected language runtime pins it with mise._\n'
+  printf '_No repo violates a checked rule of `standards/development-environment.md`._\n'
 fi
 
 printf '\n## Exception-list honesty\n\n'

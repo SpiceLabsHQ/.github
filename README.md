@@ -36,30 +36,46 @@ Targeting is **exception-only**: the default assumption is that *every repo is a
 
 ### Maturity ladder: Floor → Silver → Gold
 
-The floor is the *minimum*; the ladder is the *paved road* up. **Silver** and **Gold** are guidance, not merge-blocking policy — a scheduled org-audit workflow ([`scripts/org-ci-audit.sh`](scripts/org-ci-audit.sh)) inventories each repo's installed callers, `renovate.json` and mise toolchain pinning against its tier and publishes a per-repo scorecard, **flagging the next missing rung for each repo** on the dashboard. It also flags exception-list honesty ("does anything tagged `docs` look like it grew code?"). Today the dashboard names the gap and a human opens the fix PR; auto-opening the next-rung PR is a planned enhancement, not yet implemented.
+The floor is the *minimum*; the ladder is the *paved road* up. **Silver** and **Gold** are guidance, not merge-blocking policy — a scheduled org-audit workflow ([`scripts/org-ci-audit.sh`](scripts/org-ci-audit.sh)) inventories each repo's installed callers, `renovate.json` and development-environment compliance against its tier and publishes a per-repo scorecard, **flagging the next missing rung for each repo** on the dashboard. It also flags exception-list honesty ("does anything tagged `docs` look like it grew code?"). Today the dashboard names the gap and a human opens the fix PR; auto-opening the next-rung PR is a planned enhancement, not yet implemented.
 
 **Renovate is floor, not Silver** — it's a near-zero-cost JSON file and it's what keeps every other floor workflow current. But a ruleset can't require a *file* to exist, so Renovate's floor status is enforced by the audit (a missing `renovate.json` is a dashboard violation), not by merge blocking.
 
-#### Toolchain pinning (mise)
+#### Development environment (mise)
 
-The audit also reports whether each repo pins its language runtimes with [mise](https://mise.jdx.dev), so a local checkout, a CI runner and a deployed image agree on versions. Same enforcement shape as Renovate — a file, so the dashboard is its enforcement point, not a ruleset.
+The audit's `mise` column scores each repo against [`standards/development-environment.md`](https://github.com/SpiceLabsHQ/Eng-Cookbook/blob/main/standards/development-environment.md) ([ADR-0024](https://github.com/SpiceLabsHQ/Eng-Cookbook/blob/main/decisions/ADR-0024-mise-is-the-toolchain-layer.md)). That standard's Enforcement section marks rules 1, 2, 3, 4, 5, 6, 8 and 9 as **"audited, not blocked"** — this dashboard is that audit. Same enforcement shape as Renovate: properties of a repository's files, which a ruleset cannot require.
 
-**The column is three-state on purpose, because most of the org has nothing for mise to manage.** A docs repo, a PowerShell repo, a markdown repo — none of them have a runtime, and reporting them as violations would drown the real ones. So:
+**Checked today** (DEV-1177):
+
+| Rule | Requirement | How it's checked |
+|---|---|---|
+| **1** | Toolchain pinned in a committed root `mise.toml`, covering every runtime the repo has | A config exists, its `[tools]` cover every detected ecosystem, and the file is the root `mise.toml` the rule names |
+| **2** | No `.devcontainer/` | Root `.devcontainer/` or `.devcontainer.json` present in the tree. **Unconditional** — it applies to a docs repo too |
+| **4** | A `setup` task where a checkout needs a dependency install | The config's `[tasks]` include `setup`, when a detected ecosystem (node, php, python, ruby) actually needs one |
+
+**Not checked:** rules 5 and 6 (CI and the Dockerfile read `mise.toml`) need content inspection of workflows and Dockerfiles; rule 3 is a SHOULD; rules 8 and 9 need judgment about what a tool or an env value means.
+
+**The column is deliberately three-state, because most of the org has nothing to assess.** A docs repo, a PowerShell repo, a markdown repo — no runtime, no devcontainer, nothing to pin. Reporting them as violations would drown the real ones, so they are omitted from the gap list entirely rather than passed or failed.
 
 | Cell | Meaning |
 |---|---|
-| `—` | No language runtime detected. **Not** a violation; the repo is omitted from the gap list entirely. |
-| `✅` | Every detected runtime is pinned by a mise config. |
-| `⚠️ <tool>` | A mise config exists but leaves a detected runtime unpinned — the "adopted mise, forgot the Node version" case. |
-| `❌ <tool>` | The repo has a runtime and no mise config at all. |
+| `—` | Nothing to assess: no language runtime and no devcontainer. **Not** a violation. |
+| `✅` | Compliant on every checked rule. |
+| `⚠️ <what>` | Has a config, but violates a rule — an unpinned runtime, a lingering devcontainer, a missing `setup` task, or a non-canonical config location. |
+| `❌ <runtime>` | The repo has a runtime and no mise config at all. |
 | `?` | The repo's file listing was truncated or unreadable, so no judgment was made. |
 
-Detection reads manifests (`package.json`, `composer.json`, `go.mod`, `pyproject.toml`, `*.tf`, …) up to two directories deep — so a monorepo sub-package still counts — and ignores vendored and fixture paths, which would otherwise invent runtimes a repo doesn't have. `mise.toml`, its alternate locations, and asdf's `.tool-versions` all count as a config. The decision logic is a pure function in [`scripts/org-ci-audit-mise.jq`](scripts/org-ci-audit-mise.jq), fixture-tested by [`scripts/test/org-ci-audit-mise_test.sh`](scripts/test/org-ci-audit-mise_test.sh).
+Where a repo violates more than one rule, the cell shows the most serious and the gap section lists them all, each named by rule number.
 
-To check one repo without regenerating the whole dashboard:
+Detection reads manifests (`package.json`, `composer.json`, `go.mod`, `pyproject.toml`, `*.tf`, …) up to two directories deep — so a monorepo sub-package still counts — and ignores vendored and fixture paths, which would otherwise invent runtimes a repo doesn't have. `.mise.toml`, `.config/mise/config.toml` and asdf's `.tool-versions` are still recognised as configs, then flagged under rule 1: a repo that pinned its toolchain in one of those has a location problem, not a missing toolchain, and reporting it as the latter would overstate the finding.
+
+The decision logic is a pure function in [`scripts/org-ci-audit-mise.jq`](scripts/org-ci-audit-mise.jq), fixture-tested by [`scripts/test/org-ci-audit-mise_test.sh`](scripts/test/org-ci-audit-mise_test.sh).
+
+To check one repo, or one config, without regenerating the whole dashboard:
 
 ```bash
 scripts/org-ci-audit.sh --mise-repo BQE-Collector
+scripts/org-ci-audit.sh --mise-tools mise.toml < mise.toml
+scripts/org-ci-audit.sh --mise-tasks mise.toml < mise.toml
 ```
 
 ## Auto-merge policy: Pepper-gated (DEV-502)
