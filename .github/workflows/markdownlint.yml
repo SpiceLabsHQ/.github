@@ -85,7 +85,7 @@ jobs:
         # v24.0.0 per the actions-audit policy (third-party actions MUST be
         # 40-char SHAs). Bump by re-running the API tag lookup and updating both
         # the SHA and the trailing comment.
-        uses: DavidAnson/markdownlint-cli2-action@6bf21b07787794f89a243495939cd651942aeabe # v24.1.0
+        uses: DavidAnson/markdownlint-cli2-action@21c1be1b93ad9ed58fa840aacc3f279cde2a72ff # v24.2.0
         with:
           globs: ${{ inputs.globs }}
           config: ${{ steps.cfg.outputs.config }}
