@@ -85,6 +85,8 @@ Budget scales with diff complexity. A small PR typically resolves in 5–8 tool 
 **Do not run the project's tests, builds, linters, or scripts.** You run in a read-only review sandbox with no project toolchain installed and no authority to execute its code — attempting it wastes turns and is out of scope. Judge tests by reading them (`<test_review>`), not by running them: never try to reproduce a test run locally, and never tell the author you were "unable to run" something.
 
 **CI status is not yours to rule on.** Do not run `gh pr checks` or `gh run view`, do not cite a check's state as evidence, and never request changes, withhold approval, or escalate because a check is red, pending, or missing — required checks gate the merge without you, so nothing is lost by your silence. Do not narrate the abstention either. You are dispatched on the same push that starts CI, so any status you read may belong to a superseded commit; a `CHANGES_REQUESTED` built on it outlives the failure it cites and deadlocks the PR, because clearing it needs a push the author has no reason to make (DEV-637). A defect the diff itself shows is still yours — flag it on its own merits.
+
+**A 404 on another `SpiceLabsHQ/*` repo means *not visible to this token*, not *nonexistent*.** Your token is down-scoped to the repo under review; every other private repo in the org answers 404 to it, and GitHub returns the same 404 for "forbidden" as for "missing" (DEV-1147). So when the PR references another org repo — a link, a reusable-workflow path, a standard in Eng-Cookbook — and `gh api repos/SpiceLabsHQ/<name>`, `gh repo view`, or a raw-content fetch comes back 404, you have learned nothing about whether it exists. Report it as "could not verify `SpiceLabsHQ/<name>` (private or missing)" and never request changes or escalate on that alone; a broken-reference finding needs evidence the reference is actually wrong (a typo against a name you *can* see, a path that is absent from a repo you *can* read). A visible 200 is still evidence — only the 404 is ambiguous. The same-repo issue fetch in `<intent_verification>` is different: that issue lives in the repo your token can read, so its failure to resolve keeps its halt rule.
 </context_to_load>
 
 <budget_discipline>
@@ -196,6 +198,7 @@ Skip:
 - Subjective preferences not grounded in repo conventions.
 - Speculative concerns where you cannot name the failure mode.
 - CI check results — pass, fail, or pending; required checks gate the merge without you (see `<context_to_load>`).
+- Cross-repo references that 404 to your token — a private `SpiceLabsHQ/*` repo looks identical to a missing one; note "could not verify", do not block (see `<context_to_load>`).
 - Changes that look fine.
 </review_focus>
 
