@@ -180,5 +180,55 @@ else
   fi
 fi
 
+# --- failure containment wiring (DEV-1175) -----------------------------------
+# These are structural assertions, not behavioural ones: the real behaviour needs
+# the GitHub API and CI has no org-scoped token. What they pin is that the
+# containment stays WIRED UP, because every property below fails silently if
+# removed — the sweep would simply go back to dying on the first bad repo and
+# taking the list of already-opened PRs with it.
+sweep_src="$(cat "$SWEEP" 2>/dev/null)"
+
+assert_contains() {
+  local desc="$1" pattern="$2"
+  if printf '%s' "$sweep_src" | grep -qE "$pattern"; then
+    pass=$((pass + 1)); printf 'ok   %s\n' "$desc"
+  else
+    fail=$((fail + 1)); printf 'FAIL %s\n     no line matching: %s\n' "$desc" "$pattern"
+  fi
+}
+
+assert_absent() {
+  local desc="$1" pattern="$2"
+  if printf '%s' "$sweep_src" | grep -qE "$pattern"; then
+    fail=$((fail + 1)); printf 'FAIL %s\n     unexpected match: %s\n' "$desc" "$pattern"
+  else
+    pass=$((pass + 1)); printf 'ok   %s\n' "$desc"
+  fi
+}
+
+if [ -z "$sweep_src" ]; then
+  fail=$((fail + 1)); printf 'FAIL %s\n' "could not read ${SWEEP}"
+else
+  # Testing a function's result suspends set -e for its body, which is exactly
+  # what stops one repo's failure from killing the run.
+  assert_contains "per-repo work runs in a tested context (failure is contained)" \
+    '^[[:space:]]*if ! run_repo '
+
+  # The ledger must survive an abort, so it runs from the trap rather than from
+  # the end of the script.
+  assert_contains "the summary is wired to the EXIT trap" \
+    "^trap '.*summarize.*' EXIT"
+
+  # Without this, re-running after a partial sweep dies in gh pr create.
+  assert_contains "an already-open PR is detected before creating one" \
+    'gh pr list .*--head'
+
+  # A tempting "fix" for a push that fails on an existing branch. The sweep does
+  # not own every branch that happens to share its name, so a diverged branch
+  # must surface as a failure, never be overwritten.
+  assert_absent "the sweep never force-pushes" \
+    'git push[^|&]*--force'
+fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
