@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # Sweeps org repos onto the shared Renovate preset (DEV-1167, executing DEV-1155).
 #
-# WHY THIS EXISTS SEPARATELY FROM migrate-legacy-v1-pins.sh: that script seeds a
-# config only where none exists, has no code path that rewrites one, and skips
-# any repo without a .github/workflows directory. A dry run showed it reaching
-# 10 of 23 targets — it cannot touch the eleven repos whose config exists but
-# extends config:recommended instead of the org preset, which is the actual
-# DEV-1150 population. Its own job is also done (0 legacy @v1 pins remain), so
-# widening it would extend a script whose purpose has expired.
+# WHY THIS EXISTS SEPARATELY FROM the old migrate-legacy-v1-pins.sh: that
+# script seeded a config only where none exists, had no code path that
+# rewrote one, and skipped any repo without a .github/workflows directory. A
+# dry run showed it reaching 10 of 23 targets — it could not touch the eleven
+# repos whose config exists but extends config:recommended instead of the org
+# preset, which is the actual DEV-1150 population. Its own job was also done
+# (0 legacy @v1 pins remained), so it was retired outright (DEV-1172) rather
+# than widened.
 #
 # For each target repo this script will:
 #   1. Classify it: on-preset (no-op), off-preset (rewrite), or none (seed)

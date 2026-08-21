@@ -38,7 +38,7 @@ on:
             - `aws-actions/*`        — trust all of AWS's published actions
           The default trusts GitHub-published actions and SpiceLabsHQ's own
           first-party reusable workflows (referenced by floating `-vN` tags per
-          release-tag-aliases.yml / migrate-legacy-v1-pins.sh).
+          release-tag-aliases.yml).
         required: false
         type: string
         default: "actions/*,github/*,SpiceLabsHQ/*"

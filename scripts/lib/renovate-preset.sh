@@ -2,10 +2,11 @@
 # Shared Renovate-preset detection and rewriting (DEV-1167).
 #
 # WHY THIS IS A LIBRARY: org Renovate policy living in two places is the bug
-# that caused DEV-1150. The seed in migrate-legacy-v1-pins.sh restated
-# config:recommended and a -vN packageRule instead of extending default.json,
-# then default.json changed and the copy did not, and nine repos silently
-# inherited nothing. scripts/org-ci-audit.sh (which reports preset adoption) and
+# that caused DEV-1150. The seed in the old migrate-legacy-v1-pins.sh (retired,
+# DEV-1172) restated config:recommended and a -vN packageRule instead of
+# extending default.json, then default.json changed and the copy did not, and
+# nine repos silently inherited nothing. scripts/org-ci-audit.sh (which reports
+# preset adoption) and
 # scripts/sweep-renovate-preset.sh (which fixes it) must agree on what
 # "on-preset" means forever, so the definition lives here once and both source
 # it.
