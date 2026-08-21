@@ -40,6 +40,8 @@ The floor is the *minimum*; the ladder is the *paved road* up. **Silver** and **
 
 **Renovate is floor, not Silver** — it's a near-zero-cost JSON file and it's what keeps every other floor workflow current. But a ruleset can't require a *file* to exist, so Renovate's floor status is enforced by the audit (a missing `renovate.json` is a dashboard violation), not by merge blocking.
 
+**A repo with no `renovate.json` is still covered** (DEV-1140). [`SpiceLabsHQ/renovate-config`](https://github.com/SpiceLabsHQ/renovate-config) holds an **org-inherited config** that Renovate reads for every repo *before* it reads that repo's own config, so the shared preset applies even where no file exists — including repos imported or created after the fact. That is a safety net, not a substitute: `dependency-management.md` rule 2 still makes a per-repo `"extends": ["github>SpiceLabsHQ/.github"]` a MUST, and the audit still scores its absence. What the inherited config removes is the *silent* failure mode — a repo arriving unwatched with nobody noticing (BQE-Collector, DEV-1105).
+
 **Dependabot alerts are floor for the same reason** (DEV-1142). The shared preset's `vulnerabilityAlerts` carve-out — the only thing that lets a CVE fix skip the 7-day `minimumReleaseAge`, and the only CVE coverage GitHub Actions gets at all — reads from Dependabot alerts on the *consuming* repo, so a preset-compliant repo with alerts off carries no security fast-path while looking entirely compliant. Alerts are enabled on every repo in the org and auto-enabled for new ones (Org Settings → Code security), and the audit's `Dep-alerts` column is what keeps that from drifting back. A ruleset cannot require a repo *setting* any more than it can require a file.
 
 #### Development environment (mise)
@@ -150,7 +152,7 @@ Strongest first:
 2. **Immutable release tag** — reproducible, human-readable, and the form Renovate reliably updates: `@secret-scan-v1.2.3`
 3. **Floating major** (**org default** for internal repos, DEV-494) — hands-off non-breaking updates, trusting this repo's release process: `@secret-scan-v1`. No consumer PRs needed: the alias advances server-side on every non-breaking release; a new major is a deliberate, opt-in edit.
 
-**Update automation is Renovate, not Dependabot** (evaluated in DEV-494). Renovate's github-actions manager [documents](https://docs.renovatebot.com/modules/manager/github-actions/) component-prefixed tags (`prefix-v1.2.3`); seed this config per repo (it cannot be inherited org-wide from this repo, and stays inert until the [Mend Renovate GitHub App](https://github.com/apps/renovate) is installed on the org — install it on the consumer repos *and* this one so it can list tags):
+**Update automation is Renovate, not Dependabot** (evaluated in DEV-494). Renovate's github-actions manager [documents](https://docs.renovatebot.com/modules/manager/github-actions/) component-prefixed tags (`prefix-v1.2.3`); seed this config per repo (a preset in *this* repo is opt-in — a repo gets it only by naming it in `extends`; the org-wide fallback lives in [`SpiceLabsHQ/renovate-config`](https://github.com/SpiceLabsHQ/renovate-config), DEV-1140 — and it stays inert until the [Mend Renovate GitHub App](https://github.com/apps/renovate) is installed on the org — install it on the consumer repos *and* this one so it can list tags):
 
 ```json
 // .github/renovate.json
