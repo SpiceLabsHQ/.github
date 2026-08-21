@@ -1,20 +1,28 @@
-name: Org CI audit — Renovate preset detection test
+name: Renovate preset — detection and rewrite tests
 
-# Runs the fixture tests for the audit's Renovate preset detection (DEV-1153)
-# on any PR that touches the audit script or the test, so the on-preset vs
-# off-preset distinction stays pinned down in CI.
+# Runs the fixture suites for scripts/lib/renovate-preset.sh — the shared
+# library behind both the audit that REPORTS preset adoption (DEV-1153) and the
+# sweep that FIXES it (DEV-1167). One library, so one workflow.
 #
-# It matters because the failure mode is a false GREEN: before DEV-1153 the
-# audit scored Renovate on file presence alone, so nine repos inheriting no org
-# dependency policy — no auto-merge, no release-age soak, and no
-# vulnerabilityAlerts carve-out for CVE fixes — read as compliant for six weeks
-# (DEV-1150). A regression here does not fail loudly; it just stops reporting.
+# It matters because both failure modes are silent:
+#   - detection regressing is a false GREEN: before DEV-1153 the audit scored
+#     Renovate on file presence alone, so nine repos inheriting no org policy —
+#     no auto-merge, no release-age soak, no vulnerabilityAlerts carve-out for
+#     CVE fixes — read as compliant for six weeks (DEV-1150).
+#   - the rewrite regressing edits a file in 20+ repos unattended. Dropping
+#     `enabledManagers` there would silently enable npm on repos whose engines
+#     floor is unsettled (DEV-1103).
+#
+# Neither fails loudly on its own, so they are pinned down here.
 
 on:
   pull_request:
     paths:
+      - "scripts/lib/renovate-preset.sh"
       - "scripts/org-ci-audit.sh"
+      - "scripts/sweep-renovate-preset.sh"
       - ".github/workflows/test/org-ci-audit-renovate-test.sh"
+      - ".github/workflows/test/renovate-sweep-rewrite-test.sh"
       - ".github/workflows/org-ci-audit-renovate-test.yml"
 
 permissions:
@@ -22,11 +30,13 @@ permissions:
 
 jobs:
   fixtures:
-    name: Renovate preset detection fixtures
+    name: Renovate preset library fixtures
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - name: Run Renovate preset detection fixture tests
+      - name: Preset detection fixtures
         run: .github/workflows/test/org-ci-audit-renovate-test.sh
+      - name: Config rewrite fixtures
+        run: .github/workflows/test/renovate-sweep-rewrite-test.sh

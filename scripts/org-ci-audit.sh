@@ -14,7 +14,7 @@
 #   - renovate: whether the repo has a Renovate config AND whether that config
 #     extends the shared org preset (floor; a ruleset can't require a file, so
 #     the audit is its enforcement point). Three states, because presence alone
-#     is not compliance — see renovate_state()
+#     is not compliance — see renovate_state() in scripts/lib/renovate-preset.sh
 #   - Silver/Gold rungs: installed callers for scorecard (Silver),
 #     release-please + release-artifacts (Gold)
 #   - next missing rung (the guidance action)
@@ -32,6 +32,12 @@ if [ "${1:-}" = "--org" ]; then ORG="${2:?--org needs a value}"; fi
 
 command -v gh >/dev/null || { echo "gh not found" >&2; exit 2; }
 command -v jq >/dev/null || { echo "jq not found" >&2; exit 2; }
+
+# Renovate preset detection is shared with scripts/sweep-renovate-preset.sh via
+# this library (DEV-1167). It is NOT duplicated here on purpose: two copies of
+# org Renovate policy drifting apart is precisely the DEV-1150 bug.
+# shellcheck source=scripts/lib/renovate-preset.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib/renovate-preset.sh"
 
 # Static/docs language signals — a repo tagged `docs` whose primary language is
 # outside this set is worth a second look (it may have grown code).
@@ -72,56 +78,6 @@ installed_callers() {
 }
 
 has_caller() { case " $1 " in *" $2 "*) return 0 ;; *) return 1 ;; esac; }
-
-# True when a Renovate config's `extends` pulls in this org's shared preset.
-# Matches the documented shorthands and tolerates a `#branch` / `:preset` suffix.
-extends_has_preset() {
-  local content="$1" entries
-  # Parse `extends` properly where we can. A bare substring match would also hit
-  # `matchPackageNames: ["SpiceLabsHQ/.github**"]` — a package selector, not a
-  # preset reference — and default.json itself contains exactly that.
-  entries="$(printf '%s' "$content" | jq -r '(.extends // []) | .[]' 2>/dev/null || true)"
-  if [ -n "$entries" ]; then
-    printf '%s\n' "$entries" | grep -qiE '^(github|local)>SpiceLabsHQ/\.github([#:].*)?$'
-    return
-  fi
-  # json5 or commented configs jq can't parse: match the preset reference inside
-  # an extends array, still avoiding the matchPackageNames form.
-  printf '%s' "$content" | tr -d ' \n' \
-    | grep -qiE '"extends":\[[^]]*"(github|local)>SpiceLabsHQ/\.github'
-}
-
-# Echoes the repo's Renovate state: `none`, `off-preset`, or `on-preset`.
-#
-# Presence alone is not compliance (DEV-1153). The shared preset (default.json in
-# this repo) is where org dependency policy lives — Pepper-gated auto-merge, the
-# 7-day minimumReleaseAge soak, and the vulnerabilityAlerts carve-out that lets a
-# CVE fix skip that soak. A config that omits the `extends` line inherits none of
-# it. This audit previously checked only that a file existed, so nine repos on a
-# preset-less seed scored identically to compliant ones for six weeks (DEV-1150).
-#
-# Renovate accepts several filenames/locations; check the documented set so a
-# repo using e.g. renovate.json5 isn't false-flagged as missing.
-renovate_state() {
-  local repo="$1" p content nested
-  for p in renovate.json renovate.json5 .renovaterc .renovaterc.json .renovaterc.json5 \
-           .github/renovate.json .github/renovate.json5 .gitlab/renovate.json; do
-    content="$(gh api "repos/${ORG}/${repo}/contents/${p}" --jq '.content' 2>/dev/null \
-      | base64 -d 2>/dev/null || true)"
-    [ -z "$content" ] && continue
-    if extends_has_preset "$content"; then echo "on-preset"; else echo "off-preset"; fi
-    return
-  done
-  # Also honor a `renovate` key inside package.json.
-  content="$(gh api "repos/${ORG}/${repo}/contents/package.json" --jq '.content' 2>/dev/null \
-    | base64 -d 2>/dev/null || true)"
-  if printf '%s' "$content" | grep -q '"renovate"'; then
-    nested="$(printf '%s' "$content" | jq -c '.renovate // empty' 2>/dev/null || true)"
-    if [ -n "$nested" ] && extends_has_preset "$nested"; then echo "on-preset"; else echo "off-preset"; fi
-    return
-  fi
-  echo "none"
-}
 
 # Auto-merge coverage (DEV-505). Read via GraphQL `autoMergeAllowed`, which is
 # exposed with plain repo read (Metadata). REST's `.allow_auto_merge` requires
