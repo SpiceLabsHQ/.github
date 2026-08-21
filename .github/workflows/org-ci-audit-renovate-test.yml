@@ -19,6 +19,7 @@ on:
   pull_request:
     paths:
       - "scripts/lib/renovate-preset.sh"
+      - "scripts/lib/renovate-extends-edit.py"
       - "scripts/org-ci-audit.sh"
       - "scripts/sweep-renovate-preset.sh"
       - ".github/workflows/test/org-ci-audit-renovate-test.sh"
