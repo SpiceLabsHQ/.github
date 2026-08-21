@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/SpiceLabsHQ/.github/compare/secret-scan-v1.1.0...secret-scan-v1.1.1) (2026-08-21)
+
+
+### Bug Fixes
+
+* **secret-scan:** key the concurrency group on the calling workflow (DEV-1181) ([#210](https://github.com/SpiceLabsHQ/.github/issues/210)) ([35cd554](https://github.com/SpiceLabsHQ/.github/commit/35cd55426f1f4df7132729a1eb5ee0aec09b1a35))
+
 ## [1.1.0](https://github.com/SpiceLabsHQ/.github/compare/secret-scan-v1.0.1...secret-scan-v1.1.0) (2026-07-04)
 
 
