@@ -10,7 +10,7 @@ Every repo in the org is held to a **mechanically enforced minimum CI tier** and
 
 | Level | Applies to | Contents | Enforced by |
 |---|---|---|---|
-| **Docs floor** | repos tagged `ci-exception: docs` | `pr-hygiene`, `secret-scan`, seeded `renovate.json` | ruleset `spice-ci-floor-docs` |
+| **Docs floor** | repos tagged `ci-exception: docs` | `pr-hygiene`, `secret-scan`, `pepper-pr-review`, seeded `renovate.json` | ruleset `spice-ci-floor-docs` |
 | **Code floor** | all untagged repos (incl. private) | `pr-hygiene`, `secret-scan`, `pepper-pr-review`, `sast`, `actions-audit`, `auto-merge enable`, seeded `renovate.json` | ruleset `spice-ci-floor-code` |
 | **Public overlay** | public repos (additive) | `scorecard-public` | ruleset `spice-ci-floor-public` |
 | **Silver** (guidance) | code repos | `scorecard` (where supported on private); `codeql` on public repos with a CodeQL-supported language; `dependency-review` on public repos with the Dependency Graph enabled — neither can be a blanket gate (an empty language matrix or a missing dependency graph fails the run) | audit flags the next rung on the dashboard |
@@ -189,7 +189,7 @@ Strongest first:
 
 ### Pepper PR Review (`pepper-pr-review.yml`)
 
-Pepper is the Spice Labs PR review bot, powered by Claude Sonnet 5 on AWS Bedrock. The reusable workflow is centrally maintained here and reaches every code-tier repo **zero-install**: the `spice-ci-floor-code` org ruleset injects [`floor-pepper.yml`](.github/workflows/floor-pepper.yml) (see [`rulesets/`](rulesets/)). A repo optionally carries its own review standards file — nothing else.
+Pepper is the Spice Labs PR review bot, powered by Claude Sonnet 5 on AWS Bedrock. The reusable workflow is centrally maintained here and reaches every repo on the code **and** docs floors **zero-install**: both the `spice-ci-floor-code` and `spice-ci-floor-docs` org rulesets inject [`floor-pepper.yml`](.github/workflows/floor-pepper.yml) (see [`rulesets/`](rulesets/)). Docs-tier coverage is ADR-0016 (DEV-650): docs repos are held to the same one-approval gate as every other tier, and without Pepper the only approver was a human who was often the author. A repo optionally carries its own review standards file — nothing else.
 
 **Naming legend:** workflow display name is **Pepper PR Review**, status check appears as **Pepper PR Review / Pepper review**, and formal approves and request-changes are authored by the **Pepper PR Review** GitHub App (the reviewer name shown on the PR, not the workflow bot account).
 
