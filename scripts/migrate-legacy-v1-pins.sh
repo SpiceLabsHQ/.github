@@ -6,10 +6,17 @@
 # For each target repo this script will:
 #   1. Scan .github/workflows/ for `SpiceLabsHQ/.github/.github/workflows/<wf>.yml@v1`
 #      (or `@v1.0.0`) and rewrite each pin to `@<wf>-v1` (per-workflow floating major)
-#   2. Seed .github/renovate.json (github-actions manager only) if the repo has no
-#      Renovate config — inert until the Mend Renovate GitHub App is installed on
-#      the org (DEV-494 decision: Renovate over Dependabot; Dependabot mis-handles
-#      the component-prefixed tags this org releases)
+#   2. Seed .github/renovate.json extending the shared org preset (default.json in
+#      this repo) if the repo has no Renovate config. DEV-494 decision: Renovate
+#      over Dependabot; Dependabot mis-handles the component-prefixed tags this
+#      org releases.
+#
+#      The seed deliberately does NOT set `enabledManagers` (DEV-1152). It used to
+#      pin github-actions only, which is how nine repos ended up watching Actions
+#      and nothing else — a narrowing fails silently, so the missing update PRs
+#      look identical to "no updates available". Omitting the key lets Renovate
+#      watch every manifest it detects. Note this step only ever runs on a repo
+#      with NO Renovate config, so it cannot narrow or widen an existing one.
 #   3. Report third-party actions that are not SHA-pinned (flag only, no changes)
 #   4. Create a branch, commit, push, open a PR against the repo's default branch
 #
@@ -28,23 +35,29 @@ ORG="SpiceLabsHQ"
 BRANCH="chore/migrate-legacy-v1-pins"
 COMMIT_MSG="chore(ci): migrate reusable workflow pins to per-workflow tags [DEV-494]"
 PR_TITLE="Migrate reusable workflow pins off frozen legacy @v1 [DEV-494]"
-SEED_COMMIT_MSG="chore(ci): seed Renovate config for GitHub Actions updates [DEV-494]"
-SEED_PR_TITLE="Seed Renovate config for GitHub Actions updates [DEV-494]"
+SEED_COMMIT_MSG="chore(ci): seed Renovate config extending the org preset [DEV-1155]"
+SEED_PR_TITLE="Seed Renovate config extending the org preset [DEV-1155]"
 read -r -d '' SEED_PR_BODY <<'EOF' || true
-Seeds `.github/renovate.json` (github-actions manager only) so GitHub Actions
-refs — third-party actions and any
-[SpiceLabsHQ/.github](https://github.com/SpiceLabsHQ/.github) reusable-workflow
-pins — get update PRs instead of going stale silently. The config is inert until
-the Mend Renovate GitHub App is installed on the org. Renovate was chosen over
-Dependabot because Dependabot mis-handles the component-prefixed release tags
-(`<workflow>-vX.Y.Z`) this org's reusable workflows use (details in DEV-494).
-Version-update config cannot be inherited org-wide from the `.github` repo, so
-it lives per-repo.
+Seeds `.github/renovate.json` so this repo's dependencies get update PRs instead
+of going stale silently. Today nothing proposes an update here at all.
 
-This repo has no legacy `@v1` reusable-workflow pins; this is the
-config-seeding half of the DEV-494 sweep only.
+The config extends the shared org preset
+([`default.json`](https://github.com/SpiceLabsHQ/.github/blob/main/default.json)),
+which is where org dependency policy lives: Pepper-gated auto-merge, a 7-day
+`minimumReleaseAge` supply-chain soak with a carve-out so vulnerability fixes
+skip the soak, `rebaseWhen: conflicted`, non-major update grouping, and the
+version parsing for this org's `<workflow>-vN` reusable-workflow tags. Renovate
+was chosen over Dependabot because Dependabot mis-handles those
+component-prefixed release tags (details in DEV-494).
 
-Tracking: DEV-494
+The seed sets no `enabledManagers`, so Renovate watches every manifest it
+detects rather than GitHub Actions alone. **If this repo has a `package.json`,
+a `go.mod`, or similar, expect the first run to open a backlog of updates for
+it.** That is intended — those dependencies have never been watched. The 7-day
+soak holds back anything released in the last week, so the backlog arrives
+slightly staggered.
+
+Tracking: DEV-1155
 EOF
 read -r -d '' PR_BODY <<'EOF' || true
 The org-wide `v1` tag on [SpiceLabsHQ/.github](https://github.com/SpiceLabsHQ/.github)
@@ -56,11 +69,12 @@ This PR:
 - Rewrites each `SpiceLabsHQ/.github/.github/workflows/<workflow>.yml@v1` pin to the
   per-workflow floating major `@<workflow>-v1`, which advances automatically to the
   latest non-breaking release (never across a major).
-- Seeds `.github/renovate.json` (github-actions manager only; inert until the Mend
-  Renovate GitHub App is installed on the org) so future workflow majors and
-  third-party action updates arrive as reviewable PRs. Renovate over Dependabot
-  because Dependabot mis-handles this org's component-prefixed release tags
-  (`<workflow>-vX.Y.Z`) — details in DEV-494.
+- Seeds `.github/renovate.json` extending the shared org preset
+  ([`default.json`](https://github.com/SpiceLabsHQ/.github/blob/main/default.json))
+  so future workflow majors and third-party action updates arrive as reviewable
+  PRs, under the org's auto-merge and supply-chain-soak policy. Renovate over
+  Dependabot because Dependabot mis-handles this org's component-prefixed release
+  tags (`<workflow>-vX.Y.Z`) — details in DEV-494.
 
 The green run of the migrated workflow on this PR doubles as the live test of the
 per-workflow tag in this repo.
@@ -68,20 +82,13 @@ per-workflow tag in this repo.
 Tracking: DEV-494
 EOF
 
+# Matches what Template-Code ships. Everything else — config:recommended, the
+# SpiceLabsHQ `<workflow>-vN` tag versioning rule, auto-merge, the release-age
+# soak — is inherited from default.json in this repo rather than restated here,
+# so a policy change lands in one place instead of N seeded copies (DEV-1152).
 RENOVATE_CONFIG='{
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended"],
-  "enabledManagers": ["github-actions"],
-  "packageRules": [
-    {
-      "description": "SpiceLabsHQ reusable workflows: release-please monorepo tags like pepper-pr-review-v1.2.3",
-      "matchManagers": ["github-actions"],
-      "matchDatasources": ["github-tags"],
-      "matchPackageNames": ["SpiceLabsHQ/.github**"],
-      "versionCompatibility": "^(?<compatibility>.*)-v(?<version>.*)$",
-      "versioning": "semver"
-    }
-  ]
+  "extends": ["github>SpiceLabsHQ/.github"]
 }'
 
 DRY_RUN=true
