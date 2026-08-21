@@ -36,9 +36,31 @@ Targeting is **exception-only**: the default assumption is that *every repo is a
 
 ### Maturity ladder: Floor → Silver → Gold
 
-The floor is the *minimum*; the ladder is the *paved road* up. **Silver** and **Gold** are guidance, not merge-blocking policy — a scheduled org-audit workflow ([`scripts/org-ci-audit.sh`](scripts/org-ci-audit.sh)) inventories each repo's installed callers and `renovate.json` against its tier and publishes a per-repo scorecard, **flagging the next missing rung for each repo** on the dashboard. It also flags exception-list honesty ("does anything tagged `docs` look like it grew code?"). Today the dashboard names the gap and a human opens the fix PR; auto-opening the next-rung PR is a planned enhancement, not yet implemented.
+The floor is the *minimum*; the ladder is the *paved road* up. **Silver** and **Gold** are guidance, not merge-blocking policy — a scheduled org-audit workflow ([`scripts/org-ci-audit.sh`](scripts/org-ci-audit.sh)) inventories each repo's installed callers, `renovate.json` and mise toolchain pinning against its tier and publishes a per-repo scorecard, **flagging the next missing rung for each repo** on the dashboard. It also flags exception-list honesty ("does anything tagged `docs` look like it grew code?"). Today the dashboard names the gap and a human opens the fix PR; auto-opening the next-rung PR is a planned enhancement, not yet implemented.
 
 **Renovate is floor, not Silver** — it's a near-zero-cost JSON file and it's what keeps every other floor workflow current. But a ruleset can't require a *file* to exist, so Renovate's floor status is enforced by the audit (a missing `renovate.json` is a dashboard violation), not by merge blocking.
+
+#### Toolchain pinning (mise)
+
+The audit also reports whether each repo pins its language runtimes with [mise](https://mise.jdx.dev), so a local checkout, a CI runner and a deployed image agree on versions. Same enforcement shape as Renovate — a file, so the dashboard is its enforcement point, not a ruleset.
+
+**The column is three-state on purpose, because most of the org has nothing for mise to manage.** A docs repo, a PowerShell repo, a markdown repo — none of them have a runtime, and reporting them as violations would drown the real ones. So:
+
+| Cell | Meaning |
+|---|---|
+| `—` | No language runtime detected. **Not** a violation; the repo is omitted from the gap list entirely. |
+| `✅` | Every detected runtime is pinned by a mise config. |
+| `⚠️ <tool>` | A mise config exists but leaves a detected runtime unpinned — the "adopted mise, forgot the Node version" case. |
+| `❌ <tool>` | The repo has a runtime and no mise config at all. |
+| `?` | The repo's file listing was truncated or unreadable, so no judgment was made. |
+
+Detection reads manifests (`package.json`, `composer.json`, `go.mod`, `pyproject.toml`, `*.tf`, …) up to two directories deep — so a monorepo sub-package still counts — and ignores vendored and fixture paths, which would otherwise invent runtimes a repo doesn't have. `mise.toml`, its alternate locations, and asdf's `.tool-versions` all count as a config. The decision logic is a pure function in [`scripts/org-ci-audit-mise.jq`](scripts/org-ci-audit-mise.jq), fixture-tested by [`scripts/test/org-ci-audit-mise_test.sh`](scripts/test/org-ci-audit-mise_test.sh).
+
+To check one repo without regenerating the whole dashboard:
+
+```bash
+scripts/org-ci-audit.sh --mise-repo BQE-Collector
+```
 
 ## Auto-merge policy: Pepper-gated (DEV-502)
 
