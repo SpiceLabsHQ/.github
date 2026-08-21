@@ -17,13 +17,17 @@
 #   $ts         — ISO-8601 UTC timestamp for the record
 #   $repo $pr_number $run_id $run_attempt $event $head_sha $pr_author $flavor
 #   $workflow_sha $standards_sha256
+#   $cookbook_ref — the Eng-Cookbook release the prompt carried (DEV-1119); "" when none
 #   $model $effort $max_turns $review_timeout_minutes   — as PASSED by the workflow
 #   $labels     — the PR's labels, comma-joined; "" when unreadable
 #   $no_verdict — "true" when the DEV-235 no-verdict escalation fired
 #   $collapse_fired — "true" when the DEV-674 collapse rewrote the verdict
 #
 # Output: the schema-v1 record, exactly the field set and field names in
-# DEV-653. Callers depend on the field names; adding one is a schema bump.
+# DEV-653 (plus the additive, nullable fields added since — `model_executed`,
+# DEV-881; `cookbook_ref`, DEV-1119). Callers depend on the field names:
+# renaming or removing one is a schema bump; adding a nullable one is not
+# (docs/pepper-audit.md, "Schema changes").
 
 def as_text: if type == "string" and length > 0 then . else null end;
 
@@ -95,6 +99,7 @@ def obs($raw): ($raw | fromjson? // null) | if type == "object" then . else null
   flavor: ($flavor | as_text),
   workflow_sha: ($workflow_sha | as_text),
   standards_sha256: ($standards_sha256 | as_text),
+  cookbook_ref: ($cookbook_ref | as_text),
   model: ($model | as_text),
   model_executed: $model_executed,
   effort: $effort_final,

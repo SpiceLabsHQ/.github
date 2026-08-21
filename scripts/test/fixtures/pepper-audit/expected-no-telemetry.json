@@ -11,6 +11,7 @@
   "flavor": "default",
   "workflow_sha": "3fd28051d0e4c8b6a1f2e3d4c5b6a7988990a1b2",
   "standards_sha256": null,
+  "cookbook_ref": null,
   "model": "arn:aws:bedrock:us-west-2:618640261060:application-inference-profile/xda66yqkegz4",
   "model_executed": null,
   "effort": "high",

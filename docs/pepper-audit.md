@@ -91,6 +91,7 @@ individual run is readable without AWS access at all.
   "flavor": "dependency",
   "workflow_sha": "3fd2805...",
   "standards_sha256": "9f86d081...",
+  "cookbook_ref": "v1.2.0",
   "model": "arn:aws:bedrock:us-west-2:618640261060:application-inference-profile/xda66yqkegz4",
   "model_executed": "us.anthropic.claude-sonnet-5",
   "effort": "high",
@@ -116,6 +117,7 @@ individual run is readable without AWS access at all.
 | `flavor` | `default` or `dependency`. A different prompt template is a different behavior surface, so it is a config dimension, not a label. |
 | `workflow_sha` | The commit of the reusable workflow this run used — which is also the commit its prompt templates and post-verdict scripts were fetched at. The prompt/template version. |
 | `standards_sha256` | SHA-256 of the calling repo's `standards_path` file, or `null` when it has none. The per-repo prompt-customization identity: it separates "this repo's PRs are big" from "this repo's custom standards drive long reviews", and it changes the moment a repo edits its standards mid-series. |
+| `cookbook_ref` | The Eng-Cookbook release tag whose `standards/` the prompt actually carried (DEV-1119), or `null` when the run degraded to the "no org standards this run" marker — no stable release, a failed checkout, or the `dependency` flavor, which has no standards block. Pepper reviews against the **latest stable** release, a deliberate float, so this is the field that attributes a behavior or cost shift to a cookbook release rather than to a prompt or model change. |
 | `model` | The application-inference-profile ARN the workflow resolved, **as passed** — the key AWS Cost Explorer attribution and IAM scoping hang off. Group cost by this. |
 | `model_executed` | The resolved model id the CLI actually sent (e.g. `us.anthropic.claude-sonnet-5`), read off the SDK stream; `null` when no stream was readable. A row whose `model_executed` names something its `model` profile does not wrap is the CLI ignoring the workflow — the DEV-881 failure class. |
 | `effort`, `cli_version` | Recorded **as executed** — read off what the CLI actually sent, with the workflow's own settings only as a fallback (both sources speak the same vocabulary, so as-executed is strictly the better observation). |
@@ -245,6 +247,22 @@ filter ispresent(outcome)
 | sort runs desc
 ```
 
+Or by Eng-Cookbook release (`cookbook_ref`), to tell a standards cut that
+started blocking on a new MUST apart from a prompt edit. `null` rows are the
+runs that carried no org standards (no stable release yet, a failed checkout, or
+the `dependency` flavor); a rate change between the `null` rows and the first
+tagged rows is the cost of the standards block itself:
+
+```text
+filter ispresent(outcome) and flavor = "default"
+| stats count(*) as runs,
+        sum(outcome = "changes_requested") * 100.0 / count(*) as changes_pct,
+        sum(outcome = "escalated") * 100.0 / count(*) as escalated_pct,
+        avg(tokens.input + tokens.cache_read + tokens.cache_creation) as avg_input_tokens
+    by cookbook_ref
+| sort runs desc
+```
+
 Just the failures, newest first, when you want the runs themselves:
 
 ```text
@@ -315,6 +333,8 @@ not by this query and never by a failing check — see
 
 `schema_version` is the contract. Every query above addresses fields by name, so
 renaming or removing one is a version bump, not a refactor — filter on
-`schema_version` when a series spans a bump. The record is assembled by
+`schema_version` when a series spans a bump. Adding a nullable field is not a
+bump: rows written before it simply lack the key, which Logs Insights reads as
+absent (`model_executed` and `cookbook_ref` arrived this way). The record is assembled by
 `scripts/pepper-audit-record.jq` and pinned field-by-field by
 `scripts/test/pepper-audit-record_test.sh`, which asserts the exact key set.

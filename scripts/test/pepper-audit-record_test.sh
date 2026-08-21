@@ -190,13 +190,27 @@ rm -f "${WORK}/labels"
 OUT="$(run_audit "${WORK}/does-not-exist.json" "${WORK}/also-missing.jsonl")"; RC=$?
 check_record "no-telemetry" "${FIX}/expected-no-telemetry.json" "${OUT}" "${RC}"
 
+# --- cookbook_ref is carried through verbatim (DEV-1119) --------------------
+# "Latest stable" Eng-Cookbook release floats by design, so the tag the prompt
+# actually carried must reach the record as passed — it is the only way to
+# attribute a behavior or cost shift to a cookbook release. Every fixture above
+# pins the null case (no release, or the run degraded to the marker).
+printf '%s' "pepper-approved" > "${WORK}/labels"
+OUT="$(run_audit "${FIX}/execution-file.json" "${FIX}/transcript.jsonl" COOKBOOK_REF=v1.2.3)"
+REF="$(record_of "${OUT}" | jq -r '.cookbook_ref')"
+if [ "${REF}" = "v1.2.3" ]; then
+  pass "cookbook_ref: the passed Eng-Cookbook tag is recorded as-is"
+else
+  fail "cookbook_ref: the passed Eng-Cookbook tag is recorded as-is" "actual: ${REF}"
+fi
+
 # --- The schema itself ------------------------------------------------------
 # The committed queries in docs/pepper-audit.md address fields by name, so the
 # key set is the contract. A rename is a schema bump, not a refactor.
 printf '%s' "pepper-approved" > "${WORK}/labels"
 OUT="$(run_audit "${FIX}/execution-file.json" "${FIX}/transcript.jsonl")"
 KEYS="$(record_of "${OUT}" | jq -c 'keys_unsorted')"
-WANT_KEYS='["schema_version","ts","repo","pr_number","run_id","run_attempt","event","head_sha","pr_author","flavor","workflow_sha","standards_sha256","model","model_executed","effort","max_turns","review_timeout_minutes","cli_version","outcome","collapse_fired","turns_used","duration_ms","cost_usd","tokens"]'
+WANT_KEYS='["schema_version","ts","repo","pr_number","run_id","run_attempt","event","head_sha","pr_author","flavor","workflow_sha","standards_sha256","cookbook_ref","model","model_executed","effort","max_turns","review_timeout_minutes","cli_version","outcome","collapse_fired","turns_used","duration_ms","cost_usd","tokens"]'
 if [ "${KEYS}" = "${WANT_KEYS}" ]; then
   pass "schema: the v1 field set is exactly as specified"
 else
