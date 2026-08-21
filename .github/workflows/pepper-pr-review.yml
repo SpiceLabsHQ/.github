@@ -852,6 +852,148 @@ jobs:
           sparse-checkout-cone-mode: false
           fetch-depth: 1
 
+      # DEV-1119 — give the review the org's released Eng-Cookbook standards.
+      #
+      # The `pepper-pr-review` App is installed org-wide, but the review token
+      # minted at the top of this job is down-scoped to the CALLING repo, so the
+      # cookbook (a private org repo) answers 404 to it. Mint a SECOND token
+      # here, down-scoped the other way — `Eng-Cookbook` only, contents:read —
+      # and let ONLY the resolve and checkout steps below consume it. Both run
+      # before the model starts; the agent never holds a cookbook credential
+      # (`persist-credentials: false` on the checkout is what keeps it out of
+      # `.pepper-standards/.git/config`). The review token is unchanged, so the
+      # ADR-0007 / DEV-875 blast-radius analysis is not reopened.
+      #
+      # Every step in this group FAILS OPEN. floor-pepper is a required check;
+      # the org standards are an auxiliary signal that degrades to a "no org
+      # standards this run" marker in the prompt, never to a red check.
+      #
+      # Skipped for the `dependency` flavor: that template has no
+      # `<!-- ORG_STANDARDS_PLACEHOLDER -->`, and minting a token for a block
+      # nothing will read is a credential with no purpose.
+      - name: Generate Eng-Cookbook read token (DEV-1119)
+        id: cookbook-token
+        if: steps.flavor.outputs.flavor != 'dependency'
+        continue-on-error: true
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ inputs.app_client_id }}
+          private-key: ${{ secrets.PEPPER_PR_REVIEW_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: Eng-Cookbook
+          permission-contents: read
+
+      # Pepper reviews against a CUT release, never the cookbook's `main`:
+      # being in a stable release is the enforceability line for a standard.
+      # "Latest stable" is a deliberate, release-gated float — the audit record
+      # carries the resolved tag (`cookbook_ref`) so a behavior or cost shift
+      # can be attributed to a cookbook release after the fact.
+      #
+      # Prereleases are excluded on purpose. Until the cookbook has a stable
+      # release this resolves to nothing and the run degrades to the marker.
+      - name: Resolve Eng-Cookbook release (DEV-1119)
+        id: cookbook-ref
+        if: steps.cookbook-token.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.cookbook-token.outputs.token }}
+          COOKBOOK_REPO: ${{ github.repository_owner }}/Eng-Cookbook
+        run: |
+          set -uo pipefail
+          TAG="$(gh release list -R "${COOKBOOK_REPO}" \
+            --exclude-drafts --exclude-pre-releases --limit 1 \
+            --json tagName --jq '.[0].tagName // empty' 2>/dev/null)" || TAG=""
+          # A tag name is a path component of the checkout below; accept only
+          # the characters a release-please tag can carry.
+          case "${TAG}" in
+            ''|*[!A-Za-z0-9._-]*)
+              echo "::notice::No stable Eng-Cookbook release resolved — the review runs without org standards (DEV-1119)."
+              TAG=""
+              ;;
+            *)
+              echo "Resolved Eng-Cookbook stable release: ${TAG}"
+              ;;
+          esac
+          echo "tag=${TAG}" >> "${GITHUB_OUTPUT}"
+
+      - name: Checkout Eng-Cookbook standards (DEV-1119)
+        id: cookbook-checkout
+        if: steps.cookbook-ref.outputs.tag != ''
+        continue-on-error: true
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ github.repository_owner }}/Eng-Cookbook
+          ref: refs/tags/${{ steps.cookbook-ref.outputs.tag }}
+          token: ${{ steps.cookbook-token.outputs.token }}
+          # Keep the cookbook token out of the working tree the agent reads.
+          persist-credentials: false
+          path: .pepper-standards
+          sparse-checkout: |
+            standards
+            hooks/standards-index.md
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+
+      # Render the block the prompt's `<org_standards>` section receives: the
+      # cookbook's generated standards index (its table rows only — the prose
+      # around them addresses a plugin runtime Pepper does not have, including
+      # the "delegate to spice:standards-guide" line), re-rooted so every path
+      # points into `.pepper-standards/`. Always writes a file, so the
+      # placeholder is always resolved: with no checkout it is the no-standards
+      # marker, which tells the reviewer to review off the diff.
+      #
+      # `ref` is the tag the prompt ACTUALLY carries — empty whenever the marker
+      # was written — and is what the audit record stores as `cookbook_ref`.
+      - name: Build org standards block (DEV-1119)
+        id: cookbook-block
+        if: always() && steps.flavor.outputs.flavor != 'dependency'
+        continue-on-error: true
+        env:
+          TAG: ${{ steps.cookbook-ref.outputs.tag }}
+          CHECKED_OUT: ${{ steps.cookbook-checkout.outcome }}
+          STANDARDS_DIR: .pepper-standards
+        run: |
+          set -uo pipefail
+          BLOCK="${RUNNER_TEMP}/org-standards.md"
+          marker() {
+            printf '_No org standards available this run (%s). Review off the diff and the project guidelines; do not read their absence as compliance or as a violation._\n' "$1" > "${BLOCK}"
+            echo "path=${BLOCK}" >> "${GITHUB_OUTPUT}"
+            echo "ref=" >> "${GITHUB_OUTPUT}"
+            echo "Org standards block: marker written — $1"
+            exit 0
+          }
+          [ -n "${TAG}" ] || marker "no stable Eng-Cookbook release"
+          [ "${CHECKED_OUT}" = "success" ] || marker "Eng-Cookbook ${TAG} could not be checked out"
+          [ -d "${STANDARDS_DIR}/standards" ] || marker "Eng-Cookbook ${TAG} has no standards/ directory"
+
+          INDEX="${STANDARDS_DIR}/hooks/standards-index.md"
+          ROWS="$(mktemp)"
+          if [ -f "${INDEX}" ]; then
+            # Table rows only; re-root the path column.
+            grep -E '^\|' "${INDEX}" \
+              | sed -E "s#\| *(standards/[A-Za-z0-9._/-]+\.md) *\|#| ${STANDARDS_DIR}/\1 |#" > "${ROWS}" || true
+          fi
+          if [ ! -s "${ROWS}" ]; then
+            # Older release with no generated index: list the files instead.
+            {
+              echo "| Standard | Path |"
+              echo "| --- | --- |"
+              find "${STANDARDS_DIR}/standards" -maxdepth 1 -name '*.md' 2>/dev/null | sort \
+                | while IFS= read -r f; do
+                    echo "| $(basename "${f}" .md) | ${f} |"
+                  done
+            } > "${ROWS}"
+          fi
+          {
+            printf 'Eng-Cookbook release **%s**, checked out read-only at `%s/`. Every path below is relative to this repository root; open a standard with the `Read` tool.\n\n' "${TAG}" "${STANDARDS_DIR}"
+            cat "${ROWS}"
+          } > "${BLOCK}"
+          rm -f "${ROWS}"
+          echo "path=${BLOCK}" >> "${GITHUB_OUTPUT}"
+          echo "ref=${TAG}" >> "${GITHUB_OUTPUT}"
+          echo "Org standards block written from Eng-Cookbook ${TAG}:"
+          cat "${BLOCK}"
+
       - name: Build prompt
         id: prompt
         env:
@@ -861,6 +1003,8 @@ jobs:
           GUIDELINES_MARKER: "<!-- PROJECT_GUIDELINES_PLACEHOLDER -->"
           COVERAGE_MARKER: "<!-- COVERAGE_NOTE_PLACEHOLDER -->"
           COVERAGE_NOTE_PATH: ${{ steps.coverage-note.outputs.path }}
+          ORG_STANDARDS_MARKER: "<!-- ORG_STANDARDS_PLACEHOLDER -->"
+          ORG_STANDARDS_PATH: ${{ steps.cookbook-block.outputs.path }}
           FLAVOR: ${{ steps.flavor.outputs.flavor }}
           REVIEW_TIMEOUT_MINUTES: ${{ inputs.review_timeout_minutes }}
           REVIEW_BUDGET_MARGIN_MINUTES: ${{ inputs.review_budget_margin_minutes }}
@@ -936,6 +1080,25 @@ jobs:
               { print }
             ' "${ASSEMBLED}" > "${COVERAGE_ASSEMBLED}"
             mv "${COVERAGE_ASSEMBLED}" "${ASSEMBLED}"
+          fi
+
+          # Fold the DEV-1119 org-standards block into the review template. The
+          # block step always writes a file — the rendered index or a "no org
+          # standards this run" marker — so the placeholder is always resolved
+          # on the default flavor. The dependency template has no marker, and a
+          # tagged template predating it simply gets no injection: a clean
+          # degradation, never an error.
+          if [ -n "${ORG_STANDARDS_PATH:-}" ] && [ -f "${ORG_STANDARDS_PATH}" ]; then
+            STANDARDS_ASSEMBLED="$(mktemp)"
+            awk -v marker="${ORG_STANDARDS_MARKER}" -v block_file="${ORG_STANDARDS_PATH}" '
+              $0 == marker {
+                while ((getline line < block_file) > 0) print line
+                close(block_file)
+                next
+              }
+              { print }
+            ' "${ASSEMBLED}" > "${STANDARDS_ASSEMBLED}"
+            mv "${STANDARDS_ASSEMBLED}" "${ASSEMBLED}"
           fi
 
           # Substitute scalar placeholders. reviewers_team is a team slug,
@@ -1438,6 +1601,11 @@ jobs:
           # The per-repo prompt-customization identity: it separates "this repo's
           # PRs are big" from "this repo's custom standards drive long reviews".
           STANDARDS_PATH: ${{ inputs.standards_path }}
+          # The Eng-Cookbook release the prompt actually carried (DEV-1119), or
+          # empty when the run degraded to the no-standards marker. "Latest
+          # stable" floats by design; this is what lets a behavior or cost
+          # shift be attributed to a cookbook release.
+          COOKBOOK_REF: ${{ steps.cookbook-block.outputs.ref }}
           # Run identity.
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}

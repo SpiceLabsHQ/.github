@@ -35,7 +35,8 @@
 #
 # Environment — workflow-supplied config (all optional; empty becomes null):
 #   REPO PR_NUMBER RUN_ID RUN_ATTEMPT EVENT_NAME HEAD_SHA PR_AUTHOR FLAVOR
-#   WORKFLOW_SHA STANDARDS_PATH MODEL EFFORT MAX_TURNS REVIEW_TIMEOUT_MINUTES
+#   WORKFLOW_SHA STANDARDS_PATH COOKBOOK_REF MODEL EFFORT MAX_TURNS
+#   REVIEW_TIMEOUT_MINUTES
 #   NO_VERDICT       — "true" when the DEV-235 no-verdict escalation fired
 #   COLLAPSE_FIRED   — "true" when the DEV-674 collapse rewrote the verdict
 #   GH_TOKEN         — App token, for reading the PR's final outcome labels
@@ -69,6 +70,7 @@ PR_AUTHOR="${PR_AUTHOR:-}"
 FLAVOR="${FLAVOR:-}"
 WORKFLOW_SHA="${WORKFLOW_SHA:-}"
 STANDARDS_PATH="${STANDARDS_PATH:-}"
+COOKBOOK_REF="${COOKBOOK_REF:-}"
 MODEL="${MODEL:-}"
 EFFORT="${EFFORT:-}"
 MAX_TURNS="${MAX_TURNS:-}"
@@ -189,6 +191,7 @@ RECORD="$(jq -cn \
   --arg flavor "${FLAVOR}" \
   --arg workflow_sha "${WORKFLOW_SHA}" \
   --arg standards_sha256 "${STANDARDS_SHA256}" \
+  --arg cookbook_ref "${COOKBOOK_REF}" \
   --arg model "${MODEL}" \
   --arg effort "${EFFORT}" \
   --arg max_turns "${MAX_TURNS}" \
@@ -228,7 +231,8 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
         ["tokens in / out", ((.tokens.input | show) + " / " + (.tokens.output | show))],
         ["tokens cache read / creation", ((.tokens.cache_read | show) + " / " + (.tokens.cache_creation | show))],
         ["workflow sha", (.workflow_sha | show)],
-        ["standards sha256", (.standards_sha256 | show)]
+        ["standards sha256", (.standards_sha256 | show)],
+        ["cookbook ref", (.cookbook_ref | show)]
       ] | .[] | "| " + .[0] + " | " + .[1] + " |"' 2>/dev/null
     echo
     echo "<details><summary>Raw audit record (schema v1)</summary>"
