@@ -1,0 +1,34 @@
+name: Org CI audit Dependabot alerts — test
+
+# Runs the fixture test for dependabot_state_from_response() — the decision
+# behind the audit dashboard's `Dep-alerts` column (DEV-1142), which reports
+# whether a repo has the Dependabot alerts that the org Renovate preset's
+# `vulnerabilityAlerts` carve-out is sourced from.
+#
+# WHY: the audit runs weekly against the live org, so a defect here never shows
+# up as a red PR — it shows up as a dashboard quietly saying the wrong thing
+# about a security guarantee. And the expensive failure is the false positive:
+# the audit's App token may not be able to read the field at all, and if that
+# unreadable case ever collapses to "off", every repo in the org lights up as a
+# gap on one run and the whole column stops being believed.
+
+on:
+  pull_request:
+    paths:
+      - "scripts/org-ci-audit.sh"
+      - "scripts/test/org-ci-audit-dependabot_test.sh"
+      - ".github/workflows/org-ci-audit-dependabot-test.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  dependabot-fixtures:
+    name: Dependabot-alerts decision fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Run Dependabot-alerts fixture test
+        run: scripts/test/org-ci-audit-dependabot_test.sh

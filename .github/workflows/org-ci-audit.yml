@@ -12,6 +12,13 @@ name: Org CI Audit
 # rotate. The App is granted, org-wide:
 #       Repository: Contents = read, Metadata = read, Issues = read/write
 #       Organization: Custom properties = read
+# The `Dep-alerts` column (DEV-1142) additionally wants:
+#       Repository: Dependabot alerts = read
+# It is NOT required for the workflow to run. Without it the audit cannot read
+# `hasVulnerabilityAlertsEnabled` and that column reports `?` — deliberately, so
+# an unreadable field never masquerades as a repo with alerts switched off. If
+# the column comes back `?` across the whole org, the grant is what's missing;
+# if it is `?` for only some repos, that is a real per-repo read failure.
 # Store the App's credentials as two secrets on THIS repo:
 #       CI_AUDIT_APP_CLIENT_ID    = the App's Client ID
 #       CI_AUDIT_APP_PRIVATE_KEY  = the App's private-key .pem contents
