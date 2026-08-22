@@ -1,0 +1,24 @@
+# GENERATED FILE — do not edit by hand.
+# Written by scripts/sync-workflow-checksums.sh from .github/workflows/release-please.yml.
+#
+# GitHub Actions never executes this file, and nothing here affects what
+# release-please.yml does. It exists so Renovate has something to edit INSIDE
+# workflows/release-please/ when it bumps a dependency release-please.yml uses. release-please
+# routes commits to packages by directory path, so a bump touching only the
+# workflow YAML would reach no package — no release, no tag, and every repo
+# pinned to the moving release-please-vN alias would keep the old version. Renovate is
+# pointed here by managerFilePatterns in .github/renovate.json and manages each
+# entry below independently of its twin in the workflow, which is why a single
+# bump PR updates both files.
+#
+# The steps mirror release-please.yml's `uses:` refs, plus the `with:` values Renovate
+# reads as versions (`python-version` and friends). The composite-action shape
+# is deliberate: it is the one shape whose schema has no runs-on / container /
+# services concept, so this file cannot acquire a runner dependency that no
+# workflow actually has. The indentation is required too — Renovate does not
+# extract a `uses:` written in column 0.
+runs:
+  using: composite
+  steps:
+    - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+    - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
