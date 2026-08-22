@@ -1,0 +1,24 @@
+# GENERATED FILE — do not edit by hand.
+# Written by scripts/sync-workflow-checksums.sh from .github/workflows/markdownlint.yml.
+#
+# GitHub Actions never executes this file, and nothing here affects what
+# markdownlint.yml does. It exists so Renovate has something to edit INSIDE
+# workflows/markdownlint/ when it bumps a dependency markdownlint.yml uses. release-please
+# routes commits to packages by directory path, so a bump touching only the
+# workflow YAML would reach no package — no release, no tag, and every repo
+# pinned to the moving markdownlint-vN alias would keep the old version. Renovate is
+# pointed here by managerFilePatterns in .github/renovate.json and manages each
+# entry below independently of its twin in the workflow, which is why a single
+# bump PR updates both files.
+#
+# The steps mirror markdownlint.yml's `uses:` refs, plus the `with:` values Renovate
+# reads as versions (`python-version` and friends). The composite-action shape
+# is deliberate: it is the one shape whose schema has no runs-on / container /
+# services concept, so this file cannot acquire a runner dependency that no
+# workflow actually has. The indentation is required too — Renovate does not
+# extract a `uses:` written in column 0.
+runs:
+  using: composite
+  steps:
+    - uses: DavidAnson/markdownlint-cli2-action@21c1be1b93ad9ed58fa840aacc3f279cde2a72ff # v24.2.0
+    - uses: actions/checkout@v7
