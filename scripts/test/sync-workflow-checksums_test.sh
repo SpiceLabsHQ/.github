@@ -973,6 +973,10 @@ check_pins "an unmirrorable dep is not reported to an unrelated PR" 0 "$GATE_HOL
   "" "cannot mirror" \
   .github/workflows/beta.yml workflows/beta/pins.yml
 
+# Regression: warn_unmirrorable must fire even when pins.yml is absent. Moving
+# the call past the missing-pins `continue` silently drops the only signal for a
+# dependency class an author cannot fix (DEV-1333).
+#
 # THE combined case: a workflow with an unmirrorable dep AND no pins.yml at all.
 # warn_unmirrorable runs before the missing-pins.yml `continue`, on purpose — an
 # author who deletes or never generates pins.yml still has to be told about a
