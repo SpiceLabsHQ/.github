@@ -95,28 +95,55 @@
 #   unmirrorable_deps() warns on exactly that, in both sync and --check, because
 #   the alternative is silence.
 #
-#   Enforcement lives in --check, never in --check-routing. A stale or
-#   hand-edited pins.yml is whole-repo drift, and DEV-726 is the standing lesson
-#   about letting whole-repo drift fail PRs that touched none of it. A MISSING
-#   pins.yml is only a warning: it degrades to the pre-DEV-1313 world, where the
-#   consequence is caught loudly by --check-routing on the bot PR itself.
+#   Enforcement is DIFF-SCOPED and lives in its own mode: --check-pins
+#   (DEV-1314). It reads the same changed-path list --check-routing does, and
+#   asks one question per workflow THIS PR actually touched — does
+#   workflows/<name>/pins.yml still say what the generator would write from
+#   .github/workflows/<name>.yml? The PR that edits a workflow is the one PR
+#   that can fix its mirror, and the only PR that should be asked to.
+#
+#   Why a separate mode and not part of --check-routing: --check-routing is the
+#   routing gate. It never hashes and never renders, it answers exactly one
+#   question ("does this diff reach the package directory?"), and it has to keep
+#   working on a machine with nothing installed — no yq, no pins file. Folding a
+#   content comparison into it would blur the diagnosis and take that property
+#   away. Two gates, two vocabularies, two verdicts.
+#
+#   Why not whole-repo: a whole-repo pins comparison would let one package's
+#   drift fail every unrelated open PR, which is precisely the DEV-726 blast
+#   radius DEV-1311 removed from this script. Do not reintroduce it. `--check`
+#   keeps the whole-repo pins view for a human who asks for it, and is
+#   deliberately run by no workflow.
+#
+#   In both modes a MISSING pins.yml is only a WARNING. It degrades to the
+#   pre-DEV-1313 world, where the consequence is caught loudly by
+#   --check-routing on the bot PR itself; and it is the interim state between
+#   the generator landing and the twelve files being committed, where a hard
+#   error would turn CI red for everyone in between. A pins.yml that DISAGREES
+#   is the dangerous state and is an ERROR: it routes — any file in the package
+#   dir does — so the routing gate goes green while Renovate bumps refs the
+#   workflow no longer has, or silently misses ones it does.
 #
 # Usage:
 #   scripts/sync-workflow-checksums.sh          # rewrite checksum + pins files in place
 #   scripts/sync-workflow-checksums.sh --check  # whole-repo hash/pins view; exit 1 on drift
 #   git diff --name-only "origin/$base...HEAD" |
-#     scripts/sync-workflow-checksums.sh --check-routing   # the PR gate
+#     scripts/sync-workflow-checksums.sh --check-routing   # the PR routing gate
+#   git diff --name-only "origin/$base...HEAD" |
+#     scripts/sync-workflow-checksums.sh --check-pins      # the PR pins-agreement gate
 #
 # Requirements: sha256sum or shasum. The script never invokes git — the diff
 # arrives as data on stdin, which is what lets the fixture tests drive every
 # case with plain path lists. `--check` and `--check-routing` additionally need
 # jq to validate release-please-config.json / .release-please-manifest.json
-# coverage. Sync and `--check` also need yq (mikefarah v4) — both write or
-# verify pins.yml, and the `with:` half of that mirror has to come from a real
-# YAML parser because that is where Renovate reads it from. Both tools are
-# preinstalled on ubuntu-latest, an assumption scripts/check-bot-allowlists.sh
-# and scripts/org-repo-settings-reconcile.sh already make. `--check-routing`,
-# the PR gate, still needs neither yq nor a pins file.
+# coverage. Sync, `--check` and `--check-pins` also need yq (mikefarah v4) —
+# all three write or verify pins.yml, and the `with:` half of that mirror has to
+# come from a real YAML parser because that is where Renovate reads it from.
+# Both tools are preinstalled on ubuntu-latest, an assumption
+# scripts/check-bot-allowlists.sh and scripts/org-repo-settings-reconcile.sh
+# already make. `--check-routing`, the routing gate, still needs neither yq nor
+# a pins file; `--check-pins` needs yq but not jq, since it makes no
+# whole-repo inventory claim.
 
 set -euo pipefail
 
@@ -127,6 +154,7 @@ MODE=sync
 case "${1:-}" in
   --check) MODE=check ;;
   --check-routing) MODE=check-routing ;;
+  --check-pins) MODE=check-pins ;;
   -h|--help)
     # The header comment block IS the help text, so the two cannot drift.
     awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
@@ -147,12 +175,14 @@ sha256() {
   fi
 }
 
-# Sync and --check both render pins.yml, whose `with:` half needs a real YAML
-# parser. Hard-error rather than degrade: silently skipping the `with:` pairs
-# would reproduce the exact omission (a live setup-python dep left unmirrored)
-# that this file's header exists to explain. --check-routing renders nothing and
-# is deliberately left alone — it is the PR gate and must keep working on a
-# machine with nothing installed.
+# Sync, --check and --check-pins all render pins.yml, whose `with:` half needs a
+# real YAML parser. Hard-error rather than degrade: silently skipping the `with:`
+# pairs would reproduce the exact omission (a live setup-python dep left
+# unmirrored) that this file's header exists to explain — and in --check-pins it
+# would be worse than the omission, because the gate would then go green on a
+# mirror missing exactly the dep it was added to catch. --check-routing renders
+# nothing and is deliberately left alone — it is the routing gate and must keep
+# working on a machine with nothing installed.
 if [ "$MODE" != check-routing ]; then
   command -v yq >/dev/null 2>&1 || {
     echo "ERROR: yq (mikefarah v4) is required to write or verify workflows/*/pins.yml" >&2
@@ -489,14 +519,17 @@ warn() {
   warnings=$((warnings + 1))
 }
 
-# --- the diff (--check-routing only) ----------------------------------------
+# --- the diff (--check-routing and --check-pins) ----------------------------
 # The changed paths arrive on stdin, one per line — exactly
 # `git diff --name-only <merge-base>...HEAD`. The script deliberately does not
 # shell out to git: the caller already knows the merge base, and taking the list
 # as data keeps every case in scripts/test/sync-workflow-checksums_test.sh a
 # handful of strings instead of a synthetic history.
+#
+# Both diff-scoped modes read it the same way, so the CI job computes the diff
+# once and feeds the same file to both.
 changed=()
-if [ "$MODE" = check-routing ]; then
+if [ "$MODE" = check-routing ] || [ "$MODE" = check-pins ]; then
   while IFS= read -r path; do
     [ -n "$path" ] || continue
     changed+=("$path")
@@ -505,7 +538,7 @@ if [ "$MODE" = check-routing ]; then
   # merge base was wrong or its checkout was too shallow. Refuse to pass
   # vacuously — a gate that is silently green is worse than no gate at all.
   if [ "${#changed[@]}" -eq 0 ]; then
-    echo "ERROR: --check-routing read no changed paths on stdin; expected the output of 'git diff --name-only <merge-base>...HEAD'" >&2
+    echo "ERROR: --$MODE read no changed paths on stdin; expected the output of 'git diff --name-only <merge-base>...HEAD'" >&2
     exit 2
   fi
 fi
@@ -551,6 +584,29 @@ routes_to() {
   return 1
 }
 
+# --check-pins scope: the workflows whose mirror THIS PR could have invalidated.
+# Two paths put a workflow in scope, and only two:
+#
+#   * .github/workflows/<name>.yml — the file pins.yml is generated FROM. Edit it
+#     and the mirror is stale until it is regenerated. (A shipped asset, e.g. one
+#     of pepper-pr-review's prompts, is NOT in scope: render_pins reads only the
+#     YAML, so no asset edit can change what the mirror should say.)
+#   * workflows/<name>/pins.yml — the mirror itself. A hand-edit is drift the PR
+#     making it introduced, and this is the PR that can undo it.
+#
+# Everything else is out of scope by construction. In particular a pins.yml that
+# was already stale on main, for a workflow this PR never touched, is invisible
+# here — that whole-repo shape is DEV-726 and stays in --check.
+pins_in_scope() {
+  local name="$1" path
+  for path in ${changed[@]+"${changed[@]}"}; do
+    case "$path" in
+      ".github/workflows/$name.yml" | "workflows/$name/pins.yml") return 0 ;;
+    esac
+  done
+  return 1
+}
+
 names=()
 while IFS= read -r file; do
   name="$(basename "$file" .yml)"
@@ -570,6 +626,39 @@ while IFS= read -r file; do
     [ -n "$trigger" ] || continue
     routes_to "$name" && continue
     fail "$trigger is in this PR but no file under $dir/ is — release-please routes commits to packages by directory path, so this commit would not reach the $name package (no release PR, no changelog entry, no tag). Run scripts/sync-workflow-checksums.sh and commit the updated $dir/workflow.sha256"
+    continue
+  fi
+
+  if [ "$MODE" = check-pins ]; then
+    # A workflow the PR DELETED never reaches here — reusable_workflows() reads
+    # the PR head — which is right: there is no mirror left to disagree with
+    # anything, and a stranded package dir is the orphan check's diagnosis under
+    # --check-routing, not this one's.
+    pins_in_scope "$name" || continue
+
+    # Diff-scoped, so this is finally the place the unmirrorable-dep warning was
+    # always meant to land: on the PR that opens the hole, not on a bot PR months
+    # later. Still a warning — there is no edit the author can make to fix it.
+    warn_unmirrorable "$name" "$file"
+
+    if [ ! -f "$dir/pins.yml" ]; then
+      # Missing is a WARNING, never a failure. See the header: this is the
+      # interim state before the twelve files are committed, and it is also the
+      # merely-degraded state (Renovate manages the refs in one place instead of
+      # two) whose consequence --check-routing already catches loudly on the bot
+      # PR. Failing here would turn CI red on every PR that touches a workflow.
+      warn "$dir/pins.yml does not exist, so Renovate action bumps for $name will not route on their own — run scripts/sync-workflow-checksums.sh and commit $dir/pins.yml"
+      continue
+    fi
+
+    expected_pins="$(render_pins "$name")"
+    if [ "$(cat "$dir/pins.yml")" != "$expected_pins" ]; then
+      # The diff is the actionable part: it names the ref or `with:` value that
+      # is in one file and not the other, which is the thing that will fail to
+      # route. `<` lines are what the mirror says now, `>` what it must say.
+      fail "$dir/pins.yml disagrees with $file, which this PR changes — pins.yml is the generated mirror Renovate bumps so that a bump lands inside $dir/ and cuts a $name release; a ref or version key missing from it bumps only $file, routes nowhere, and strands every consumer pinned to the moving $name-vN alias. Fix: run scripts/sync-workflow-checksums.sh and commit $dir/pins.yml (it is generated, not hand-edited).
+$(diff "$dir/pins.yml" <(printf '%s\n' "$expected_pins") | sed 's/^/  /' || true)"
+    fi
     continue
   fi
 
@@ -620,6 +709,27 @@ while IFS= read -r file; do
     warn_unmirrorable "$name" "$file"
   fi
 done < <(reusable_workflows)
+
+# --check-pins stops here, before every whole-repo check below. That is the
+# point of the mode: it makes exactly one claim, about exactly the workflows in
+# this PR's diff. The orphan and release-please inventory checks below are
+# whole-repo by necessity, they already run on every PR under --check-routing in
+# the same job, and duplicating them here would only give the same repo-wide
+# failure two chances to be attributed to a pins problem it has nothing to do
+# with.
+if [ "$MODE" = check-pins ]; then
+  if [ "$errors" -gt 0 ]; then
+    echo "" >&2
+    echo "$errors pins-agreement error(s). Fix: run scripts/sync-workflow-checksums.sh and commit the regenerated workflows/*/pins.yml." >&2
+    exit 1
+  fi
+  if [ "$warnings" -gt 0 ]; then
+    echo "OK: every pins file for a workflow this PR touches agrees with it, but $warnings warning(s) above are worth reading."
+  else
+    echo "OK: every pins file for a workflow this PR touches agrees with it."
+  fi
+  exit 0
+fi
 
 # Orphan package dirs: a workflows/<name>/ with no matching reusable workflow
 # means the workflow was renamed or deleted without cleaning up its package.
