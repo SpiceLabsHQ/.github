@@ -7,6 +7,11 @@
       "description": "Major bumps of embedded actions release the workflow as a minor (feat), keeping the -vN alias promise honest — DEV-494. If a major is genuinely breaking for the workflow's interface, escalate the PR title to feat! by hand.",
       "matchUpdateTypes": ["major"],
       "semanticCommitType": "feat"
+    },
+    {
+      "description": "default.json sets semanticCommitType=fix at the top level, but it also extends config:recommended, which sets semanticCommitType per-package inside packageRules — package rules apply after top-level config, so config:recommended's per-package setting wins and non-major action bumps land titled chore(deps) instead of fix(deps) (DEV-1312, DEV-1309). release-please only cuts a version bump on feat/fix commits, so a chore(deps) squash-merges to main without releasing, and the bumped action never reaches a repo still pinned to the moving <workflow>-vN alias. Scoped to minor/patch/pin/digest only (matching the update types default.json's own grouping rule uses) so this cannot match major updates and clobber the DEV-494 rule above — majors must keep resolving to feat regardless of array order.",
+      "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
+      "semanticCommitType": "fix"
     }
   ]
 }
