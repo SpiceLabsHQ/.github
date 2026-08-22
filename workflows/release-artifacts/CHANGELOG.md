@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.2](https://github.com/SpiceLabsHQ/.github/compare/release-artifacts-v1.0.1...release-artifacts-v1.0.2) (2026-08-22)
+
+
+### Bug Fixes
+
+* **deps:** route workflow action pins through per-package pins files ([#218](https://github.com/SpiceLabsHQ/.github/issues/218)) ([ad15be1](https://github.com/SpiceLabsHQ/.github/commit/ad15be11a8225abd28234d1c0f385888365a8059))
+
 ## [1.0.1](https://github.com/SpiceLabsHQ/.github/compare/release-artifacts-v1.0.0...release-artifacts-v1.0.1) (2026-07-04)
 
 
