@@ -99,6 +99,32 @@ check() {
   out="$(printf '%s\n' "$@" | "${repo}/scripts/sync-workflow-checksums.sh" --check-routing 2>&1)"
   status=$?
   set -e
+  verdict "$label" "$expected" "$status" "$out" "$must" "$must_not"
+}
+
+# The same assertion against `--check`, the whole-repo mode. Separate helper
+# rather than a flag on check() because the two modes take their input
+# differently — --check-routing reads a diff on stdin, --check reads the tree —
+# and because keeping them apart is what makes it obvious, case by case, which
+# mode a property is claimed for. Args as check(), minus the diff.
+check_repo() {
+  local label="$1" expected="$2" repo="$3" must="$4" must_not="$5"
+  local out status
+  set +e
+  out="$("${repo}/scripts/sync-workflow-checksums.sh" --check 2>&1)"
+  status=$?
+  set -e
+  verdict "$label" "$expected" "$status" "$out" "$must" "$must_not"
+}
+
+# Shared body: exit status, then what the report does and does not say. A gate
+# that fails without naming the offending workflow is not actionable; one that
+# names a workflow it should have ignored is noise the next reader has to
+# disprove.
+#   $1 label  $2 expected status  $3 actual status  $4 output
+#   $5 must mention  $6 must NOT mention
+verdict() {
+  local label="$1" expected="$2" status="$3" out="$4" must="$5" must_not="$6"
 
   if [ "$status" -ne "$expected" ]; then
     echo "FAIL: ${label}"
@@ -122,6 +148,29 @@ check() {
     return
   fi
   echo "PASS: ${label}"
+}
+
+# Assert that a generated pins file does ('have') or does not ('lack') contain a
+# line matching an ERE.
+#   $1 label  $2 have|lack  $3 file  $4 pattern
+pins_match() {
+  local label="$1" expect="$2" file="$3" pattern="$4" found=1
+  if [ ! -f "$file" ]; then
+    echo "FAIL: ${label}"
+    echo "  ${file} does not exist"
+    fails=$((fails + 1))
+    return
+  fi
+  grep -qE -- "$pattern" "$file" && found=0
+  if { [ "$expect" = have ] && [ "$found" -eq 0 ]; } ||
+    { [ "$expect" = lack ] && [ "$found" -ne 0 ]; }; then
+    echo "PASS: ${label}"
+    return
+  fi
+  echo "FAIL: ${label}"
+  echo "  expected ${file} to ${expect} a line matching /${pattern}/:"
+  indent "$(cat "$file")"
+  fails=$((fails + 1))
 }
 
 # --- the invariant ----------------------------------------------------------
@@ -313,6 +362,198 @@ check "the prefix-sibling's own package dir routes" 0 "$SIBLINGS" "" "" \
 
 check "the longer sibling routes on its own dir" 0 "$SIBLINGS" "" "" \
   .github/workflows/scorecard-public.yml workflows/scorecard-public/workflow.sha256
+
+# --- pins.yml: the BOT-side routing affordance (DEV-1313) -------------------
+# workflow.sha256 is how a HUMAN routes a workflow edit — run the script, commit
+# the file. pins.yml is how a BOT does it with nobody watching: Renovate is
+# pointed at workflows/*/pins.yml, so the same action ref is independently
+# managed in the workflow and in the package directory, and one bump PR edits
+# both. Nothing syncs the two at bump time; both just happen to be managed.
+#
+# Every case below is hermetic, deliberately. This suite runs in CI on every PR,
+# so it must not assert anything about THIS repo's whole-tree pins state: that
+# is exactly the DEV-726 shape — drift on main turning PRs red that touched none
+# of it — that --check-routing was narrowed to avoid. The pins properties are
+# claimed for --check, and --check is a human's whole-repo view, not a gate.
+
+PINS="$(fixture pins alpha)"
+PINS_YML="${PINS}/workflows/alpha/pins.yml"
+
+# fixture()'s workflows carry no `uses:` at all, so a fresh one is also THE EMPTY
+# CASE: a workflow with nothing to bump still gets a file, so the package
+# directory's shape never depends on today's action inventory. `steps: []` and
+# not the jobs:/runs-on: shape — that one makes Renovate manufacture an `ubuntu`
+# runner dependency out of a workflow that has no dependencies at all (DEV-1310).
+pins_match "a workflow with no actions still gets a pins file, as steps: []" have \
+  "$PINS_YML" '^  steps: \[\]$'
+pins_match "the empty case emits no entries" lack "$PINS_YML" '^[[:space:]]*-[[:space:]]+uses:'
+
+# Now the populated case. This workflow carries one of every `uses:` form that
+# matters, plus three that must NOT be mirrored.
+cat >"${PINS}/.github/workflows/alpha.yml" <<'YAML'
+name: alpha
+on:
+  workflow_call:
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0
+      - uses: github/codeql-action/upload-sarif@v4
+      - uses: docker://alpine:3.22
+      - uses: ./.github/actions/local-thing
+      - uses: actions/checkout@v7
+      - name: a shell body that merely talks about uses
+        run: |
+          echo "  uses: owner/repo@0000000000000000000000000000000000000000  # v1.2.3"
+          grep -nE '^[[:space:]]*-?[[:space:]]*uses:' something.yml
+uses: actions/never-extracted@v9
+YAML
+(cd "$PINS" && scripts/sync-workflow-checksums.sh >/dev/null)
+
+# THE completeness rule. The routing gate says a workflow YAML in the diff needs
+# a file under workflows/<name>/ in the same diff, so a Renovate bump routes only
+# if the ref it bumped is ALSO in pins.yml. Omit a bumpable form and that bump
+# fails the gate on a bot PR — the exact failure this epic exists to remove. So
+# every form Renovate has a datasource for is mirrored, not just the SHA-pinned
+# third-party ones.
+pins_match "a first-party major tag is mirrored (Renovate bumps v7 to v8 too)" have \
+  "$PINS_YML" '^[[:space:]]+- uses: actions/checkout@v7$'
+pins_match "a subpath action is mirrored" have \
+  "$PINS_YML" '^[[:space:]]+- uses: github/codeql-action/upload-sarif@v4$'
+pins_match "a docker:// ref is mirrored" have \
+  "$PINS_YML" '^[[:space:]]+- uses: docker://alpine:3\.22$'
+
+# The SHA and its trailing version comment are copied byte for byte. Renovate
+# rewrites that whole remainder in both files, so any reformatting here would
+# show up as permanent drift the moment a bump lands.
+pins_match "the SHA and its # vX.Y.Z comment are preserved verbatim" have \
+  "$PINS_YML" '^[[:space:]]+- uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10\.0\.0$'
+
+# A local ref names a path in this repo: no version, no datasource, so Renovate
+# can never open a bump PR for it and there is nothing for one to route.
+pins_match "a local ./ ref is not mirrored" lack "$PINS_YML" 'local-thing'
+
+# Extraction is a LINE regex, like Renovate's. A shell body or comment that
+# merely contains the text "uses:" is not a dependency — actions-audit.yml is
+# full of them, and mirroring one would put a bogus dep in front of Renovate.
+pins_match "a shell string that merely contains uses: is not mirrored" lack \
+  "$PINS_YML" 'owner/repo'
+
+# Renovate requires leading whitespace, so a `uses:` in column 0 is invisible to
+# it. Mirroring it would put a ref in pins.yml that Renovate will never bump in
+# the workflow — the two must see the same set.
+pins_match "a column-0 uses: in the workflow is not mirrored, matching Renovate" lack \
+  "$PINS_YML" 'never-extracted'
+
+# The header is the entire answer to "what is this file and why is it here?" for
+# whoever finds one and wonders. Pin the four things it has to say, because a
+# generated file with no explanation is how a future maintainer talks themselves
+# into deleting it.
+for needle in 'GENERATED FILE' 'scripts/sync-workflow-checksums\.sh' 'Renovate' \
+  'never executes this file'; do
+  pins_match "the generated header says '${needle}'" have "$PINS_YML" "$needle"
+done
+
+# Deduplicated: alpha.yml uses actions/checkout twice.
+dupes="$(grep -cE '^[[:space:]]+- uses: actions/checkout@v7$' "$PINS_YML" || true)"
+if [ "$dupes" = 1 ]; then
+  echo "PASS: a ref used twice in the workflow becomes one entry"
+else
+  echo "FAIL: a ref used twice in the workflow becomes one entry"
+  echo "  expected 1 actions/checkout@v7 entry, found ${dupes}"
+  fails=$((fails + 1))
+fi
+
+# THE column-0 trap, on the OUTPUT side and stated as a property of the whole
+# file rather than of one line: every `uses:` the generator emits must carry
+# leading whitespace, or Renovate reads the file and extracts nothing from it
+# while everything still looks right.
+col0="$(grep -vE '^[[:space:]]*#' "$PINS_YML" | grep -nE 'uses[[:space:]]*:' |
+  grep -vE '^[0-9]+:[[:space:]]' || true)"
+if [ -z "$col0" ]; then
+  echo "PASS: every generated uses: line carries leading whitespace"
+else
+  echo "FAIL: every generated uses: line carries leading whitespace"
+  echo "  these would be silently invisible to Renovate:"
+  indent "${col0}"
+  fails=$((fails + 1))
+fi
+
+# Idempotent: the second run is a no-op. Sorting and dedup are what make this
+# true, and a generator that churns its own output would make every workflow
+# edit produce a spurious diff.
+cp "$PINS_YML" "${TMP}/pins-first-run.yml"
+(cd "$PINS" && scripts/sync-workflow-checksums.sh >/dev/null)
+if cmp -s "${TMP}/pins-first-run.yml" "$PINS_YML"; then
+  echo "PASS: running the generator twice changes nothing the second time"
+else
+  echo "FAIL: running the generator twice changes nothing the second time"
+  indent "$(diff "${TMP}/pins-first-run.yml" "$PINS_YML" || true)"
+  fails=$((fails + 1))
+fi
+
+# pins.yml must NOT be hashed into workflow.sha256. It is generated FROM the
+# workflow, so including it would be circular — and worse, every Renovate bump
+# would rewrite pins.yml and leave the checksum instantly stale for a change the
+# bot had already routed correctly.
+pins_match "pins.yml is not hashed into workflow.sha256" lack \
+  "${PINS}/workflows/alpha/workflow.sha256" 'pins\.yml'
+
+# --- who enforces pins staleness --------------------------------------------
+# A pins.yml that disagrees with its workflow is the dangerous state: it still
+# ROUTES (any file in the package dir does), so the PR gate goes green while
+# Renovate is bumping refs the workflow no longer has — or silently missing ones
+# it does. Something has to notice, and that something is --check.
+HAND="$(fixture pins-hand-edited alpha beta)"
+printf '    - uses: actions/checkout@v99\n' >>"${HAND}/workflows/alpha/pins.yml"
+
+check_repo "a hand-edited pins.yml is caught by --check" 1 "$HAND" \
+  "workflows/alpha/pins.yml disagrees with" "workflows/beta/pins.yml"
+
+# ...and NOT by the PR gate. --check-routing was confined to routing on purpose
+# (DEV-1311); a stale pins.yml is whole-repo drift like any other, and letting
+# whole-repo drift fail unrelated PRs is DEV-726.
+check "a stale pins.yml does not fail an unrelated PR" 0 "$HAND" "" "" \
+  README.md
+check "a stale pins.yml does not fail its own workflow's PR either" 0 "$HAND" "" "" \
+  .github/workflows/alpha.yml workflows/alpha/workflow.sha256
+
+# A MISSING pins.yml is a WARNING, not an error. This is the DEV-1313 -> DEV-1314
+# interim made safe: this PR ships the generator, DEV-1314 commits the twelve
+# files, and in between `--check` on main must not hard-fail for everyone. It
+# also stands on its own merits — no pins.yml just means Renovate manages that
+# workflow's actions in one place instead of two, i.e. the pre-DEV-1313 world,
+# where the consequence surfaces loudly as a red --check-routing on the bot PR
+# rather than slipping through.
+MISSING="$(fixture pins-missing alpha beta)"
+rm -f "${MISSING}/workflows/alpha/pins.yml"
+
+check_repo "a missing pins.yml warns but does not fail --check" 0 "$MISSING" \
+  "workflows/alpha/pins.yml is missing" "workflows/beta/pins.yml is missing"
+
+# --- config:recommended's ignorePaths ---------------------------------------
+# config:recommended (inherited through default.json) sets ignorePaths including
+# **/test/**, **/tests/**, **/examples/** and **/vendor/**. A workflow named any
+# of those puts its pins.yml on a path Renovate silently never reads: bumps stop
+# routing, with no error anywhere. Nothing collides today. It is checked because
+# the failure would be invisible, and checking costs nothing.
+IGNORED="$(fixture pins-renovate-ignored test 2>/dev/null)"
+
+check_repo "a workflow name Renovate's ignorePaths swallow is an error under --check" 1 \
+  "$IGNORED" "matches an ignorePaths entry" ""
+
+set +e
+out="$("${IGNORED}/scripts/sync-workflow-checksums.sh" 2>&1 >/dev/null)"
+set -e
+if grep -qF -- "ignorePaths" <<<"$out"; then
+  echo "PASS: the generator warns while writing an ignorePaths-swallowed pins file"
+else
+  echo "FAIL: the generator warns while writing an ignorePaths-swallowed pins file"
+  indent "${out}"
+  fails=$((fails + 1))
+fi
 
 # --- the gate must not become vacuous ---------------------------------------
 # An empty diff means the caller's merge base was wrong or its checkout was too
