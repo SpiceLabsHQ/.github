@@ -6,12 +6,22 @@ name: Repo Checks
 # release-please routing depends on. Fails the PR when:
 #
 #   * a reusable workflow — or a file it ships, such as pepper-pr-review's
-#     prompts/ templates — changed but workflows/<name>/workflow.sha256 wasn't
-#     regenerated (commits would silently stop routing to that workflow's
-#     release-please package — no release PR, no changelog entry, no tag)
+#     prompts/ templates — is in THIS PR's diff and no file under
+#     workflows/<name>/ is. release-please assigns commits to packages by
+#     directory path prefix, and the PR's file list is the squash commit's file
+#     list, so such a commit would reach no package: no release PR, no changelog
+#     entry, no tag, and consumers pinned to the moving tag alias keep the old
+#     behavior. Regenerating workflows/<name>/workflow.sha256 is how a human
+#     satisfies this.
 #   * a package dir is orphaned (workflow renamed/deleted without cleanup)
 #   * release-please-config.json / .release-please-manifest.json don't match
 #     the reusable-workflow inventory 1:1
+#
+# The first assertion is scoped to the diff (DEV-1311). The whole-repo checksum
+# comparison it replaced tested a proxy — nothing ever reads the hash — and put
+# every open PR at the mercy of drift a merged bot PR had left on main, which
+# once turned this check red repo-wide for work touching none of it (DEV-726).
+# The last two stay whole-repo because no per-PR diff can express them.
 #
 # Fix locally with: scripts/sync-workflow-checksums.sh
 #
@@ -37,11 +47,45 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # actions/checkout — first-party, allowed to use a major-version tag.
+      # fetch-depth: 0 because the gate is diff-scoped: the default shallow
+      # checkout of the merge ref carries no base branch, and so no merge base.
       - uses: actions/checkout@v7
         with:
+          fetch-depth: 0
           persist-credentials: false
-      - name: Check workflow checksums + release-please registration
-        run: scripts/sync-workflow-checksums.sh --check
+
+      # The fixtures run first and in this same job: they cost about a second,
+      # they need no extra runner, and a routing verdict from a checker whose
+      # own logic is broken is not worth reading. Same reasoning as the
+      # bot-allowlists job below — this checker already runs on every PR, so
+      # there is nothing for a separate path-filtered `*-test.yml` to add.
+      - name: Run routing-invariant fixtures
+        run: scripts/test/sync-workflow-checksums_test.sh
+
+      - name: Check release routing for the workflows this PR touches
+        env:
+          # Via env, not a `${{ }}` interpolation in the script body: a branch
+          # name is attacker-controlled text.
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          # fetch-depth: 0 makes actions/checkout fetch
+          # +refs/heads/*:refs/remotes/origin/*, so origin/$BASE_REF is normally
+          # already here — but verify rather than assume, and fetch it when it
+          # is not. An unresolvable base would leave `git diff` with nothing to
+          # report, and a routing check fed an empty file list is a check that
+          # passes because it looked at nothing. The script hard-errors on an
+          # empty list for the same reason; the two guards are deliberate.
+          # The fallback fetch is anonymous — persist-credentials: false above
+          # drops the checkout's token — which is fine on a public repo.
+          if ! git rev-parse --verify --quiet "refs/remotes/origin/${BASE_REF}" >/dev/null; then
+            git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+          fi
+          # Three dots: the diff against the MERGE BASE, which is exactly the
+          # file list the squash commit will carry, and exactly what
+          # release-please routes on.
+          git diff --name-only "origin/${BASE_REF}...HEAD" \
+            | scripts/sync-workflow-checksums.sh --check-routing
 
   bot-allowlists:
     name: Bot allowlist drift
