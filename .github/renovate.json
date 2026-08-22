@@ -2,6 +2,10 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["github>SpiceLabsHQ/.github"],
   "enabledManagers": ["github-actions"],
+  "github-actions": {
+    "description": "Also manage workflows/<name>/pins.yml, the generated mirror of each reusable workflow's uses: refs that scripts/sync-workflow-checksums.sh writes into the workflow's release-please package directory (DEV-1313). release-please routes commits to packages by directory path, so a bump that touched only .github/workflows/<name>.yml would reach no package — no release, no tag, and every repo pinned to the moving <name>-vN alias would keep the old action. With the same ref independently managed in both files, one bump PR edits both and the bot's own commit routes, with no human touch. managerFilePatterns APPENDS to this manager's defaults rather than replacing them (mergeable: true), so the defaults are deliberately not restated here — one pattern inherits any future default. It also cannot be set at the top level; the validator rejects that, which is why it is nested inside the manager object.",
+    "managerFilePatterns": ["/(^|/)workflows/[^/]+/pins\\.ya?ml$/"]
+  },
   "packageRules": [
     {
       "description": "Major bumps of embedded actions release the workflow as a minor (feat), keeping the -vN alias promise honest — DEV-494. If a major is genuinely breaking for the workflow's interface, escalate the PR title to feat! by hand.",

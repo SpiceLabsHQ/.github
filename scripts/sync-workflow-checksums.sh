@@ -41,9 +41,69 @@
 #   `--check` keeps the whole-repo hash view for a human who wants it, and for
 #   any future non-blocking drift report.
 #
+# What workflows/<name>/pins.yml is (DEV-1313):
+#
+#   The checksum above is the affordance a HUMAN uses to satisfy the routing
+#   invariant. pins.yml is the affordance a BOT uses, and it works without
+#   anyone touching the PR.
+#
+#   Renovate is pointed at workflows/*/pins.yml by managerFilePatterns in
+#   .github/renovate.json, so it manages the same action refs in two places: the
+#   workflow YAML and this mirror inside the package directory. Nothing syncs
+#   those two files to each other at bump time — each occurrence is independently
+#   managed, so one bump PR edits both, and the bot's own commit therefore
+#   contains a file under workflows/<name>/ and routes. Without it a bump would
+#   touch only .github/workflows/<name>.yml, reach no package, cut no release,
+#   and leave every repo pinned to the moving <name>-vN alias on the old action.
+#
+#   Completeness is the whole point, and it is the ONLY thing standing between a
+#   bot bump and a silently uncut release. `Versioning integrity` is not a
+#   REQUIRED status check on this repo — PRs have merged with it red — so an
+#   unmirrored dependency does not block anything. The bump merges, the release
+#   is never cut, and the only trace is a red X on a merged PR nobody is paged
+#   about. Nothing downstream catches an omission here. Get it right at source.
+#
+#   "Every ref Renovate can bump" is therefore broader than "the SHA-pinned
+#   third-party actions", and broader than "the `uses:` lines". Renovate's
+#   github-actions manager runs TWO extraction passes over every file:
+#
+#     extractPackageFile() = extractWithRegex() + extractWithYAMLParser()
+#     (renovate/dist/modules/manager/github-actions/extract.js, 44.39.1)
+#
+#     * extractWithRegex is the line regex documented on workflow_steps(). Plain
+#       `uses:` action refs — depType "action" — come ONLY from this pass.
+#     * extractWithYAMLParser really does parse the YAML, and it is where
+#       jobs.*.runs-on ("github-runner"), jobs.*.container, jobs.*.services and
+#       `uses-with` deps come from. An earlier version of this comment claimed
+#       Renovate "never parses the YAML"; that was false, and it is exactly the
+#       sentence a future maintainer would have used to dismiss a real bump as
+#       impossible. It cost us one: actions/setup-python@v7 with
+#       `python-version: "3.14"` in sast.yml is a fully-formed managed dep
+#       (github-releases / actions/python-versions), and it was not mirrored.
+#
+#   So the mirror carries `uses:` refs AND the `with:` values Renovate reads —
+#   see workflow_steps() and workflow_with_pairs() for the two rules.
+#
+#   ONE KNOWN LIMITATION, stated rather than hidden. A pins.yml cannot mirror a
+#   `runs-on:`, `container:` or `services:` dep, because those exist only under
+#   a `jobs:` key and giving this file a `jobs:` key would manufacture a runner
+#   dependency out of nothing (see render_pins). Today no reusable workflow has
+#   one that Renovate would act on: `runs-on: ubuntu-latest` extracts as
+#   github-runner:ubuntu@latest and is skipped as `invalid-version`. The moment
+#   someone writes `runs-on: ubuntu-24.04`, or adds a container/services block,
+#   that becomes a live bumpable dep with no mirror and its bump will not route.
+#   unmirrorable_deps() warns on exactly that, in both sync and --check, because
+#   the alternative is silence.
+#
+#   Enforcement lives in --check, never in --check-routing. A stale or
+#   hand-edited pins.yml is whole-repo drift, and DEV-726 is the standing lesson
+#   about letting whole-repo drift fail PRs that touched none of it. A MISSING
+#   pins.yml is only a warning: it degrades to the pre-DEV-1313 world, where the
+#   consequence is caught loudly by --check-routing on the bot PR itself.
+#
 # Usage:
-#   scripts/sync-workflow-checksums.sh          # rewrite checksum files in place
-#   scripts/sync-workflow-checksums.sh --check  # whole-repo hash view; exit 1 on drift
+#   scripts/sync-workflow-checksums.sh          # rewrite checksum + pins files in place
+#   scripts/sync-workflow-checksums.sh --check  # whole-repo hash/pins view; exit 1 on drift
 #   git diff --name-only "origin/$base...HEAD" |
 #     scripts/sync-workflow-checksums.sh --check-routing   # the PR gate
 #
@@ -51,7 +111,12 @@
 # arrives as data on stdin, which is what lets the fixture tests drive every
 # case with plain path lists. `--check` and `--check-routing` additionally need
 # jq to validate release-please-config.json / .release-please-manifest.json
-# coverage.
+# coverage. Sync and `--check` also need yq (mikefarah v4) — both write or
+# verify pins.yml, and the `with:` half of that mirror has to come from a real
+# YAML parser because that is where Renovate reads it from. Both tools are
+# preinstalled on ubuntu-latest, an assumption scripts/check-bot-allowlists.sh
+# and scripts/org-repo-settings-reconcile.sh already make. `--check-routing`,
+# the PR gate, still needs neither yq nor a pins file.
 
 set -euo pipefail
 
@@ -81,6 +146,19 @@ sha256() {
     shasum -a 256 "$1" | awk '{print $1}'
   fi
 }
+
+# Sync and --check both render pins.yml, whose `with:` half needs a real YAML
+# parser. Hard-error rather than degrade: silently skipping the `with:` pairs
+# would reproduce the exact omission (a live setup-python dep left unmirrored)
+# that this file's header exists to explain. --check-routing renders nothing and
+# is deliberately left alone — it is the PR gate and must keep working on a
+# machine with nothing installed.
+if [ "$MODE" != check-routing ]; then
+  command -v yq >/dev/null 2>&1 || {
+    echo "ERROR: yq (mikefarah v4) is required to write or verify workflows/*/pins.yml" >&2
+    exit 2
+  }
+fi
 
 # A workflow is "reusable" iff it declares a workflow_call trigger at the start
 # of a line (repo-local workflows like pepper-self-review.yml never do; comments
@@ -137,10 +215,278 @@ workflow_assets() {
   done < <(workflow_asset_patterns "$1") | sort
 }
 
+# --- pins.yml (DEV-1313) ----------------------------------------------------
+
+# Pass 1 of the mirror: the `uses:` refs, deduplicated, in the order they appear
+# after sorting.
+#
+# This is Renovate's own extractWithRegex(), reimplemented. That pass is a LINE
+# regex and never looks at the YAML structure:
+#
+#   /^(?<prefix>\s+(?:-\s+)?uses\s*:\s*)(?<remainder>.+)$/     (parse.js)
+#
+# Three consequences are load-bearing:
+#
+#   * The leading whitespace is REQUIRED. A `uses:` in column 0 is silently NOT
+#     extracted. That is why render_pins() indents its steps, and why matching
+#     the same rule here keeps the mirror a mirror — the same set Renovate sees
+#     in the workflow, no more and no less.
+#   * A line whose remainder starts with `#` is not a ref, and a line that is
+#     itself a comment cannot match at all (the `#` would be the first non-space
+#     character). Shell strings and comments that merely CONTAIN "uses:" —
+#     actions-audit.yml is full of them — do not match either, because the line
+#     has to START with `uses:` after its indent.
+#   * Local refs (`./...`, `../...`) parse as kind "local", which
+#     extractWithRegex drops. They carry no version and no datasource, so
+#     Renovate can never open a bump PR for one and there is no commit for it to
+#     route. Everything else is kept: subpaths, first-party major tags, explicit
+#     hostnames, `docker://` refs.
+#
+# The remainder is copied VERBATIM — SHA, trailing `# vX.Y.Z` comment, quoting
+# and all — because Renovate rewrites that whole remainder in both files, and
+# reformatting here would show up as permanent drift after the first bump.
+#
+# Emits one line per step: the verbatim remainder, a tab, then the step's
+# Renovate-visible `with:` pairs (see workflow_with_pairs) if it has any.
+workflow_steps() {
+  local file="$1" pairs
+  pairs="$(workflow_with_pairs "$file")"
+
+  # Via the environment, not `awk -v`: BWK awk (the /usr/bin/awk every macOS
+  # ships) rejects a -v value containing a newline with "newline in string",
+  # and this value is a multi-line record set.
+  PAIRS="$pairs" awk '
+    # Renovate keys `with:` lookups by the parsed action reference, i.e. the
+    # remainder minus its trailing comment and surrounding quotes. Mirror that,
+    # or the join below misses every SHA-pinned step (all of which carry a
+    # comment) and every quoted one.
+    function refkey(r,   v, ci, f, l) {
+      ci = index(r, " #")
+      v = (ci > 0) ? substr(r, 1, ci - 1) : r
+      gsub(/^[[:space:]]+/, "", v)
+      gsub(/[[:space:]]+$/, "", v)
+      f = substr(v, 1, 1)
+      l = substr(v, length(v), 1)
+      if (length(v) >= 2 && f == l && (f == "\"" || f == "'"'"'")) {
+        v = substr(v, 2, length(v) - 2)
+      }
+      return v
+    }
+    BEGIN {
+      n = split(ENVIRON["PAIRS"], lines, "\n")
+      for (i = 1; i <= n; i++) {
+        j = index(lines[i], "\t")
+        if (j == 0) continue
+        tail = substr(lines[i], j + 1)
+        # A step with no Renovate-visible `with:` key is reported by yq with an
+        # empty tail; it needs no `with:` block in the mirror, and giving it one
+        # would make it visible to Renovate'"'"'s YAML pass for no reason.
+        if (tail == "") continue
+        withs[substr(lines[i], 1, j - 1), ++count[substr(lines[i], 1, j - 1)]] = tail
+      }
+    }
+    match($0, /^[[:space:]]+(-[[:space:]]+)?uses[[:space:]]*:[[:space:]]*/) {
+      ref = substr($0, RSTART + RLENGTH)
+      sub(/[[:space:]]+$/, "", ref)
+      if (ref == "" || substr(ref, 1, 1) == "#") next
+      k = refkey(ref)
+      if (k ~ /^\.\.?\//) next
+      if (count[k] > 0) {
+        for (i = 1; i <= count[k]; i++) print ref "\t" withs[k, i]
+      } else {
+        print ref
+      }
+    }
+  ' "$file" | LC_ALL=C sort -u
+}
+
+# Pass 2 of the mirror: the `with:` values Renovate turns into "uses-with" deps.
+#
+# extractWithYAMLParser() -> extractSteps() gives every step two chances at a
+# dep beyond its action ref:
+#
+#   * extractVersionedAction(), whose built-in table is
+#     `versionedActions = { go, node, python }` — i.e. actions/setup-go,
+#     actions/setup-node and actions/setup-python, read from
+#     `with.<lang>-version`.
+#   * CommunityActions, a table of 25 community actions in community.js, each
+#     declaring which `with:` key carries its version.
+#
+# Rather than restate those 28 action names — a list that grows with every
+# Renovate release and would rot silently the day it did — this matches on the
+# KEY NAMES those tables read, which is a much smaller and far more stable set.
+# The asymmetry is deliberate and is the safe one: mirroring a `with: version:`
+# for an action Renovate does not know is inert (both tables key on the action
+# name, so neither produces a dep from it, in the workflow or in the mirror),
+# while FAILING to mirror one is the silent uncut release this whole file exists
+# to prevent.
+#
+# The keys, read off renovate 44.39.1's community.js + extract.js:
+#   version          the default for every community action
+#   go/node/python-version                    extractVersionedAction
+#   deno-version bun-version ruby-version pixi-version toolchain cosign-release
+#                                             per-action withSchema overrides
+#   repo tag         jaxxstorm/action-install-gh-release, sigoden/install-binary
+#   version sha256   jdx/mise-action
+#   version runtime  pnpm/setup
+#
+# Read with a real YAML parser, not a line regex, because that is how Renovate
+# reads it: a `with:` block is associated with its step by YAML structure, and
+# no amount of line matching gets that association reliably right.
+RENOVATE_WITH_KEYS='^(version|go-version|node-version|python-version|deno-version|bun-version|ruby-version|pixi-version|toolchain|cosign-release|repo|tag|sha256|runtime)$'
+
+# Emits `<uses value>\t<key>=<value>[\t<key>=<value>...]`, one line per step
+# that has a `uses:`; the tail is empty for a step with no such key, and the
+# caller drops those. Recursive descent rather than `.jobs[].steps[]` so a step
+# nested in a `parallel:` block — which Renovate's ParallelStep schema also
+# walks — is not missed. Pairs are sorted so the output is stable regardless of
+# the order the keys appear in the workflow.
+workflow_with_pairs() {
+  yq -r "
+    .. | select(tag == \"!!map\" and has(\"uses\")) |
+    .uses as \$u |
+    ([ (.with // {}) | to_entries | .[] |
+       select(.key | test(\"${RENOVATE_WITH_KEYS}\")) |
+       .key + \"=\" + (.value | tostring) ] | sort) as \$p |
+    \$u + \"\t\" + (\$p | join(\"\t\"))
+  " "$1"
+}
+
+# Deps in a workflow that a pins.yml structurally CANNOT mirror: they live under
+# a `jobs:` key, and giving pins.yml a `jobs:` key would manufacture a runner
+# dependency with no twin in the workflow — see render_pins. Warn rather than
+# fail: unlike the ignorePaths collision below there is no fix the author can
+# apply, so a hard error would be a dead end. What the warning buys is that the
+# hole is visible on the PR that opens it instead of on some bot PR months later.
+#
+# `runs-on: ubuntu-latest` is not one of these: it extracts as
+# github-runner:ubuntu@latest and Renovate skips it as `invalid-version`. The
+# heuristic below — a digit immediately after the runner's dash — is a
+# deliberately conservative stand-in for that versioning check, and its only
+# failure mode is an extra warning.
+unmirrorable_deps() {
+  local file="$1"
+  yq -r '
+    [ .jobs[]? | ([."runs-on"] | flatten | .[] | select(. != null) | tostring) ] | .[]
+  ' "$file" 2>/dev/null | grep -E '^[A-Za-z]+-[0-9]' | sed 's/^/runs-on: /' || true
+  yq -r '
+    .jobs[]? | to_entries | .[] | select(.key == "container" or .key == "services") | .key
+  ' "$file" 2>/dev/null | sort -u | sed 's/$/:/' || true
+}
+
+# The exact intended content of workflows/<name>/pins.yml, on stdout. Sync
+# writes it; --check compares against it. One producer, so the two can't drift.
+#
+# THE SHAPE IS LOAD-BEARING, and not for the reason you might guess. Renovate's
+# YAML pass parses this file against a union that tries `{jobs: ...}` first and
+# `{runs: {using, steps}}` second (schema.js). Under the composite shape it
+# matches the second, which has no runs-on / container / services concept at
+# all, so the YAML pass can produce nothing here but the `uses-with` deps below.
+# Give the file a `jobs:` key instead and it matches the FIRST branch, and every
+# generated file acquires a github-runner dep with no twin in any workflow,
+# recurring on every Ubuntu release.
+#
+# Note also that the YAML pass sees a step only if it has a `with:` key
+# (`UsesStep` requires one), so the bare `- uses:` steps below are invisible to
+# it and are read purely by the line-regex pass. Adding `with:` is precisely
+# what makes a step visible to the YAML pass — which is the point, since that is
+# the only pass that produces `uses-with` deps.
+render_pins() {
+  local name="$1" steps
+  steps="$(workflow_steps ".github/workflows/$name.yml")"
+
+  cat <<EOF
+# GENERATED FILE — do not edit by hand.
+# Written by scripts/sync-workflow-checksums.sh from .github/workflows/$name.yml.
+#
+# GitHub Actions never executes this file, and nothing here affects what
+# $name.yml does. It exists so Renovate has something to edit INSIDE
+# workflows/$name/ when it bumps a dependency $name.yml uses. release-please
+# routes commits to packages by directory path, so a bump touching only the
+# workflow YAML would reach no package — no release, no tag, and every repo
+# pinned to the moving $name-vN alias would keep the old version. Renovate is
+# pointed here by managerFilePatterns in .github/renovate.json and manages each
+# entry below independently of its twin in the workflow, which is why a single
+# bump PR updates both files.
+#
+# The steps mirror $name.yml's \`uses:\` refs, plus the \`with:\` values Renovate
+# reads as versions (\`python-version\` and friends). The composite-action shape
+# is deliberate: it is the one shape whose schema has no runs-on / container /
+# services concept, so this file cannot acquire a runner dependency that no
+# workflow actually has. The indentation is required too — Renovate does not
+# extract a \`uses:\` written in column 0.
+runs:
+  using: composite
+EOF
+
+  if [ -z "$steps" ]; then
+    # A workflow with no bumpable dependency still gets a file, so the package
+    # directory's shape never depends on today's action inventory. `steps: []`
+    # rather than omitting the key: `runs.steps` is optional in the schema, but
+    # an explicit empty list says "nothing to mirror" instead of "nobody has
+    # looked at this yet".
+    printf '  steps: []\n'
+    return
+  fi
+
+  printf '  steps:\n'
+  printf '%s\n' "$steps" | awk '
+    function emit(v,   s) {
+      s = v
+      gsub(/\\/, "\\\\", s)
+      gsub(/"/, "\\\"", s)
+      return "\"" s "\""
+    }
+    {
+      n = split($0, f, "\t")
+      printf "    - uses: %s\n", f[1]
+      if (n < 2) next
+      printf "      with:\n"
+      for (i = 2; i <= n; i++) {
+        j = index(f[i], "=")
+        if (j == 0) continue
+        printf "        %s: %s\n", substr(f[i], 1, j - 1), emit(substr(f[i], j + 1))
+      }
+    }
+  '
+}
+
+# Package directory names config:recommended's ignorePaths would make Renovate
+# skip. workflows/<name>/pins.yml sits under <name>, so a workflow named any of
+# these has a pins.yml Renovate silently never reads — its bumps stop routing
+# with no error anywhere. Nothing collides today; this is here because the
+# failure would be invisible and the check costs nothing. Unlike
+# unmirrorable_deps() above this one IS a hard error under --check, because it
+# has a fix: rename the workflow.
+renovate_ignores_name() {
+  case "$1" in
+    node_modules|bower_components|vendor|examples|__tests__|test|tests|__fixtures__)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+# One warning per unmirrorable dep found in a workflow, naming it. Shared by
+# sync and --check so the hole shows up whichever one the author runs.
+warn_unmirrorable() {
+  local name="$1" file="$2" dep
+  while IFS= read -r dep; do
+    [ -n "$dep" ] || continue
+    warn "$file declares '$dep', which Renovate extracts as a bumpable dependency but workflows/$name/pins.yml structurally cannot mirror (it has no jobs: key, deliberately) — a bump to it will not route and will cut no $name release"
+  done < <(unmirrorable_deps "$file")
+}
+
 errors=0
 fail() {
   echo "ERROR: $1" >&2
   errors=$((errors + 1))
+}
+
+warnings=0
+warn() {
+  echo "WARNING: $1" >&2
+  warnings=$((warnings + 1))
 }
 
 # --- the diff (--check-routing only) ----------------------------------------
@@ -239,10 +585,39 @@ while IFS= read -r file; do
     elif [ "$(cat "$dir/workflow.sha256")" != "$expected" ]; then
       fail "$dir/workflow.sha256 is stale — $file or a file it ships changed; run scripts/sync-workflow-checksums.sh and commit the result"
     fi
+
+    # A MISSING pins.yml is a warning, not an error, for two reasons. It is the
+    # intended interim state between DEV-1313 (this generator) and DEV-1314
+    # (which commits the twelve files), and making it fatal would have broken
+    # --check on main for everyone in between. And on its own merits: no
+    # pins.yml just means Renovate manages that workflow's actions in one place
+    # instead of two, which is the pre-DEV-1313 world — a bump then fails
+    # --check-routing on the bot PR, loudly, rather than slipping through.
+    #
+    # A pins.yml that DISAGREES with its workflow is the dangerous state and is
+    # an error: it routes (any file in the package dir does), so the PR gate
+    # goes green while Renovate is bumping refs the workflow no longer has, or
+    # missing refs it does.
+    if [ ! -f "$dir/pins.yml" ]; then
+      warn "$dir/pins.yml is missing — Renovate action bumps for $name will not route on their own; run scripts/sync-workflow-checksums.sh"
+    elif [ "$(cat "$dir/pins.yml")" != "$(render_pins "$name")" ]; then
+      fail "$dir/pins.yml disagrees with $file — it is generated, not hand-edited; run scripts/sync-workflow-checksums.sh and commit the result"
+    fi
+
+    if renovate_ignores_name "$name"; then
+      fail "workflows/$name/ matches an ignorePaths entry inherited from config:recommended, so Renovate never reads $dir/pins.yml and bumps to $file would stop routing — rename the workflow, or override ignorePaths in .github/renovate.json"
+    fi
+    warn_unmirrorable "$name" "$file"
   else
     mkdir -p "$dir"
     printf '%s\n' "$expected" > "$dir/workflow.sha256"
     echo "synced $dir/workflow.sha256"
+    render_pins "$name" > "$dir/pins.yml"
+    echo "synced $dir/pins.yml"
+    if renovate_ignores_name "$name"; then
+      warn "workflows/$name/ matches an ignorePaths entry inherited from config:recommended — Renovate will never read $dir/pins.yml, so bumps to $file will not route"
+    fi
+    warn_unmirrorable "$name" "$file"
   fi
 done < <(reusable_workflows)
 
@@ -284,7 +659,11 @@ $(diff <(echo "$expected_keys") <(echo "$manifest_keys") | sed 's/^/  /' || true
     exit 1
   fi
   if [ "$MODE" = check ]; then
-    echo "OK: checksums, package dirs, release-please config and manifest are all in sync."
+    if [ "$warnings" -gt 0 ]; then
+      echo "OK: nothing is out of sync, but $warnings warning(s) above are worth reading."
+    else
+      echo "OK: checksums, pins files, package dirs, release-please config and manifest are all in sync."
+    fi
   else
     echo "OK: every reusable workflow this PR touches also has a file in its package dir; package dirs, release-please config and manifest are in sync."
   fi
