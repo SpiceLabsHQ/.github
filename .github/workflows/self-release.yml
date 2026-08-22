@@ -19,10 +19,18 @@ name: Self Release
 # GITHUB_TOKEN do not emit `release: published` events to other workflows,
 # which would leave release-tag-aliases.yml dead and the <name>-vN aliases
 # frozen.
+#
+# workflow_dispatch: lets a maintainer re-run this by hand instead of
+# waiting on a push. Two cases need it: regenerating a release PR whose
+# branch went stale (release-please won't rebase it on its own — close the
+# stale PR, delete its branch, then dispatch a run to recreate it), and
+# recovering from a transient failure (an App-token blip, a GitHub API
+# error) without landing an unrelated commit just to trigger a retry.
 
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
   release-please:
