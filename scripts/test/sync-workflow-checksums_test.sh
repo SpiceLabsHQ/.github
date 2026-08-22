@@ -973,6 +973,37 @@ check_pins "an unmirrorable dep is not reported to an unrelated PR" 0 "$GATE_HOL
   "" "cannot mirror" \
   .github/workflows/beta.yml workflows/beta/pins.yml
 
+# Regression: warn_unmirrorable must fire even when pins.yml is absent. Moving
+# the call past the missing-pins `continue` silently drops the only signal for a
+# dependency class an author cannot fix (DEV-1333).
+#
+# THE combined case: a workflow with an unmirrorable dep AND no pins.yml at all.
+# warn_unmirrorable runs before the missing-pins.yml `continue`, on purpose — an
+# author who deletes or never generates pins.yml still has to be told about a
+# dependency they have no fix for, not just the one they can fix by running the
+# generator. Reordering the two calls is a surviving mutant: the missing-pins
+# warning alone still passes every other case in this file, but silently drops
+# the unmirrorable warning exactly when both conditions coincide.
+GATE_HOLE_MISSING="$(fixture pins-gate-unmirrorable-missing alpha)"
+cat >"${GATE_HOLE_MISSING}/.github/workflows/alpha.yml" <<'YAML'
+name: alpha
+on:
+  workflow_call:
+jobs:
+  pinned-runner:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+YAML
+rm -f "${GATE_HOLE_MISSING}/workflows/alpha/pins.yml"
+
+check_pins "an unmirrorable dep still warns when pins.yml is missing too" 0 \
+  "$GATE_HOLE_MISSING" "cannot mirror" "" \
+  .github/workflows/alpha.yml
+check_pins "...and the missing-pins warning fires in the same run, not instead of it" 0 \
+  "$GATE_HOLE_MISSING" "workflows/alpha/pins.yml does not exist" "" \
+  .github/workflows/alpha.yml
+
 # Same vacuity guard as --check-routing has: a PR always changes something, so an
 # empty list means the caller's merge base was wrong. Green-on-no-input is worse
 # than no gate.
