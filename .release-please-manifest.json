@@ -10,5 +10,5 @@
   "workflows/sast": "1.2.1",
   "workflows/scorecard": "1.2.1",
   "workflows/scorecard-public": "1.2.1",
-  "workflows/secret-scan": "1.1.1"
+  "workflows/secret-scan": "1.1.2"
 }
