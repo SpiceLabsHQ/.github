@@ -9,9 +9,9 @@ flat in `.github/workflows/` — so these directories hold only release metadata
 - `CHANGELOG.md` — per-workflow changelog (managed by release-please)
 - `workflow.sha256` — checksum of the workflow file (managed by `scripts/sync-workflow-checksums.sh`)
 - `pins.yml` — mirror of the workflow's Renovate-visible dependencies (also managed by
-  `scripts/sync-workflow-checksums.sh`). **Not present yet** — DEV-1313 added the
-  generator, DEV-1314 lands the twelve files. Until it does, running the sync script
-  produces them as untracked files, which is expected.
+  `scripts/sync-workflow-checksums.sh`). Present and tracked for all twelve workflows
+  since DEV-1314. The sync script rewrites them in place, so re-running it on a clean
+  tree changes nothing.
 
 ## Why `workflow.sha256` exists (do not delete)
 
@@ -43,9 +43,8 @@ one stale file failed every unrelated open PR.
 ## Why `pins.yml` exists (do not edit by hand)
 
 `workflow.sha256` is how a **human** routes a workflow edit: run the script, commit
-the file. `pins.yml` is how a **bot** does it with nobody watching. (It is not doing
-that yet — see the file list above; DEV-1314 lands the files. Everything below
-describes what happens once it has.)
+the file. `pins.yml` is how a **bot** does it with nobody watching — live for all
+twelve workflows since DEV-1314.
 
 Renovate is pointed at `workflows/*/pins.yml` by `managerFilePatterns` in
 [`.github/renovate.json`](../.github/renovate.json), so each dependency is managed in
@@ -89,11 +88,11 @@ cannot acquire a dependency no workflow actually has.
 Staleness is checked by `scripts/sync-workflow-checksums.sh --check` — which nothing in
 CI runs today, so this is a check you perform, not one that performs itself. It is
 deliberately **not** part of the PR gate: a stale mirror is whole-repo drift, and letting
-whole-repo drift fail PRs that touched none of it is the DEV-726 mistake. (DEV-1314 adds
-a diff-scoped agreement step to `repo-checks.yml`, which is a different thing from
-re-running `--check` repo-wide.) A *missing* `pins.yml` is only a warning: it degrades to
-the pre-`pins.yml` world, where the consequence shows up loudly as a red routing check on
-the bot PR itself.
+whole-repo drift fail PRs that touched none of it is the DEV-726 mistake.
+(`repo-checks.yml` does run a diff-scoped agreement step over the pins files a PR
+actually touches, which is a different thing from re-running `--check` repo-wide.)
+A *missing* `pins.yml` is only a warning: it degrades to the pre-`pins.yml` world,
+where the consequence shows up loudly as a red routing check on the bot PR itself.
 
 See the [Versioning & releases](../README.md#versioning--releases) section of the
 main README for the full policy and consumer pinning guidance.
