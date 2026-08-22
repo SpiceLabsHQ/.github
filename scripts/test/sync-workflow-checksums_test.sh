@@ -731,6 +731,330 @@ rm -f "${MISSING}/workflows/alpha/pins.yml"
 check_repo "a missing pins.yml warns but does not fail --check" 0 "$MISSING" \
   "workflows/alpha/pins.yml is missing" "workflows/beta/pins.yml is missing"
 
+# --- --check-pins: the diff-scoped pins-agreement gate (DEV-1314) -----------
+# --check above is the whole-repo view and is invoked by no workflow, so until
+# now nothing in CI asserted a pins.yml still matched the workflow it mirrors.
+# That gap is not cosmetic: `Versioning integrity` is not a REQUIRED status
+# check here (PRs have merged with it red), so there is no downstream net either.
+# A mirror that quietly loses a ref means the next bump of that ref touches no
+# package file, cuts no release, and strands every consumer — the original
+# DEV-1313 bug, reintroduced silently.
+#
+# --check-pins closes it WITHOUT reintroducing DEV-726. It reads the same
+# changed-path list --check-routing does and judges only the workflows in it.
+# Three properties are load-bearing and each has a case below:
+#   * drift on a workflow THIS PR touched fails, naming it;
+#   * drift on a workflow it did NOT touch is invisible (the DEV-726 shape);
+#   * a MISSING pins.yml never fails, because the twelve files do not exist yet.
+
+# The routing gate takes its diff on stdin; so does this one. Same helper shape.
+check_pins() {
+  local label="$1" expected="$2" repo="$3" must="$4" must_not="$5"
+  shift 5
+  local out status
+  set +e
+  out="$(printf '%s\n' "$@" | "${repo}/scripts/sync-workflow-checksums.sh" --check-pins 2>&1)"
+  status=$?
+  set -e
+  verdict "$label" "$expected" "$status" "$out" "$must" "$must_not"
+}
+
+# A fixture whose workflows carry real, mirrorable dependencies — one plain
+# `uses:` ref and one `with:` version key, the two halves of the mirror — so a
+# case can drift either one. alpha and beta are identical on purpose: whichever
+# one a case drifts, the other is the control that must stay unmentioned.
+# Both pins files start in agreement, written by the real generator.
+gate_fixture() {
+  local dir name
+  dir="$(fixture "$1" alpha beta)"
+  for name in alpha beta; do
+    cat >"${dir}/.github/workflows/${name}.yml" <<YAML
+name: ${name}
+on:
+  workflow_call:
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+YAML
+  done
+  (cd "$dir" && scripts/sync-workflow-checksums.sh >/dev/null)
+  printf '%s\n' "$dir"
+}
+
+# The baseline: a workflow in the diff whose mirror still agrees. Without this
+# the failing cases below could all be passing for the wrong reason (a gate that
+# fails on everything is not a gate).
+AGREE="$(gate_fixture pins-gate-agree)"
+check_pins "a workflow in the diff whose pins file agrees passes" 0 "$AGREE" "" "" \
+  .github/workflows/alpha.yml workflows/alpha/pins.yml workflows/alpha/workflow.sha256
+
+# THE failure this gate exists for: a ref reaches the workflow and not the
+# mirror, so Renovate will only ever see it in one place and its bump will not
+# route. This is what an author regenerating nothing after a hand edit leaves.
+DRIFTED="$(gate_fixture pins-gate-drifted)"
+printf '      - uses: actions/setup-node@v6\n' >>"${DRIFTED}/.github/workflows/alpha.yml"
+
+check_pins "a ref added to the workflow but not the mirror fails, naming the workflow" 1 \
+  "$DRIFTED" "workflows/alpha/pins.yml disagrees with .github/workflows/alpha.yml" \
+  "workflows/beta/pins.yml" \
+  .github/workflows/alpha.yml workflows/alpha/workflow.sha256
+
+# Actionable means three things, and each is separately droppable: the report
+# has to name the ref that is missing, and it has to name the command that fixes
+# it. A verdict of "something disagrees" sends the reader back to this script.
+check_pins "the drift report shows the ref missing from the mirror" 1 "$DRIFTED" \
+  "actions/setup-node@v6" "" \
+  .github/workflows/alpha.yml
+# Matched against the workflow's OWN path, not the bare command: the closing
+# summary line names the command too, so a looser needle here would go on
+# passing after the per-workflow message stopped saying what to commit.
+check_pins "the drift report names the fix command and the file to commit" 1 "$DRIFTED" \
+  "run scripts/sync-workflow-checksums.sh and commit workflows/alpha/pins.yml" "" \
+  .github/workflows/alpha.yml
+
+# The `with:` half of the mirror drifts independently of the `uses:` half, and it
+# is the half that was missed once already (sast.yml's python-version). Here the
+# ref set is IDENTICAL in both files and only the version key moved, so nothing
+# but a full content comparison catches it.
+WITHDRIFT="$(gate_fixture pins-gate-with-drift)"
+sed -i.bak 's/python-version: "3.14"/python-version: "3.15"/' \
+  "${WITHDRIFT}/.github/workflows/alpha.yml"
+rm -f "${WITHDRIFT}/.github/workflows/alpha.yml.bak"
+
+# Premise guards. The edit has to have landed, and the `uses:` set has to be
+# UNCHANGED — otherwise this case would also pass under a generator that mirrored
+# nothing but the refs, and would be no evidence for the `with:` half at all.
+if ! grep -qF 'python-version: "3.15"' "${WITHDRIFT}/.github/workflows/alpha.yml"; then
+  premise_gone "the with-drift fixture's python-version was not actually changed"
+fi
+if ! diff -q \
+  <(grep -E '^[[:space:]]+- uses:' "${WITHDRIFT}/workflows/alpha/pins.yml") \
+  <(grep -E '^[[:space:]]+- uses:' "${WITHDRIFT}/workflows/beta/pins.yml") >/dev/null; then
+  premise_gone "the with-drift fixture moved a uses: ref too — the case no longer isolates the with: half"
+fi
+
+check_pins "a with: version key drifting is caught, not just uses: lines" 1 "$WITHDRIFT" \
+  "workflows/alpha/pins.yml disagrees with" "workflows/beta/pins.yml" \
+  .github/workflows/alpha.yml
+check_pins "the with: drift report shows the version the workflow now asks for" 1 \
+  "$WITHDRIFT" "3.15" "" \
+  .github/workflows/alpha.yml
+
+# A MISSING pins.yml must NOT fail. The twelve files do not exist on main yet —
+# they land in the migration that follows — so a gate that errored on absence
+# would break CI for every PR touching a workflow in the interim. It also stands
+# on its own merits: no mirror is the pre-DEV-1313 world, where the consequence
+# is caught loudly by --check-routing on the bot PR rather than slipping through.
+GATE_MISSING="$(gate_fixture pins-gate-missing)"
+rm -f "${GATE_MISSING}/workflows/alpha/pins.yml"
+
+check_pins "a workflow in the diff with NO pins file warns but does not fail" 0 \
+  "$GATE_MISSING" "workflows/alpha/pins.yml does not exist" "workflows/beta/pins.yml" \
+  .github/workflows/alpha.yml workflows/alpha/workflow.sha256
+
+# The whole-tree version of the same interim state: a repo with no pins files at
+# all, which is exactly what main looks like today. Nothing may fail.
+PINLESS="$(gate_fixture pins-gate-pinless)"
+rm -f "${PINLESS}"/workflows/*/pins.yml
+check_pins "a repo with no pins files anywhere cannot go red" 0 "$PINLESS" "" "" \
+  .github/workflows/alpha.yml .github/workflows/beta.yml \
+  workflows/alpha/workflow.sha256 workflows/beta/workflow.sha256
+
+# --- DEV-726 again: drift elsewhere on main is not this PR's problem ---------
+# beta's mirror goes stale on main. Under a whole-repo pins comparison — the
+# obvious, wrong way to build this gate — every open PR would go red for it.
+GATE_STALE="$(gate_fixture pins-gate-stale-on-main)"
+printf '      - uses: actions/setup-node@v6\n' >>"${GATE_STALE}/.github/workflows/beta.yml"
+
+# Premise guard: the drift has to be real, or every assertion below is vacuous.
+if "${GATE_STALE}/scripts/sync-workflow-checksums.sh" --check >/dev/null 2>&1; then
+  echo "FAIL: stale-pins fixture is not actually stale — --check should have failed" >&2
+  exit 2
+fi
+echo "PASS: stale-pins fixture is genuinely stale (--check fails on it)"
+
+# The positive control, and the reason the two cases after it are not vacuous:
+# beta's OWN PR does fail. Delete the scope test and this still passes while the
+# regression cases below go red — which is what makes them evidence.
+check_pins "the drifted workflow's own PR does fail" 1 "$GATE_STALE" \
+  "workflows/beta/pins.yml disagrees with" "" \
+  .github/workflows/beta.yml workflows/beta/workflow.sha256
+
+# THE regression test. A PR touching neither workflow passes, however stale
+# beta's mirror is on main.
+check_pins "an unrelated PR passes while another package's mirror is stale on main" 0 \
+  "$GATE_STALE" "" "" \
+  README.md
+
+# ...and so does a PR on a DIFFERENT workflow, whose own mirror is fine.
+check_pins "another workflow's PR passes while beta's mirror is stale on main" 0 \
+  "$GATE_STALE" "" "" \
+  .github/workflows/alpha.yml workflows/alpha/workflow.sha256
+
+# A shipped asset is NOT in pins scope, even though it IS in routing scope. The
+# two rules are different because their subjects are: routing asks what a commit
+# must reach, and a prompt edit must reach the package; render_pins reads only
+# the workflow YAML, so no prompt edit can change what the mirror should say.
+# Scoping on assets would drag pre-existing drift into unrelated prompt PRs.
+ASSET_DRIFT="$(fixture pins-gate-assets pepper-pr-review)"
+mkdir -p "${ASSET_DRIFT}/prompts"
+printf 'review prompt\n' >"${ASSET_DRIFT}/prompts/pr-review-default.md"
+(cd "$ASSET_DRIFT" && scripts/sync-workflow-checksums.sh >/dev/null)
+printf '    - uses: actions/checkout@v99\n' >>"${ASSET_DRIFT}/workflows/pepper-pr-review/pins.yml"
+
+# Positive control first, or the case below passes for want of any drift at all.
+check_pins "the drifted mirror fails when its own workflow YAML is in the diff" 1 \
+  "$ASSET_DRIFT" "workflows/pepper-pr-review/pins.yml disagrees with" "" \
+  .github/workflows/pepper-pr-review.yml workflows/pepper-pr-review/workflow.sha256
+
+check_pins "a shipped-asset edit does not put a workflow in pins scope" 0 \
+  "$ASSET_DRIFT" "" "" \
+  prompts/pr-review-default.md workflows/pepper-pr-review/workflow.sha256
+
+# ...while the SAME diff is very much in routing scope, which is the whole point
+# of keeping the two gates apart.
+check "the same shipped-asset edit is still in routing scope" 1 "$ASSET_DRIFT" \
+  "no file under workflows/pepper-pr-review/ is" "" \
+  prompts/pr-review-default.md
+
+# The mirror itself, hand-edited, IS in scope on the PR that edits it — the one
+# PR that can undo it. Note the workflow YAML is not in this diff at all.
+GATE_HAND="$(gate_fixture pins-gate-hand-edited)"
+printf '    - uses: actions/checkout@v99\n' >>"${GATE_HAND}/workflows/alpha/pins.yml"
+
+check_pins "a hand-edited pins.yml is in scope on the PR that edits it" 1 "$GATE_HAND" \
+  "workflows/alpha/pins.yml disagrees with" "workflows/beta/pins.yml" \
+  workflows/alpha/pins.yml
+
+# --check-pins stops before every whole-repo check in the script. An orphaned
+# package dir is the ROUTING gate's diagnosis — that gate already runs in the
+# same job — and repeating it here would give one repo-wide failure two chances
+# to be misattributed to a pins problem, while making this mode depend on jq it
+# has no use for.
+GATE_ORPHAN="$(gate_fixture pins-gate-orphan)"
+rm -f "${GATE_ORPHAN}/.github/workflows/beta.yml"
+
+check "orphan control: --check-routing does report the stranded package dir" 1 \
+  "$GATE_ORPHAN" "workflows/beta/ has no matching reusable workflow" "" \
+  .github/workflows/beta.yml
+check_pins "--check-pins makes no whole-repo inventory claim" 0 "$GATE_ORPHAN" "" "" \
+  .github/workflows/alpha.yml workflows/alpha/pins.yml
+
+# The unmirrorable-dep warning finally has a PR-scoped home. `runs-on:` and
+# `container:` deps are real to Renovate and structurally cannot live in a
+# composite-shaped mirror; the generator has always said so, but only to whoever
+# ran it. Diff-scoped, the hole is now reported on the PR that opens it. Still a
+# warning — there is no edit the author could make to fix it.
+GATE_HOLE="$(gate_fixture pins-gate-unmirrorable)"
+cat >"${GATE_HOLE}/.github/workflows/alpha.yml" <<'YAML'
+name: alpha
+on:
+  workflow_call:
+jobs:
+  pinned-runner:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+YAML
+(cd "$GATE_HOLE" && scripts/sync-workflow-checksums.sh >/dev/null 2>&1)
+
+check_pins "an unmirrorable dep is reported on the PR that opens it" 0 "$GATE_HOLE" \
+  "cannot mirror" "" \
+  .github/workflows/alpha.yml workflows/alpha/pins.yml
+
+# ...and not on a PR that touches some other workflow, like every other claim
+# this mode makes.
+check_pins "an unmirrorable dep is not reported to an unrelated PR" 0 "$GATE_HOLE" \
+  "" "cannot mirror" \
+  .github/workflows/beta.yml workflows/beta/pins.yml
+
+# Same vacuity guard as --check-routing has: a PR always changes something, so an
+# empty list means the caller's merge base was wrong. Green-on-no-input is worse
+# than no gate.
+set +e
+out="$("${AGREE}/scripts/sync-workflow-checksums.sh" --check-pins </dev/null 2>&1)"
+status=$?
+set -e
+if [ "$status" -eq 2 ] && grep -qF -- "read no changed paths on stdin" <<<"$out"; then
+  echo "PASS: --check-pins treats an empty diff as a hard error, not a pass"
+else
+  echo "FAIL: --check-pins treats an empty diff as a hard error, not a pass"
+  echo "  expected exit 2, got ${status}"
+  indent "${out}"
+  fails=$((fails + 1))
+fi
+
+# --- the two gates stay separate --------------------------------------------
+# --check-routing is the ROUTING gate and was narrowed to that on purpose
+# (DEV-1311). Pins drift is a content problem; folding it in would blur the
+# diagnosis and cost --check-routing its no-dependencies property below. Every
+# fixture above that FAILS --check-pins must still PASS --check-routing when it
+# routes, and vice versa.
+check "pins drift does not fail the routing gate" 0 "$DRIFTED" "" "" \
+  .github/workflows/alpha.yml workflows/alpha/workflow.sha256
+check "with: drift does not fail the routing gate" 0 "$WITHDRIFT" "" "" \
+  .github/workflows/alpha.yml workflows/alpha/workflow.sha256
+check "a hand-edited pins.yml does not fail the routing gate" 0 "$GATE_HAND" "" "" \
+  workflows/alpha/pins.yml
+# The converse: a workflow edit that does not route fails the ROUTING gate, and
+# the pins gate says nothing about it — its mirror is fine.
+check "an unrouted workflow edit is the routing gate's diagnosis" 1 "$AGREE" \
+  "no file under workflows/alpha/ is" "" \
+  .github/workflows/alpha.yml
+check_pins "...and the pins gate stays silent about it" 0 "$AGREE" "" "" \
+  .github/workflows/alpha.yml
+
+# --- --check-routing must stay free of yq -----------------------------------
+# The routing gate has to keep working on a machine with nothing installed; only
+# the pins modes render YAML. Assert it by actually removing yq from PATH rather
+# than by reading the code, because that guard is one `if` away from being lost.
+NOYQ_BIN="${TMP}/no-yq-bin"
+mkdir -p "$NOYQ_BIN"
+for tool in bash env grep sort basename dirname cat sed awk diff jq; do
+  tool_path="$(command -v "$tool")" ||
+    premise_gone "${tool} is not on PATH — the yq-free PATH case cannot be built"
+  ln -sf "$tool_path" "${NOYQ_BIN}/${tool}"
+done
+if (PATH="$NOYQ_BIN"; command -v yq >/dev/null 2>&1); then
+  premise_gone "the constructed yq-free PATH still resolves yq"
+fi
+
+set +e
+out="$(printf 'README.md\n' |
+  PATH="$NOYQ_BIN" "${PINLESS}/scripts/sync-workflow-checksums.sh" --check-routing 2>&1)"
+status=$?
+set -e
+if [ "$status" -eq 0 ]; then
+  echo "PASS: --check-routing passes with no yq on PATH and no pins files"
+else
+  echo "FAIL: --check-routing passes with no yq on PATH and no pins files"
+  echo "  expected exit 0, got ${status}"
+  indent "${out}"
+  fails=$((fails + 1))
+fi
+
+# The other side of the same guard: --check-pins DOES need yq, and says so
+# instead of silently skipping the `with:` half — which would make it green on a
+# mirror missing exactly the dep it exists to catch.
+set +e
+out="$(printf '.github/workflows/alpha.yml\n' |
+  PATH="$NOYQ_BIN" "${AGREE}/scripts/sync-workflow-checksums.sh" --check-pins 2>&1)"
+status=$?
+set -e
+if [ "$status" -eq 2 ] && grep -qF -- "yq" <<<"$out"; then
+  echo "PASS: --check-pins refuses to run without yq rather than half-checking"
+else
+  echo "FAIL: --check-pins refuses to run without yq rather than half-checking"
+  echo "  expected exit 2 naming yq, got ${status}"
+  indent "${out}"
+  fails=$((fails + 1))
+fi
+
 # --- config:recommended's ignorePaths ---------------------------------------
 # config:recommended (inherited through default.json) sets ignorePaths including
 # **/test/**, **/tests/**, **/examples/** and **/vendor/**. A workflow named any

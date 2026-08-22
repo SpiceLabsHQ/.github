@@ -13,15 +13,25 @@ name: Repo Checks
 #     entry, no tag, and consumers pinned to the moving tag alias keep the old
 #     behavior. Regenerating workflows/<name>/workflow.sha256 is how a human
 #     satisfies this.
+#   * a reusable workflow is in THIS PR's diff and workflows/<name>/pins.yml no
+#     longer says what the generator would write from it (DEV-1314). That file
+#     is the mirror Renovate bumps so an action bump lands inside the package
+#     directory and cuts a release; a ref or version key missing from it means
+#     the next bump of that ref touches only the workflow YAML, reaches no
+#     package, and strands every consumer on the moving tag alias. A MISSING
+#     pins.yml only warns — that is merely the pre-mirror world, whose
+#     consequence the routing assertion above already catches on the bot PR.
 #   * a package dir is orphaned (workflow renamed/deleted without cleanup)
 #   * release-please-config.json / .release-please-manifest.json don't match
 #     the reusable-workflow inventory 1:1
 #
-# The first assertion is scoped to the diff (DEV-1311). The whole-repo checksum
-# comparison it replaced tested a proxy — nothing ever reads the hash — and put
-# every open PR at the mercy of drift a merged bot PR had left on main, which
-# once turned this check red repo-wide for work touching none of it (DEV-726).
-# The last two stay whole-repo because no per-PR diff can express them.
+# The first two assertions are scoped to the diff (DEV-1311, DEV-1314). The
+# whole-repo checksum comparison the first replaced tested a proxy — nothing
+# ever reads the hash — and put every open PR at the mercy of drift a merged bot
+# PR had left on main, which once turned this check red repo-wide for work
+# touching none of it (DEV-726). The pins assertion is diff-scoped for exactly
+# that reason and must stay that way. The last two stay whole-repo because no
+# per-PR diff can express them.
 #
 # Fix locally with: scripts/sync-workflow-checksums.sh
 #
@@ -102,6 +112,30 @@ jobs:
           git -c core.quotePath=false diff --no-renames --name-only \
             "origin/${BASE_REF}...HEAD" >"${RUNNER_TEMP}/changed-files.txt"
           scripts/sync-workflow-checksums.sh --check-routing \
+            <"${RUNNER_TEMP}/changed-files.txt"
+
+      # A SEPARATE step, reading the SAME diff the step above already wrote
+      # (DEV-1314). Two reasons it is not folded into --check-routing:
+      #
+      #   * Different questions. Routing asks "does this diff reach the package
+      #     directory?"; this asks "does the generated mirror still match the
+      #     workflow it mirrors?" A change can pass one and fail the other, and
+      #     the two failures want different fixes, so they get different steps
+      #     and different verdicts.
+      #   * --check-routing needs no yq and no pins file, and keeping it that
+      #     way is deliberate. --check-pins needs yq (preinstalled on
+      #     ubuntu-latest, same assumption the bot-allowlists job makes).
+      #
+      # Still diff-scoped, never whole-repo: a pins.yml already stale on main for
+      # a workflow this PR never touched is invisible here. Whole-repo drift
+      # failing unrelated PRs is DEV-726, which DEV-1311 removed from this job.
+      #
+      # A MISSING pins.yml only warns, so this step is inert until the migration
+      # commits the twelve files.
+      - name: Check pins files agree for the workflows this PR touches
+        run: |
+          set -euo pipefail
+          scripts/sync-workflow-checksums.sh --check-pins \
             <"${RUNNER_TEMP}/changed-files.txt"
 
   bot-allowlists:
