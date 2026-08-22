@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.1](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.11.0...pepper-pr-review-v1.11.1) (2026-08-22)
+
+
+### Bug Fixes
+
+* **deps:** route workflow action pins through per-package pins files ([#218](https://github.com/SpiceLabsHQ/.github/issues/218)) ([ad15be1](https://github.com/SpiceLabsHQ/.github/commit/ad15be11a8225abd28234d1c0f385888365a8059))
+
 ## [1.11.0](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.10.0...pepper-pr-review-v1.11.0) (2026-08-21)
 
 
