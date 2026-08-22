@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Fixture test for sync-workflow-checksums.sh --check-routing — the DEV-1311
-# diff-scoped release-routing invariant that gates every PR. Exercises the EXACT
-# program CI runs, fed the same way (changed paths on stdin), so the test cannot
-# drift from production.
+# Fixture test for sync-workflow-checksums.sh — the DEV-1311 diff-scoped
+# release-routing invariant that gates every PR, and the sync-side checksum
+# output that is how a human satisfies it. Exercises the EXACT program CI runs,
+# fed the same way (changed paths on stdin), so the test cannot drift from
+# production.
 #
 # The case this test exists for is the FALSE POSITIVE (DEV-726). The old gate
 # recomputed every workflow's hash and compared it repo-wide, so one stale
@@ -271,6 +272,47 @@ check "a DELETED prompt still has to route" 1 "$ASSETS" \
 # pepper-pr-review's business.
 check "an unrelated markdown file is not a shipped asset" 0 "$ASSETS" "" "" \
   docs/pepper-audit.md
+
+# --- the sync side of the same declarations ---------------------------------
+# The routing rule and the checksum are two halves of one affordance: routing
+# says a prompt edit must reach the package, and the sync run is what a human
+# does to make it. If the assets stop reaching the CHECKSUM, a prompt-only edit
+# produces no file change at all and DEV-637 is silently gone — while every
+# routing case above stays green, because they never look at the checksum. So
+# assert the sync-side output directly.
+#
+# This is what the glob expansion in workflow_assets() carries: quoting
+# `$pattern` there drops every prompt from the checksum and is invisible to the
+# rest of this file. Both pattern kinds are pinned — the glob and the literal.
+for asset in prompts/pr-review-default.md scripts/pepper-audit-record.jq; do
+  if grep -qF -- "  ${asset}" "${ASSETS}/workflows/pepper-pr-review/workflow.sha256"; then
+    echo "PASS: ${asset} is hashed into the checksum file"
+  else
+    echo "FAIL: ${asset} is hashed into the checksum file"
+    indent "$(cat "${ASSETS}/workflows/pepper-pr-review/workflow.sha256")"
+    fails=$((fails + 1))
+  fi
+done
+
+# --- prefix-sibling package names -------------------------------------------
+# routes_to()'s correctness rests entirely on the trailing slash in its pattern,
+# and workflows/ really does hold a prefix pair: scorecard and scorecard-public.
+# Without the slash, "workflows/scorecard"* also matches
+# workflows/scorecard-public/..., and a PR editing scorecard.yml while touching
+# only scorecard-public's package dir would be waved through to no release.
+SIBLINGS="$(fixture prefix-siblings scorecard scorecard-public)"
+
+check "a prefix-sibling package dir does not route" 1 "$SIBLINGS" \
+  "no file under workflows/scorecard/ is" "" \
+  .github/workflows/scorecard.yml workflows/scorecard-public/workflow.sha256
+
+# The positive control for the pair: the real package dir does route, so the
+# case above fails for the right reason.
+check "the prefix-sibling's own package dir routes" 0 "$SIBLINGS" "" "" \
+  .github/workflows/scorecard.yml workflows/scorecard/workflow.sha256
+
+check "the longer sibling routes on its own dir" 0 "$SIBLINGS" "" "" \
+  .github/workflows/scorecard-public.yml workflows/scorecard-public/workflow.sha256
 
 # --- the gate must not become vacuous ---------------------------------------
 # An empty diff means the caller's merge base was wrong or its checkout was too

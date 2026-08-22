@@ -24,9 +24,17 @@ changelog, and tag that workflow independently.
 scripts/sync-workflow-checksums.sh
 ```
 
-CI (`repo-checks.yml`) fails any PR where a checksum is stale, a package directory
-is orphaned, or the release-please config/manifest don't match the workflow
-inventory — so the invariant can't silently rot.
+CI (`repo-checks.yml`) fails any PR that changes a reusable workflow — or a file it
+ships, such as `pepper-pr-review`'s prompts — without also changing something under
+`workflows/<name>/`, so the routing can't silently rot. It also fails any PR that
+leaves a package directory orphaned, or the release-please config/manifest not
+matching the workflow inventory.
+
+What CI does **not** assert is that a stored checksum is current. Nothing reads the
+hash — it exists so that running the sync script produces a file inside the package
+directory — so a checksum whose workflow was last touched by a bot bump can sit
+stale on `main` indefinitely. That is expected. Enforcing the hash repo-wide meant
+one stale file failed every unrelated open PR.
 
 See the [Versioning & releases](../README.md#versioning--releases) section of the
 main README for the full policy and consumer pinning guidance.

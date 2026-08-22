@@ -47,9 +47,11 @@
 #   git diff --name-only "origin/$base...HEAD" |
 #     scripts/sync-workflow-checksums.sh --check-routing   # the PR gate
 #
-# Requirements: git, sha256sum or shasum. `--check` and `--check-routing`
-# additionally need jq to validate release-please-config.json /
-# .release-please-manifest.json coverage.
+# Requirements: sha256sum or shasum. The script never invokes git — the diff
+# arrives as data on stdin, which is what lets the fixture tests drive every
+# case with plain path lists. `--check` and `--check-routing` additionally need
+# jq to validate release-please-config.json / .release-please-manifest.json
+# coverage.
 
 set -euo pipefail
 

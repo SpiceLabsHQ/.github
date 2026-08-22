@@ -83,9 +83,26 @@ jobs:
           fi
           # Three dots: the diff against the MERGE BASE, which is exactly the
           # file list the squash commit will carry, and exactly what
-          # release-please routes on.
-          git diff --name-only "origin/${BASE_REF}...HEAD" \
-            | scripts/sync-workflow-checksums.sh --check-routing
+          # release-please routes on. The two flags are what make that
+          # literally true, and both close a fail-OPEN gap — do not drop them:
+          #
+          #   --no-renames        git's rename detection reports only the
+          #                       destination path, so moving a shipped asset
+          #                       out of prompts/ would hide the source path
+          #                       the routing rule matches on. Off, a rename is
+          #                       the delete plus the add, which is also how
+          #                       release-please sees the commit.
+          #   core.quotePath=false  otherwise a non-ASCII path arrives
+          #                       C-quoted ("prompts/caf\303\251.md"), matching
+          #                       neither prompts/*.md nor workflows/<name>/*.
+          #
+          # Written to a file rather than piped, so a `git diff` failure stops
+          # the step here instead of feeding the checker an empty list and
+          # printing a green verdict just above the red step.
+          git -c core.quotePath=false diff --no-renames --name-only \
+            "origin/${BASE_REF}...HEAD" >"${RUNNER_TEMP}/changed-files.txt"
+          scripts/sync-workflow-checksums.sh --check-routing \
+            <"${RUNNER_TEMP}/changed-files.txt"
 
   bot-allowlists:
     name: Bot allowlist drift
