@@ -28,6 +28,13 @@
 # all agree with each other while production has drifted — and so the asset
 # declarations for the real pepper-pr-review are exercised at their real paths.
 #
+# The pins.yml section (DEV-1313) covers the BOT-side half of the same
+# affordance. Its cases are hermetic on purpose — this suite runs in CI on every
+# PR, so asserting anything about this repo's whole-tree pins or checksum state
+# would recreate the very DEV-726 shape described above. The two exceptions read
+# the real sast.yml and copy it INTO a fixture, which gets the anti-rot benefit
+# without the whole-repo coupling.
+#
 # Run locally:  scripts/test/sync-workflow-checksums_test.sh
 set -euo pipefail
 
@@ -42,6 +49,13 @@ fails=0
 
 # Indent a captured report so a failure is readable next to the PASS lines.
 indent() { while IFS= read -r line; do echo "    ${line}"; done <<<"$1"; }
+
+# Abort loudly when a case's subject no longer exists. A case that names a real
+# file and quietly stops covering anything is worse than no case at all.
+premise_gone() {
+  echo "FAIL: test premise gone — $1" >&2
+  exit 2
+}
 
 # Build a minimal repo the script can run against, in sync to begin with. Args:
 #   $1    dir name under $TMP
@@ -388,8 +402,8 @@ pins_match "a workflow with no actions still gets a pins file, as steps: []" hav
   "$PINS_YML" '^  steps: \[\]$'
 pins_match "the empty case emits no entries" lack "$PINS_YML" '^[[:space:]]*-[[:space:]]+uses:'
 
-# Now the populated case. This workflow carries one of every `uses:` form that
-# matters, plus three that must NOT be mirrored.
+# Now the populated case. This workflow carries one of every form that matters,
+# plus four that must NOT be mirrored.
 cat >"${PINS}/.github/workflows/alpha.yml" <<'YAML'
 name: alpha
 on:
@@ -399,7 +413,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0
+        with:
+          version: "0.9.7"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
       - uses: github/codeql-action/upload-sarif@v4
       - uses: docker://alpine:3.22
       - uses: ./.github/actions/local-thing
@@ -446,6 +472,59 @@ pins_match "a shell string that merely contains uses: is not mirrored" lack \
 # the workflow — the two must see the same set.
 pins_match "a column-0 uses: in the workflow is not mirrored, matching Renovate" lack \
   "$PINS_YML" 'never-extracted'
+
+# --- the `with:` half of the mirror -----------------------------------------
+# The dep set is NOT just the `uses:` lines. Renovate's github-actions manager
+# runs two passes — a line regex for action refs, and a real YAML parse — and
+# the second turns `with.<lang>-version` on actions/setup-{go,node,python}, and
+# the version key of each of its 25 known community actions, into a fully-formed
+# managed dep with no skipReason. sast.yml's `python-version: "3.14"` is one:
+# when 3.15 lands, Renovate opens a PR touching only the workflow, and without
+# this half of the mirror that PR routes nowhere and cuts no release.
+pins_match "a built-in <lang>-version input is mirrored (actions/setup-python)" have \
+  "$PINS_YML" '^[[:space:]]+python-version: "3\.14"$'
+pins_match "a built-in <lang>-version input is mirrored (actions/setup-node)" have \
+  "$PINS_YML" '^[[:space:]]+node-version: "24"$'
+pins_match "a community action's version: input is mirrored (astral-sh/setup-uv)" have \
+  "$PINS_YML" '^[[:space:]]+version: "0\.9\.7"$'
+
+# ...and only those keys. Everything else in a `with:` block is configuration
+# Renovate never reads, and copying it would drag secrets, tokens and multi-line
+# prompts into a committed file for nothing.
+pins_match "a with: key Renovate does not read is not mirrored (fetch-depth)" lack \
+  "$PINS_YML" 'fetch-depth'
+pins_match "a with: key Renovate does not read is not mirrored (cache)" lack \
+  "$PINS_YML" '^[[:space:]]+cache:'
+
+# A step whose `with:` holds nothing Renovate reads gets no `with:` block at all.
+# That is not cosmetic: Renovate's UsesStep schema REQUIRES a `with` key, so a
+# step without one is invisible to the YAML pass, which is exactly where it
+# should stay.
+withless="$(awk '/^ +- uses: actions\/checkout@v7$/ { getline nxt; print nxt }' "$PINS_YML")"
+if [[ "$withless" == *"- uses: "* ]]; then
+  echo "PASS: a step with no Renovate-readable with: key gets no with: block"
+else
+  echo "FAIL: a step with no Renovate-readable with: key gets no with: block"
+  echo "  expected another step to follow actions/checkout@v7, got: ${withless}"
+  fails=$((fails + 1))
+fi
+
+# --- the scaffold itself ----------------------------------------------------
+# The three scaffold lines are load-bearing and nothing else here pins them.
+# Renovate's YAML pass parses this file against a union that tries `{jobs: ...}`
+# FIRST and `{runs: {using, steps}}` second. Under the composite shape it
+# matches the second, which has no runs-on / container / services concept, so
+# the pass can produce nothing but the uses-with deps above. Swap in a `jobs:`
+# scaffold with a `runs-on:` and every generated file silently acquires
+# `github-runner:ubuntu@24.04` — a live dep with no twin in any workflow, back
+# again on every Ubuntu release.
+pins_match "the scaffold opens with runs:" have "$PINS_YML" '^runs:$'
+pins_match "the scaffold declares using: composite" have "$PINS_YML" '^  using: composite$'
+pins_match "the populated case declares steps:" have "$PINS_YML" '^  steps:$'
+pins_match "the scaffold has no jobs: key" lack "$PINS_YML" '^jobs:'
+# Anchored to a YAML key, because the file's own header prose mentions runs-on
+# while explaining why it must not have one.
+pins_match "the scaffold names no runner" lack "$PINS_YML" '^[[:space:]]*runs-on:'
 
 # The header is the entire answer to "what is this file and why is it here?" for
 # whoever finds one and wonders. Pin the four things it has to say, because a
@@ -500,6 +579,125 @@ fi
 # bot had already routed correctly.
 pins_match "pins.yml is not hashed into workflow.sha256" lack \
   "${PINS}/workflows/alpha/workflow.sha256" 'pins\.yml'
+
+# --- the central promise: a bot bump lands and the script agrees with it -----
+# Everything else here tests the generator against a static workflow. THIS tests
+# the thing the design actually promises: Renovate edits the same ref in both
+# files, and afterwards the script has nothing left to say. If it disagreed —
+# different ordering, a reformatted comment, a requoted value — the bot's PR
+# would arrive already "stale" and the next human sync would produce a
+# gratuitous diff, on every single bump.
+#
+# Simulated exactly as Renovate's auto-replace behaves: the same substitution
+# applied to the workflow AND to pins.yml, covering a major tag, a SHA with its
+# trailing version comment, and a subpath ref.
+BUMP="${PINS}/.github/workflows/alpha.yml"
+BUMPED_PINS="${PINS}/workflows/alpha/pins.yml"
+order_before="$(grep -oE '\- uses: [^ ]+' "$BUMPED_PINS" | sed 's/@.*//')"
+for target in "$BUMP" "$BUMPED_PINS"; do
+  sed -i.bak \
+    -e 's|actions/checkout@v7|actions/checkout@v8|g' \
+    -e 's|astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0|astral-sh/setup-uv@1111111111111111111111111111111111111111 # v10.1.0|g' \
+    -e 's|github/codeql-action/upload-sarif@v4|github/codeql-action/upload-sarif@v5|g' \
+    "$target"
+  rm -f "${target}.bak"
+done
+cp "$BUMPED_PINS" "${TMP}/pins-as-renovate-left-it.yml"
+(cd "$PINS" && scripts/sync-workflow-checksums.sh >/dev/null)
+
+if cmp -s "${TMP}/pins-as-renovate-left-it.yml" "$BUMPED_PINS"; then
+  echo "PASS: after a simulated Renovate bump of both files, the script rewrites nothing"
+else
+  echo "FAIL: after a simulated Renovate bump of both files, the script rewrites nothing"
+  indent "$(diff "${TMP}/pins-as-renovate-left-it.yml" "$BUMPED_PINS" || true)"
+  fails=$((fails + 1))
+fi
+
+# And the entry ORDER is unchanged by the bump, which is what makes the diff of
+# a bump PR one line per bumped ref instead of a whole-file reshuffle.
+order_after="$(grep -oE '\- uses: [^ ]+' "$BUMPED_PINS" | sed 's/@.*//')"
+if [ "$order_before" = "$order_after" ]; then
+  echo "PASS: a bump does not reorder the mirrored entries"
+else
+  echo "FAIL: a bump does not reorder the mirrored entries"
+  indent "$(diff <(echo "$order_before") <(echo "$order_after") || true)"
+  fails=$((fails + 1))
+fi
+
+# --- driven from the real sast.yml ------------------------------------------
+# The `with:` half of the mirror exists because of one concrete dep in this
+# repo, and a synthetic fixture alone would let that dep be renamed or removed
+# without anyone noticing the coverage went with it. So assert it against the
+# REAL workflow, copied into a fixture so nothing here depends on whether
+# DEV-1314 has landed the committed pins files yet.
+if ! grep -qE '^[[:space:]]+uses: actions/setup-python@' "${ROOT}/.github/workflows/sast.yml"; then
+  premise_gone "sast.yml no longer uses actions/setup-python — move this case to whichever workflow now carries a uses-with dep"
+fi
+real_pyver="$(yq -r '.jobs[].steps[]? | select(.uses // "" | test("^actions/setup-python@")) | .with."python-version"' \
+  "${ROOT}/.github/workflows/sast.yml" | head -1)"
+if [ -z "$real_pyver" ] || [ "$real_pyver" = "null" ]; then
+  premise_gone "sast.yml's actions/setup-python step no longer passes python-version — the uses-with dep this case covers is gone"
+fi
+
+REALSAST="$(fixture real-sast sast)"
+cp "${ROOT}/.github/workflows/sast.yml" "${REALSAST}/.github/workflows/sast.yml"
+(cd "$REALSAST" && scripts/sync-workflow-checksums.sh >/dev/null)
+
+pins_match "real sast.yml: its python-version reaches the mirror" have \
+  "${REALSAST}/workflows/sast/pins.yml" "^[[:space:]]+python-version: \"${real_pyver}\"$"
+pins_match "real sast.yml: the setup-python ref reaches the mirror" have \
+  "${REALSAST}/workflows/sast/pins.yml" '^[[:space:]]+- uses: actions/setup-python@'
+
+# --- deps a pins.yml structurally cannot mirror -----------------------------
+# `runs-on: ubuntu-24.04`, `container:` and `services:` all become real deps in
+# Renovate's YAML pass, and none of them can live in a composite-shaped file. So
+# the generator says so out loud instead of leaving a hole nobody can see. A
+# warning, not an error: there is no edit the author could make to fix it, and a
+# hard failure with no fix is a dead end.
+UNMIRRORABLE="$(fixture unmirrorable alpha 2>/dev/null)"
+cat >"${UNMIRRORABLE}/.github/workflows/alpha.yml" <<'YAML'
+name: alpha
+on:
+  workflow_call:
+jobs:
+  pinned-runner:
+    runs-on: ubuntu-24.04
+    container: node:24-bookworm
+    steps:
+      - uses: actions/checkout@v7
+YAML
+set +e
+out="$("${UNMIRRORABLE}/scripts/sync-workflow-checksums.sh" 2>&1 >/dev/null)"
+set -e
+for needle in "runs-on: ubuntu-24.04" "container:"; do
+  if grep -qF -- "$needle" <<<"$out"; then
+    echo "PASS: the generator warns that '${needle}' cannot be mirrored"
+  else
+    echo "FAIL: the generator warns that '${needle}' cannot be mirrored"
+    indent "${out}"
+    fails=$((fails + 1))
+  fi
+done
+
+# --check has to report it too. An author who runs the checker rather than the
+# generator must see the same hole, and these are two separate call sites.
+check_repo "the unmirrorable-dep warning also fires under --check" 0 "$UNMIRRORABLE" \
+  "cannot mirror" ""
+
+# The control: `runs-on: ubuntu-latest` extracts as github-runner:ubuntu@latest
+# and Renovate skips it as invalid-version, so it is NOT a hole and must not
+# warn. Without this, the warning above would fire on all twelve workflows and
+# be tuned out within a day.
+set +e
+out="$("${PINS}/scripts/sync-workflow-checksums.sh" 2>&1 >/dev/null)"
+set -e
+if grep -qF -- "cannot mirror" <<<"$out"; then
+  echo "FAIL: runs-on: ubuntu-latest does not warn"
+  indent "${out}"
+  fails=$((fails + 1))
+else
+  echo "PASS: runs-on: ubuntu-latest does not warn"
+fi
 
 # --- who enforces pins staleness --------------------------------------------
 # A pins.yml that disagrees with its workflow is the dangerous state: it still
@@ -576,10 +774,6 @@ fi
 # Against this repo's real tree. Premise guard first: these cases name real
 # files, and a case whose subject has been renamed away would pass for the wrong
 # reason.
-premise_gone() {
-  echo "FAIL: test premise gone — $1" >&2
-  exit 2
-}
 if [ ! -f "${ROOT}/.github/workflows/secret-scan.yml" ] || [ ! -d "${ROOT}/workflows/secret-scan" ]; then
   premise_gone "secret-scan is no longer a reusable workflow with a package dir"
 fi
