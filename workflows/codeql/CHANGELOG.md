@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/SpiceLabsHQ/.github/compare/codeql-v1.1.0...codeql-v1.1.1) (2026-08-22)
+
+
+### Bug Fixes
+
+* **deps:** route workflow action pins through per-package pins files ([#218](https://github.com/SpiceLabsHQ/.github/issues/218)) ([ad15be1](https://github.com/SpiceLabsHQ/.github/commit/ad15be11a8225abd28234d1c0f385888365a8059))
+
 ## [1.1.0](https://github.com/SpiceLabsHQ/.github/compare/codeql-v1.0.1...codeql-v1.1.0) (2026-07-04)
 
 
