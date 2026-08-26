@@ -147,11 +147,18 @@ Then end your turn.
 
 The Linear MCP allowlist is read-only by design. If a tool is not allowed, the server is fine — that tool is intentionally off-limits. Pivot to a read tool that returns the same information.
 
-**A missing tool is not the same failure as a missing server (DEV-1398).** A denied `mcp__linear__save_*`/`create_*`/`delete_*`/`prepare_*` call is the allowlist working as intended — pivot per the rule above, this is not an outage. But if the parsed ID is a Linear key and **no `mcp__linear__*` tool is present at all** — confirm with `ToolSearch` (e.g. query `mcp__linear`) if you are not already certain — the Linear MCP server itself never connected for this run. That is an infrastructure failure, not a per-PR judgment call, and the halt comment below must say so distinctly so it is not indistinguishable from an ordinary "this one issue couldn't be read" halt.
+**A missing tool is not the same failure as a missing server (DEV-1398).** A denied `mcp__linear__save_*`/`create_*`/`delete_*`/`prepare_*` call is the allowlist working as intended — pivot per the rule above, this is not an outage. But if the parsed ID is a Linear key and **no `mcp__linear__*` tool is present at all** — confirm with `ToolSearch` (e.g. query `mcp__linear`) if you are not already certain — the Linear MCP server itself never connected for this run. That is an infrastructure failure, not a per-PR judgment call, and the halt comment below must carry the marker described there so automation can tell it apart from an ordinary "this one issue couldn't be read" halt.
 
 **Halt the review if a parseable ID was found but the fetch failed** (MCP error or `null`, `gh issue view` non-zero, issue inaccessible). The PR's intent depends on an issue you cannot read; a partial review is worse than escalating clearly. Do not classify, do not keep inspecting files. Run exactly:
 
-1. `gh pr review {{PR_NUMBER}} --comment --body '<5–8 lines: which issue ID was parsed, which tracker, the exact failure (e.g., "mcp__linear__get_issue returned null for DEV-212" / "gh issue view #14 exited 1: not found" / "no mcp__linear__* tools present — the Linear MCP server did not connect this run"), and that escalation is required because intent cannot be verified. If the failure is a missing Linear MCP server, append one final line to the body, verbatim and on its own line: `pepper:tracker-unreachable` — so automation can tell an infra outage apart from an ordinary per-PR halt. Omit that line for every other halt (single fetch failure, issue inaccessible, GitHub Issues halts, etc.).>'`
+1. `gh pr review {{PR_NUMBER}} --comment --body '<5–8 lines: which issue ID was parsed, which tracker, the exact failure (e.g., "mcp__linear__get_issue returned null for DEV-212" / "gh issue view #14 exited 1: not found" / "no mcp__linear__* tools present — the Linear MCP server did not connect this run"), and that escalation is required because intent cannot be verified.>'`
+   - **If the failure is a missing Linear MCP server**, the body's LAST line must be exactly the marker below and nothing else on that line — no backticks, no quotes, no leading/trailing spaces, no other Markdown. Automation matches it byte-for-byte, so any decoration around it makes the match fail silently and the outage goes uncaught, which is the exact failure this rule exists to close. Copy it from the fenced block, not from this sentence:
+
+     ```
+     pepper:tracker-unreachable
+     ```
+
+     Omit the marker line entirely for every other halt (single fetch failure, issue inaccessible, GitHub Issues halts, etc.).
 2. `gh pr edit {{PR_NUMBER}} --add-label "pepper-needs-review" --remove-label "pepper-cooking"`
 3. Request review from the `{{REVIEWERS_TEAM}}` team per the recipe in `<comment_and_assign>`.
 
