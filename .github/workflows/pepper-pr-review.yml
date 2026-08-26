@@ -1534,6 +1534,50 @@ jobs:
             gh pr edit "${PR_NUMBER}" --add-reviewer "${REPO_OWNER}/${REVIEWERS_TEAM}" || true
           fi
 
+      # Fail the check on a tracker outage (DEV-1398). A Linear MCP outage does
+      # not stop Pepper from posting a COMMENTED halt review — `<intent_
+      # verification>`'s halt rule fires exactly as designed, the escalation
+      # label goes on, and `Run Pepper` exits 0 — so on the incident this fixes,
+      # `pepper / Pepper review` reported PASS on every one of the ~45 minutes
+      # the outage lasted. Seven PRs sat at REVIEW_REQUIRED with nothing in the
+      # checks UI signalling why.
+      #
+      # The halt comment itself is the only place that knows WHY it halted, so
+      # this reads it back rather than re-deriving anything: the prompt appends
+      # a literal `pepper:tracker-unreachable` line to the review body only when
+      # no `mcp__linear__*` tool was present at all (see the halt rule), never
+      # for an ordinary single-issue fetch failure. That keeps "Linear itself is
+      # down" distinguishable from "this one issue is unreadable" — the latter
+      # is Pepper's judgment working correctly and must stay a passing check.
+      #
+      # Deliberately NOT `continue-on-error` and NOT `|| true` on the final
+      # check: unlike the audit step below, this is not telemetry — it is the
+      # required check reporting what actually happened. A silent PASS during
+      # an infra outage is the bug DEV-1398 files; failing loudly here is the
+      # fix, matching how an AWS-creds or Bedrock failure already fails this
+      # job today.
+      - name: Fail the check on a tracker outage (DEV-1398)
+        if: always()
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: |
+          set -uo pipefail
+          if [ -z "${APP_SLUG}" ]; then
+            echo "No app-slug from actions/create-github-app-token — cannot identify Pepper's own review, skipping."
+            exit 0
+          fi
+          BOT_LOGIN="${APP_SLUG}[bot]"
+          BODY="$(gh api --paginate "repos/${REPO}/pulls/${PR_NUMBER}/reviews?per_page=100" --jq '.[]' 2>/dev/null \
+            | jq -sr --arg bot "${BOT_LOGIN}" '[.[] | select(.user.login == $bot)] | last | .body // ""')" || BODY=""
+          if printf '%s\n' "${BODY}" | grep -Fxq "pepper:tracker-unreachable"; then
+            echo "::error::Pepper halted this review because the Linear MCP server never connected for this run (see the posted review for the exact tool-registry check). Failing this required check so the outage is visible instead of silently passing."
+            exit 1
+          fi
+
       # Audit record (DEV-653). One structured JSON row per review — the
       # configuration it ran under, the outcome it reached, and what it cost —
       # appended to the CloudWatch log group `/pepper/pr-review/audit` and
