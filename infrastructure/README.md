@@ -39,7 +39,7 @@ convention the workflow followed rather than a boundary the credential enforced.
 |---|---|---|
 | `InvokePepperTaggedProfilesOnly` | Invoke any application inference profile tagged `Product=pepper` | Scoped by **tag, not ARN**. Application inference profiles are immutable in the model they wrap, so a model upgrade replaces the profile and mints a new ARN. Tag-scoping survives that untouched; ARN-pinning would force an IAM edit on every upgrade. |
 | `WritePepperReviewAuditLog` | `logs:CreateLogStream` + `logs:PutLogEvents` on `/pepper/pr-review/audit` only | The DEV-653 audit record, written with the credentials the review job has already assumed. **Append-only, one log group.** No read, no delete, no `logs:CreateLogGroup` — the group and its retention are a CloudFormation resource (`pepper-audit.cfn.yml`), not a role permission. Worst case under role compromise is junk lines in the audit log that the same role cannot then erase. |
-| `AuthorizedModelsReachableOnlyThroughAProfile` | Invoke Sonnet 5 and Sonnet 4.5, in three regions, **only** when reached through one of this account's application inference profiles | AWS requires the underlying foundation model to be authorized alongside the profile. The `bedrock:InferenceProfileArn` condition is what stops a direct model call that would bypass the profile — and therefore bypass the `Product`/`Mode` cost-allocation tags. Sonnet 4.5 is retained as a rollback path to the DEV-245 profiles. |
+| `AuthorizedModelsReachableOnlyThroughAProfile` | Invoke Sonnet 5 and Sonnet 4.6, in three regions, **only** when reached through one of this account's application inference profiles | AWS requires the underlying foundation model to be authorized alongside the profile. The `bedrock:InferenceProfileArn` condition is what stops a direct model call that would bypass the profile — and therefore bypass the `Product`/`Mode` cost-allocation tags. Sonnet 4.6 is authorized as the rollback path (DEV-299), replacing Sonnet 4.5, which retires 2026-09-29. |
 | `DiscoverProfiles` | Read-only `ListInferenceProfiles` / `GetInferenceProfile` | The action enumerates profiles at startup. |
 | `MarketplaceModelAccess` | `aws-marketplace:Subscribe` / `ViewSubscriptions` | Retained deliberately — auto-subscription on first use of a model is acceptable. |
 
@@ -174,27 +174,32 @@ delete one of these without knowing what it holds up.
 
 ### Application inference profiles
 
-The model identities Pepper invokes. Both live in `us-west-2` only, both tagged
+The model identities Pepper invokes. All live in `us-west-2` only, all tagged
 `Product=pepper, Mode=review`.
 
 | Profile | Id | Wraps | Created |
 |---|---|---|---|
 | `pepper-pr-review-sonnet-5` | `xda66yqkegz4` | `anthropic.claude-sonnet-5` (us-east-1/2, us-west-2) | 2026-07-04 |
-| `pepper-pr-review` | `cz21awrop223` | `anthropic.claude-sonnet-4-5` (us-east-1/2, us-west-2) | 2026-05-10 |
+| `pepper-pr-review-sonnet-4-6` | `0dmcow82swxh` | `anthropic.claude-sonnet-4-6` (us-east-1/2, us-west-2) | 2026-09-01 |
 
 `pepper-pr-review-sonnet-5` is the workflow default
-(`review_model` in `pepper-pr-review.yml`). `pepper-pr-review` is the DEV-245
-Sonnet 4.5 profile, retained deliberately as the rollback path — the policy
-above keeps its wrapped model authorized for exactly that reason.
+(`review_model` in `pepper-pr-review.yml`). `pepper-pr-review-sonnet-4-6` is the
+rollback path — the policy above keeps its wrapped model authorized for exactly
+that reason. Rolling back means passing its ARN as `review_model`; the default
+stays on Sonnet 5.
 
-**That rollback path expires.** Anthropic lists `claude-sonnet-4-5-20250929`
-for retirement no sooner than 2026-09-29; after that, rolling back to
-`pepper-pr-review` invokes a retired model and fails. The profile has been idle
-since 2026-07-03, the day before `pepper-pr-review-sonnet-5` was created, while
-Sonnet 5 has served ~37k invocations without a rollback. Before the retirement
-date, either accept that the rollback path is gone and retire `pepper-pr-review`
-plus its three pinned model ARNs in the policy above, or stand up a replacement
-profile on a current model. Audited under DEV-299.
+**A rollback path is only as good as its model's runway.** The previous rollback
+profile, `pepper-pr-review` (`cz21awrop223`, DEV-245), wrapped Sonnet 4.5, which
+Anthropic lists for retirement no sooner than 2026-09-29 — so it would have
+failed at the moment it was needed. It was replaced under DEV-299 rather than
+retired blind, and it had never been exercised: 23 invocations, all on
+2026-07-03, the day before `pepper-pr-review-sonnet-5` was created, against
+~37k on the Sonnet 5 profile over the same window.
+
+Sonnet 4.6 is current with no announced deprecation, but it is one generation
+behind the primary, so it will reach the deprecation list before Sonnet 5 does.
+**Re-check this pairing whenever the primary moves**, and prefer a replacement
+that is not older than the model it backs up.
 
 **The tags are load-bearing twice over.** IAM access is granted by
 `aws:ResourceTag/Product = pepper` (see the policy table above), and Cost
