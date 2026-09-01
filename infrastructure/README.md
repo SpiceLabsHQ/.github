@@ -187,6 +187,15 @@ The model identities Pepper invokes. Both live in `us-west-2` only, both tagged
 Sonnet 4.5 profile, retained deliberately as the rollback path — the policy
 above keeps its wrapped model authorized for exactly that reason.
 
+**That rollback path expires.** Anthropic lists `claude-sonnet-4-5-20250929`
+for retirement no sooner than 2026-09-29; after that, rolling back to
+`pepper-pr-review` invokes a retired model and fails. The profile has been idle
+since 2026-07-03, the day before `pepper-pr-review-sonnet-5` was created, while
+Sonnet 5 has served ~37k invocations without a rollback. Before the retirement
+date, either accept that the rollback path is gone and retire `pepper-pr-review`
+plus its three pinned model ARNs in the policy above, or stand up a replacement
+profile on a current model. Audited under DEV-299.
+
 **The tags are load-bearing twice over.** IAM access is granted by
 `aws:ResourceTag/Product = pepper` (see the policy table above), and Cost
 Explorer attribution keys on `Product`/`Mode`. A profile recreated without the
