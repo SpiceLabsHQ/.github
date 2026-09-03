@@ -192,9 +192,11 @@ stays on Sonnet 5.
 profile, `pepper-pr-review` (`cz21awrop223`, DEV-245), wrapped Sonnet 4.5, which
 Anthropic lists for retirement no sooner than 2026-09-29 — so it would have
 failed at the moment it was needed. It was replaced under DEV-299 rather than
-retired blind, and it had never been exercised: 23 invocations, all on
-2026-07-03, the day before `pepper-pr-review-sonnet-5` was created, against
-~37k on the Sonnet 5 profile over the same window.
+retired blind, then deleted on 2026-09-02, after the policy above was applied
+and the role was confirmed able to reach the Sonnet 4.6 profile. It had never
+been exercised: 23 invocations, all on 2026-07-03, the day before
+`pepper-pr-review-sonnet-5` was created, against ~37k on the Sonnet 5 profile
+over the same window.
 
 Sonnet 4.6 is current with no announced deprecation, but it is one generation
 behind the primary, so it will reach the deprecation list before Sonnet 5 does.
