@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.3](https://github.com/SpiceLabsHQ/.github/compare/release-artifacts-v1.0.2...release-artifacts-v1.0.3) (2026-09-04)
+
+
+### Bug Fixes
+
+* **deps:** update anchore/sbom-action action to v0.24.1 ([#245](https://github.com/SpiceLabsHQ/.github/issues/245)) ([1075b09](https://github.com/SpiceLabsHQ/.github/commit/1075b097125128eb2b24a5ca16d37e5bf58a3187))
+
 ## [1.0.2](https://github.com/SpiceLabsHQ/.github/compare/release-artifacts-v1.0.1...release-artifacts-v1.0.2) (2026-08-22)
 
 
