@@ -63,11 +63,23 @@ Parameters:
     Default: 21600
     MinValue: 60
     Description: >-
-      Trailing window, in seconds, over which "reviews ran" and "records landed"
-      are compared. Default 21600 = 6h. Long enough that an ordinary quiet stretch
-      between PRs does not read as a broken pipeline, short enough that a real
-      break is a same-day ticket. Tune against real review cadence. CloudFormation
-      cannot do arithmetic on parameters, so this is seconds rather than hours.
+      Trailing window, in seconds, over which "records landed" is judged. Default
+      21600 = 6h. Long enough that an ordinary quiet stretch between PRs does not
+      read as a broken pipeline, short enough that a real break is a same-day
+      ticket. Tune against real review cadence. CloudFormation cannot do
+      arithmetic on parameters, so this is seconds rather than hours.
+
+  ReviewsRanPeriodSeconds:
+    Type: Number
+    Default: 3600
+    MinValue: 60
+    Description: >-
+      Period, in seconds, of the "reviews ran" half — DELIBERATELY SHORTER than
+      WindowSeconds, and paired with the 2-of-2 evaluation below to hold that half
+      back by roughly one period. See the ORDERING race note on ReviewsRanAlarm:
+      making this equal to WindowSeconds is what produced INC-31 and INC-89, so
+      change it only together with that note. Default 3600 = 1h, which buys about
+      an hour of margin against a skew measured in minutes.
 
 Resources:
   # The log group is created here, not by the workflow: the Bedrock role holds
@@ -118,24 +130,70 @@ Resources:
   # Neither child carries an action; only the composite notifies.
   # ---------------------------------------------------------------------------
 
-  # "Reviews ran in the window." Missing data = no invocations = nothing to
-  # check, so notBreaching: a quiet weekend must not page anyone.
+  # "Reviews ran, long enough ago that their records should have landed."
+  # Missing data = no invocations = nothing to check, so notBreaching: a quiet
+  # weekend must not page anyone.
+  #
+  # WHY THIS HALF IS HELD BACK BY A PERIOD, AND THE COMPOSITE'S TWO HALVES ARE
+  # THEREFORE ASYMMETRIC. The two metrics are causally ORDERED: a review invokes
+  # Bedrock first and writes its audit record last (the capture step runs after
+  # the verdict, by design — see the step's own header). So there is always an
+  # interval during which a review's invocations are visible and its record does
+  # not exist yet. Compare two trailing windows of the SAME width and that
+  # interval is a false positive waiting for the right moment:
+  #
+  #   * LEADING EDGE — the first review after a quiet stretch longer than
+  #     WindowSeconds. "No records" is already ALARM (correctly, and harmlessly,
+  #     since nothing ran); the new invocations flip "reviews ran" to ALARM
+  #     before the in-flight review has written anything. The composite pages and
+  #     then clears itself as soon as the record lands. This is INC-89: it fired
+  #     at 2026-09-07T21:40:02Z and returned to OK 67 seconds later.
+  #   * TRAILING EDGE — roughly WindowSeconds after the last review, both halves
+  #     flip at once. Whichever CloudWatch evaluates first decides whether the
+  #     composite fires; when "no records" wins the race the composite pages into
+  #     an idle pipeline. This is INC-31.
+  #
+  # Neither was a broken pipeline. Over 2026-08-09..2026-09-07 every single day
+  # carried audit records, at a steady ~14 Bedrock invocations per record, INC-31
+  # and INC-89 included. (The genuine outage this alarm was built for did happen
+  # once, at bring-up: records were absent or sporadic from 2026-07-28 until the
+  # capture path started working on 2026-08-09 — DEV-885.)
+  #
+  # THE FIX. CloudWatch has no time-shift for a metric, so the only way to say
+  # "invocations old enough that a record should exist" is to require them across
+  # consecutive shorter periods: 2-of-2 at ReviewsRanPeriodSeconds. This half now
+  # needs invocations in BOTH of the last two hours before it will alarm, which
+  # puts about an hour between "a review started" and "the composite can fire" —
+  # against a skew measured in minutes. Detection latency for a REAL break is
+  # unchanged, because "no records" still governs it: reviews carry on, this half
+  # alarms after two hours, and the composite fires when the 6h no-records window
+  # empties.
+  #
+  # WHY 2 AND NOT MORE. Measured against 21 days of real traffic (2026-08-18..
+  # 2026-09-07): 168 of 185 review-bearing hours fall inside a run of two or more
+  # consecutive hours, and 21 of 22 active days contain such a run. At 3-of-3 that
+  # drops to 148 hours and 17 days. Every period added trades away fireability —
+  # the one failure this alarm cannot tolerate — so this stops at the smallest
+  # number that clears a minutes-long skew.
   ReviewsRanAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: !Sub "${AWS::StackName}-reviews-ran"
       AlarmDescription: >-
         Helper for the pepper-audit missing-records composite alarm (DEV-653):
-        in ALARM when the review inference profile was invoked at all during the
-        window. Carries no action on its own.
+        in ALARM when the review inference profile was invoked in each of the
+        last two periods — held back by one period so an in-flight review, whose
+        record is written only after its verdict, cannot read as a lost record
+        (INC-31/INC-89). Carries no action on its own.
       Namespace: AWS/Bedrock
       MetricName: Invocations
       Dimensions:
         - Name: ModelId
           Value: !Ref BedrockModelIdDimension
       Statistic: Sum
-      Period: !Ref WindowSeconds
-      EvaluationPeriods: 1
+      Period: !Ref ReviewsRanPeriodSeconds
+      EvaluationPeriods: 2
+      DatapointsToAlarm: 2
       Threshold: 1
       ComparisonOperator: GreaterThanOrEqualToThreshold
       TreatMissingData: notBreaching
@@ -146,7 +204,12 @@ Resources:
   # group receives nothing, and "received nothing" IS the condition being
   # detected. On its own this alarm sits in ALARM through every quiet stretch,
   # which is harmless — it has no action, and the composite below only fires when
-  # reviews demonstrably ran at the same time.
+  # reviews demonstrably ran, and ran long enough ago that a record should
+  # already exist (see the ordering note on ReviewsRanAlarm above).
+  #
+  # This half keeps the full WindowSeconds and a single period on purpose: it is
+  # what governs DETECTION LATENCY for a real break, and holding it back too
+  # would delay the only signal the audit pipeline has.
   NoRecordsAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
@@ -181,10 +244,15 @@ Resources:
         Pepper PR reviews invoked Bedrock but no audit records reached
         /pepper/pr-review/audit over the trailing window (DEV-653). The capture
         step is non-fatal by design, so this alarm is the ONLY signal that the
-        audit pipeline has broken — investigate the role's
+        audit pipeline has broken. TRIAGE IN ORDER. (1) Confirm the records are
+        really absent first: compare daily AWS/Bedrock Invocations against
+        IncomingLogEvents for this group over the last week. Healthy traffic runs
+        about 14 invocations per record; the real condition is a day with
+        invocations and zero records. (2) If they are genuinely absent, check the
         logs:CreateLogStream/PutLogEvents grant in
-        infrastructure/bedrock-role-policy.json first, then the ::warning::
-        annotations on recent pepper-pr-review runs.
+        infrastructure/bedrock-role-policy.json. (3) Then the warning
+        annotations on recent pepper-pr-review runs. Runbook:
+        infrastructure/README.md, "Triaging a missing-records alarm".
       AlarmRule: !Sub "ALARM(${ReviewsRanAlarm}) AND ALARM(${NoRecordsAlarm})"
       # The account's shared critical-alerts channel (DEV-1086), imported rather
       # than named. This alarm previously pointed at insights-to-linear-alarms,

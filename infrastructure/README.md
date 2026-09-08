@@ -240,7 +240,7 @@ DEV-653 audit record depends on:
 | Resource | What it is |
 |---|---|
 | Log group `/pepper/pr-review/audit` | Where every review run writes one schema-v1 JSON record. Retention 731 days (two years), because the dataset's purpose is longitudinal comparison across model, prompt and CLI versions and a series that expires is a comparison you can only run for as long as its shorter arm survives. |
-| Composite alarm `<stack>-missing-records` | Fires when Bedrock was invoked but no records landed. The capture step is `continue-on-error` by hard requirement (a required check must never go red over telemetry), so this alarm is the **only** signal that the pipeline has broken. |
+| Composite alarm `<stack>-missing-records` | Fires when Bedrock was invoked but no records landed. The capture step is `continue-on-error` by hard requirement (a required check must never go red over telemetry), so this alarm is the **only** signal that the pipeline has broken. Its two halves use deliberately different periods; see [Triaging a missing-records alarm](#triaging-a-missing-records-alarm) before changing either. |
 
 Plain CloudFormation, not SAM: there are no Lambdas and no build step, so a
 transform would buy nothing. And, per the rule at the top of this file, there is
@@ -332,6 +332,75 @@ schema and the standing Logs Insights queries.
 If nothing lands, the review run's log is where the reason is: the capture step
 annotates every failure with a `::warning::` and still exits green, by design.
 The usual cause is the IAM statement not having been applied.
+
+### Triaging a missing-records alarm
+
+`<stack>-missing-records` fires on `ALARM(reviews-ran) AND ALARM(no-records)`.
+Both halves read trailing windows over metrics that are **causally
+ordered**: a review invokes Bedrock first and writes its audit record last. So
+the first question is always whether records are genuinely missing, not why.
+
+**Start here — compare invocations against records, per day, over a week:**
+
+```sh
+cat > /tmp/pepper-audit-triage.json <<'JSON'
+[{"Id":"inv","MetricStat":{"Metric":{"Namespace":"AWS/Bedrock","MetricName":"Invocations",
+  "Dimensions":[{"Name":"ModelId","Value":"xda66yqkegz4"}]},"Period":86400,"Stat":"Sum"}},
+ {"Id":"rec","MetricStat":{"Metric":{"Namespace":"AWS/Logs","MetricName":"IncomingLogEvents",
+  "Dimensions":[{"Name":"LogGroupName","Value":"/pepper/pr-review/audit"}]},"Period":86400,"Stat":"Sum"}}]
+JSON
+
+aws cloudwatch get-metric-data \
+  --start-time "$(gdate -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --end-time "$(gdate -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --metric-data-queries file:///tmp/pepper-audit-triage.json \
+  --profile spice-ro --region us-west-2 --output json
+```
+
+Healthy traffic runs at roughly **14 Bedrock invocations per audit record** (one
+record per review, many model calls inside it). Read the result this way:
+
+| What you see | What it means |
+|---|---|
+| Every day has records, ratio near 14:1 | **Not a break.** Note it on the incident and close it. |
+| A day with invocations and **zero** records | The real condition — continue below. |
+| The composite returned to OK on its own within minutes | A boundary artifact. Same conclusion as the first row. |
+
+Only once records are genuinely absent is the rest of the runbook worth running:
+check the `WritePepperReviewAuditLog` grant in `bedrock-role-policy.json`, then
+the `::warning::` annotations the capture step leaves on recent
+`pepper-pr-review` runs (it annotates every failure and still exits green, by
+design).
+
+#### Why the two halves are asymmetric
+
+The `reviews-ran` half is deliberately **held back by one period** —
+`ReviewsRanPeriodSeconds` (1h) evaluated 2-of-2, against a 6h `WindowSeconds` on
+`no-records`. Equal windows on causally ordered metrics produce two guaranteed
+false positives, and both have been paid for:
+
+- **Leading edge** — the first review after a quiet stretch longer than the
+  window. `no-records` is already in ALARM (correctly, and harmlessly, since
+  nothing ran) and the new invocations trip `reviews-ran` before the in-flight
+  review has written anything. **INC-89**: fired 2026-09-07T21:40:02Z, back to
+  OK 67 seconds later.
+- **Trailing edge** — about one window after the last review, both halves flip
+  at once and whichever CloudWatch evaluates first decides whether the composite
+  pages. **INC-31**.
+
+Replaying both designs against real 5-minute metrics for 2026-07-28..2026-09-08:
+
+| | ALARM episodes | Of those, transient artifacts |
+|---|---|---|
+| Equal 6h windows (old) | 26 | **16**, every one ≤5 min, all after the pipeline was healthy |
+| Held-back `reviews-ran` (current) | 15 | **0** |
+
+Every episode the current shape still reports falls inside 2026-07-28..08-09 —
+the one genuine outage this alarm has ever seen (DEV-885, no records at all
+until the capture path started working on 08-09). Detection latency for a real
+break is unchanged: `no-records` still governs it.
+
+Do not "simplify" the halves back to one shared window. That is the bug.
 
 ### Rolling the stack back
 
