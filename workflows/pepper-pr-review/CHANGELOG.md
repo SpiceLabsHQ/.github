@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.2](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.11.1...pepper-pr-review-v1.11.2) (2026-09-24)
+
+
+### Bug Fixes
+
+* **pepper-pr-review:** accept only Linear issue IDs as a PR's issue reference ([#251](https://github.com/SpiceLabsHQ/.github/issues/251)) ([ef798d1](https://github.com/SpiceLabsHQ/.github/commit/ef798d1263f81767239956161db0273b3a38dabf))
+
 ## [1.11.1](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.11.0...pepper-pr-review-v1.11.1) (2026-08-22)
 
 
