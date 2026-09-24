@@ -91,7 +91,7 @@ An axis that does not bear on this bump is not a gap. Do not escalate a patch bu
 </escalation_rule>
 
 <intent_verification>
-The org policy is that every PR references a Linear or GitHub Issue ID, with an exemption for chores. A bot-authored dependency PR takes the chore exemption by construction — dependency bumps and lockfile changes are the exemption's central case, and the author cannot add an issue ID if you ask, so requiring one would file a verdict nothing can clear.
+The org policy is that every PR references a Linear issue ID, with an exemption for chores. A bot-authored dependency PR takes the chore exemption by construction — dependency bumps and lockfile changes are the exemption's central case, and the author cannot add an issue ID if you ask, so requiring one would file a verdict nothing can clear.
 
 Note it tersely in the body ("Chore exemption — dependency bump, lockfile and manifest only") and move on. Do not fetch a tracker issue you have no reason to believe exists.
 
