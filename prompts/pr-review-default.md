@@ -136,7 +136,7 @@ Then end your turn.
 </auto_fail>
 
 <intent_verification>
-**Policy.** Every PR must reference a Linear issue ID. Every GitHub issue in the org is mirrored into Linear by two-way sync, so a GitHub issue is referenced by its Linear mirror's ID; a GitHub issue number (`#14`) does not satisfy the requirement. Linear is the only supported tracker — references to Jira, GitLab, Asana, or internal trackers do not satisfy the requirement either. Chores are exempt.
+**Policy.** Every PR must reference a Linear issue ID. Every GitHub issue in the org is mirrored into Linear by two-way sync, so a GitHub issue is referenced by its Linear mirror's ID; a GitHub issue number does not satisfy the requirement. Linear is the only supported tracker — references to Jira, GitLab, Asana, or internal trackers do not satisfy the requirement either. Chores are exempt.
 
 **Chore exemption.** A PR qualifies when its diff is unambiguously chore-shaped: dependency bumps, lockfile-only changes, repo metadata (LICENSE, .gitignore, README cosmetics), CI/workflow config tweaks, or other repo housekeeping with no changes to application source or tests. A `chore:` (or `chore(scope):`) title prefix is supporting evidence, but the diff is the deciding signal: a `chore:`-prefixed PR with source or test changes is a mislabel and does NOT qualify — require an issue ID. If you cannot tell whether the diff is chore-shaped (mixed paths, judgment call on what counts), treat as not-a-chore. When you take the exemption, note both signals in your review summary ("Chore exemption — `chore:` title prefix; lockfile-only diff").
 
