@@ -26,10 +26,11 @@ EXCLUDED='["rosemary-releaser[bot]"]'
 
 fails=0
 
-# Run the real decision program. Args: <pr> <reviews> <timeline>
+# Run the real decision program. Args: <pr> <reviews> <timeline> <inflight>
 decide() {
   jq -cn --arg bot "$BOT" --argjson excluded_authors "$EXCLUDED" \
-    --argjson pr "$1" --argjson reviews "$2" --argjson timeline "$3" -f "$DECIDE"
+    --argjson pr "$1" --argjson reviews "$2" --argjson timeline "$3" --argjson inflight "$4" \
+    -f "$DECIDE"
 }
 
 # Assert the decision for one scenario.
@@ -62,49 +63,49 @@ pending()  { jq -cn --arg sha "$1" --arg who "${2:-$BOT}" \
 # Draft -> ready with no push: the floor never saw ready_for_review (DEV-576),
 # so there is no Pepper review at all on a non-draft PR.
 check "never reviewed, never nudged" nudge stranded \
-  "$(decide "$(pr sha-a)" '[]' '[]')"
+  "$(decide "$(pr sha-a)" '[]' '[]' false)"
 
 # Stale verdict from when it was a draft: reviewed, but at an older SHA.
 check "verdict is stale (older SHA)" nudge stranded \
-  "$(decide "$(pr sha-b)" "[$(review sha-a 2026-07-01T00:00:00Z)]" '[]')"
+  "$(decide "$(pr sha-b)" "[$(review sha-a 2026-07-01T00:00:00Z)]" '[]' false)"
 
 # DEV-465: a new PR reusing a branch already reviewed on this same SHA is NOT
 # what this rule catches — the SHA matches, so the sweep correctly stands down
 # and DEV-465 is handled by the review living on the branch, not by a nudge.
 check "verdict is current" skip current-verdict \
-  "$(decide "$(pr sha-a)" "[$(review sha-a 2026-07-01T00:00:00Z)]" '[]')"
+  "$(decide "$(pr sha-a)" "[$(review sha-a 2026-07-01T00:00:00Z)]" '[]' false)"
 
 # --- Guardrail: no re-nudge (backoff) --------------------------------------
 check "nudged, no review since" skip awaiting-nudge \
-  "$(decide "$(pr sha-a)" '[]' "[$(reopened 2026-07-02T00:00:00Z)]")"
+  "$(decide "$(pr sha-a)" '[]' "[$(reopened 2026-07-02T00:00:00Z)]" false)"
 
 check "nudged, only a review predating the nudge" skip awaiting-nudge \
   "$(decide "$(pr sha-b)" "[$(review sha-a 2026-07-01T00:00:00Z)]" \
-     "[$(reopened 2026-07-02T00:00:00Z)]")"
+     "[$(reopened 2026-07-02T00:00:00Z)]" false)"
 
 # A review that landed AFTER the nudge means the nudge worked. A later push then
 # strands the PR again — a FRESH stranding, not a loop, so nudge it.
 check "nudge worked, then a new push stranded it again" nudge stranded \
   "$(decide "$(pr sha-c)" "[$(review sha-b 2026-07-03T00:00:00Z)]" \
-     "[$(reopened 2026-07-02T00:00:00Z)]")"
+     "[$(reopened 2026-07-02T00:00:00Z)]" false)"
 
 # A human reopening the PR is not our nudge and must not trigger the backoff,
 # or one manual reopen would permanently exempt a PR from the sweep.
 check "reopened by a human, not the sweep" nudge stranded \
-  "$(decide "$(pr sha-a)" '[]' "[$(reopened 2026-07-02T00:00:00Z alice)]")"
+  "$(decide "$(pr sha-a)" '[]' "[$(reopened 2026-07-02T00:00:00Z alice)]" false)"
 
 # The flip side of sharing one login: a reopen by Pepper's App IS the sweep, and
 # must trip the backoff. Sound only while nothing else in Pepper reopens PRs — if
 # that ever changes, this case is where it breaks, and the identities need
 # splitting.
 check "reopened by Pepper's App is our own nudge" skip awaiting-nudge \
-  "$(decide "$(pr sha-a)" '[]' "[$(reopened 2026-07-02T00:00:00Z "$BOT")]")"
+  "$(decide "$(pr sha-a)" '[]' "[$(reopened 2026-07-02T00:00:00Z "$BOT")]" false)"
 
 # Newest nudge wins: an old nudge that did get a review must not mask a recent
 # nudge that did not.
 check "several nudges, newest has no review since" skip awaiting-nudge \
   "$(decide "$(pr sha-c)" "[$(review sha-b 2026-07-03T00:00:00Z)]" \
-     "[$(reopened 2026-07-02T00:00:00Z),$(reopened 2026-07-04T00:00:00Z)]")"
+     "[$(reopened 2026-07-02T00:00:00Z),$(reopened 2026-07-04T00:00:00Z)]" false)"
 
 # --- Guardrail: never nudge a bot-authored PR (DEV-667 incident) ------------
 # The nudge is a close -> reopen, and Dependabot reads the close as "rejected":
@@ -112,39 +113,52 @@ check "several nudges, newest has no review since" skip awaiting-nudge \
 # bot PR is skipped EVEN WHEN genuinely stranded (no review at all here) — the
 # categorical rule, not an allowlist of known-bad bots.
 check "dependabot PR, stranded, still skipped" skip bot-author \
-  "$(decide "$(pr sha-a 'dependabot[bot]')" '[]' '[]')"
+  "$(decide "$(pr sha-a 'dependabot[bot]')" '[]' '[]' false)"
 
 check "renovate PR, stranded, still skipped" skip bot-author \
-  "$(decide "$(pr sha-a 'renovate[bot]')" '[]' '[]')"
+  "$(decide "$(pr sha-a 'renovate[bot]')" '[]' '[]' false)"
 
 # rosemary-releaser is a bot too, so the bot rule now subsumes the old
 # excluded-author path for it. Pinned so a refactor can't quietly let a
 # rosemary release PR through to a nudge.
 check "rosemary release PR is caught as a bot" skip bot-author \
-  "$(decide "$(pr sha-a 'rosemary-releaser[bot]')" '[]' '[]')"
+  "$(decide "$(pr sha-a 'rosemary-releaser[bot]')" '[]' '[]' false)"
 
 # The bot check must not swallow a human whose name merely CONTAINS "bot".
 check "human author containing 'bot' is not a bot" nudge stranded \
-  "$(decide "$(pr sha-a 'robotina')" '[]' '[]')"
+  "$(decide "$(pr sha-a 'robotina')" '[]' '[]' false)"
 
 check "draft PR" skip draft \
-  "$(decide "$(pr sha-a alice true)" '[]' '[]')"
+  "$(decide "$(pr sha-a alice true)" '[]' '[]' false)"
 
 # --- Reading Pepper's reviews out of a mixed list ---------------------------
 # Someone else's approval is not a Pepper verdict; the PR is still stranded.
 check "human review only" nudge stranded \
-  "$(decide "$(pr sha-a)" "[$(review sha-a 2026-07-01T00:00:00Z alice)]" '[]')"
+  "$(decide "$(pr sha-a)" "[$(review sha-a 2026-07-01T00:00:00Z alice)]" '[]' false)"
 
 # A PENDING review carries a null submitted_at. Sorting it as the newest would
 # read as "reviewed at commit null" and wrongly strand-or-skip the PR.
 check "pending review ignored, real verdict is current" skip current-verdict \
   "$(decide "$(pr sha-a)" \
-     "[$(review sha-a 2026-07-01T00:00:00Z),$(pending sha-zzz)]" '[]')"
+     "[$(review sha-a 2026-07-01T00:00:00Z),$(pending sha-zzz)]" '[]' false)"
 
 # Out-of-order pages must not change which review is newest.
 check "reviews arrive out of order" skip current-verdict \
   "$(decide "$(pr sha-b)" \
-     "[$(review sha-b 2026-07-05T00:00:00Z),$(review sha-a 2026-07-01T00:00:00Z)]" '[]')"
+     "[$(review sha-b 2026-07-05T00:00:00Z),$(review sha-a 2026-07-01T00:00:00Z)]" '[]' false)"
+
+# --- Guardrail: in-flight Pepper run (DEV-2326) -----------------------------
+# A queued or running floor run on this exact head SHA means the PR is mid-
+# review, not stranded. Reopening now would race it: a second floor run on the
+# same commit, and the CI it just triggered gets cancelled by the reopen.
+check "in-flight run, no review yet" skip review-in-flight \
+  "$(decide "$(pr sha-a)" '[]' '[]' true)"
+
+check "in-flight run, but the only review is on an old commit" skip review-in-flight \
+  "$(decide "$(pr sha-b)" "[$(review sha-a 2026-07-01T00:00:00Z)]" '[]' true)"
+
+check "not in flight, no review" nudge stranded \
+  "$(decide "$(pr sha-a)" '[]' '[]' false)"
 
 echo
 if [ "$fails" -eq 0 ]; then
