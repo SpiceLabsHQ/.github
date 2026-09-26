@@ -293,7 +293,7 @@ Rollout order is TS / Python / Go first, then PHP and PowerShell — but the act
 
 ### Actions Audit (`actions-audit.yml`)
 
-Audits a calling repo's `.github/workflows/**` for supply-chain risk. Two layers:
+Audits a calling repo's `.github/workflows/**` for supply-chain risk. Two layers, run as one job; SHA-pin enforcement still runs when zizmor fails, so both sets of findings show in one run:
 
 1. **zizmor static analysis** — runs [zizmor](https://github.com/zizmorcore/zizmor) against the workflows, surfacing dangerous GHA patterns (template injection, excessive `GITHUB_TOKEN` permissions, pwn requests, self-hosted runner misuse, etc.). Findings at or above `min_severity` fail the job. SARIF is uploaded to the Security tab so issues persist across runs.
 2. **SHA-pin enforcement** — every `uses:` referencing a third-party action must be pinned to a 40-char commit SHA. Owner globs in `allow_tags_for` may use major-version tags (e.g. `actions/checkout@v4`). Implemented as a small inline shell script — no new third-party action just for this check.
@@ -365,7 +365,7 @@ permissions:
 Two PR checks bundled into one reusable workflow. Drop the [caller workflow](examples/caller-pr-hygiene.yml) into any repo at `.github/workflows/pr-hygiene.yml`.
 
 - **Conventional Commits title check (blocking).** Enforces a [Conventional Commits](https://www.conventionalcommits.org/) header on the PR title — required so `release-please` can classify the change at squash-merge time. On failure the workflow posts a sticky comment with a fix example; the comment is deleted automatically once the title is corrected.
-- **Large-PR size warning (non-blocking).** Posts an informational sticky comment when a PR is large by changed lines **or** by file count. Generated and vendored files (lockfiles, build output, and anything matching `size_exclude_pattern`) are excluded from both counts, so a dependency bump doesn't trip it. The comment names whichever dimension crossed and points to the [Eng Cookbook PR standard](https://github.com/SpiceLabsHQ/Eng-Cookbook/blob/main/standards/pull-requests.md). The check exits 0 either way — branch protection should not require it.
+- **Large-PR size warning (non-blocking).** Posts an informational sticky comment when a PR is large by changed lines **or** by file count. Generated and vendored files (lockfiles, build output, and anything matching `size_exclude_pattern`) are excluded from both counts, so a dependency bump doesn't trip it. The comment names whichever dimension crossed and points to the [Eng Cookbook PR standard](https://github.com/SpiceLabsHQ/Eng-Cookbook/blob/main/standards/pull-requests.md). It runs in the same job as the title check, after it and even when the title check fails, and it never fails that job.
 
 **Inputs** (all optional, override via `with:`):
 

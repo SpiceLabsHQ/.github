@@ -379,42 +379,38 @@ jobs:
           echo "run=${run}" >> "${GITHUB_OUTPUT}"
           echo "nag=${nag}" >> "${GITHUB_OUTPUT}"
 
-  # Draft guidance (DEV-666). The gate skips the review on drafts, which from
-  # the PR surface is indistinguishable from "Pepper never ran" — the author is
-  # left waiting for a review that will never arrive. This job is the mirror
-  # image of that skip: draft -> say how to get reviewed, ready -> nothing (the
-  # review runs as before). It is the FAST PATH of draft handling; the org sweep
-  # is the guarantee half.
-  #
-  # A STICKY comment (same `header:` every run) so a draft pushed to ten times
-  # carries one comment, updated in place, not ten. Cleared once the PR is no
-  # longer a draft so a "still a draft" note never sits above Pepper's actual
-  # verdict — the same post/clear pairing pr-hygiene uses for its size warning.
-  #
-  # NON-BLOCKING BY CONSTRUCTION. floor-pepper is a REQUIRED check org-wide, so
-  # a failure here would deadlock auto-merge (DEV-502) over a courtesy comment.
-  # Every step is `continue-on-error`, leaving the job green whatever GitHub's
-  # comment API does.
-  draft-guidance:
-    name: Draft guidance comment
-    needs: gate
-    runs-on: ubuntu-latest
-    # `nag` is only ever true on a pull_request event, so this covers both the
-    # post and the clear branches without re-testing the event name.
-    if: github.event_name == 'pull_request'
-    steps:
+      # ---- Draft guidance (DEV-666) -------------------------------------------
+      # Folded into this job from its own `draft-guidance` job (DEV-2325): GitHub
+      # bills every job as at least a whole minute, and these steps run for
+      # seconds. They come after `decide`, so the job outputs above are already
+      # written, and they read `nag` from that step directly.
+      #
+      # The gate skips the review on drafts, which from the PR surface is
+      # indistinguishable from "Pepper never ran" — the author is left waiting
+      # for a review that will never arrive. These steps are the mirror image of
+      # that skip: draft -> say how to get reviewed, ready -> nothing (the review
+      # runs as before). They are the FAST PATH of draft handling; the org sweep
+      # is the guarantee half.
+      #
+      # A STICKY comment (same `header:` every run) so a draft pushed to ten
+      # times carries one comment, updated in place, not ten. Cleared once the PR
+      # is no longer a draft so a "still a draft" note never sits above Pepper's
+      # actual verdict — the same post/clear pairing pr-hygiene uses for its size
+      # warning.
+      #
+      # NON-BLOCKING BY CONSTRUCTION. floor-pepper is a REQUIRED check org-wide,
+      # and a failed gate would skip the review, so a failure here would
+      # deadlock auto-merge (DEV-502) over a courtesy comment. Every step is
+      # `continue-on-error`, leaving the gate green whatever GitHub's comment
+      # API does.
+      #
       # Posted under Pepper's own identity — the message speaks in first person
-      # about Pepper's review behavior, so github-actions[bot] would be the
-      # wrong voice. continue-on-error + the `||` fallback below mean a mint
-      # hiccup downgrades the author to github-actions[bot] rather than
-      # swallowing the guidance entirely.
-      - name: Generate App installation token
-        id: app-token
-        continue-on-error: true
-        uses: actions/create-github-app-token@v3
-        with:
-          client-id: ${{ inputs.app_client_id }}
-          private-key: ${{ secrets.PEPPER_PR_REVIEW_APP_PRIVATE_KEY }}
+      # about Pepper's review behavior, so github-actions[bot] would be the wrong
+      # voice. This reuses the `app-token` minted at the top of this job (same
+      # App, same event condition) rather than minting a second one; that step
+      # is continue-on-error, and the `||` fallback below means a mint hiccup
+      # downgrades the author to github-actions[bot] rather than swallowing the
+      # guidance entirely.
 
       # This body MUST NOT contain the trigger phrase (default `@pepper`).
       # Posted by the Pepper App, it fires an `issue_comment` event, and a body
@@ -422,7 +418,9 @@ jobs:
       # every draft push. Same invariant as the no-verdict escalation comment
       # below — see the longer note there.
       - name: Post draft guidance
-        if: needs.gate.outputs.nag == 'true'
+        # `nag` is only ever true on a pull_request event; the event test is
+        # kept so both branches carry the old job-level condition.
+        if: github.event_name == 'pull_request' && steps.decide.outputs.nag == 'true'
         continue-on-error: true
         # SHA-pinned to v3.0.4 (third-party).
         uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
@@ -442,7 +440,7 @@ jobs:
       # from an earlier draft push. A no-op when no such comment exists, which
       # is the common case on a PR opened ready.
       - name: Clear draft guidance
-        if: needs.gate.outputs.nag != 'true'
+        if: github.event_name == 'pull_request' && steps.decide.outputs.nag != 'true'
         continue-on-error: true
         uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
         with:

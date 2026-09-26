@@ -52,8 +52,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  zizmor:
-    name: zizmor scan
+  # One job for both layers (DEV-2325): GitHub bills every job as at least a
+  # whole minute. zizmor steps run first; the SHA-pin steps are prefixed with
+  # `!cancelled()` so a zizmor failure does not hide SHA-pin findings, and both
+  # show up in one run. Permissions are the workflow-level block above, which
+  # both former jobs shared.
+  audit:
+    name: zizmor scan + SHA-pin enforcement
     runs-on: ubuntu-latest
     steps:
       - name: Validate min_severity
@@ -99,7 +104,7 @@ jobs:
         run: |
           set -euo pipefail
           # zizmor's unpinned-uses audit otherwise demands a hash pin for EVERY
-          # action, which contradicts the sha-pin job below: that job permits
+          # action, which contradicts the SHA-pin steps below: they permit
           # version tags for the `allow_tags_for` patterns (first-party actions).
           # Emit a matching policy so the two audits agree — allowlisted patterns
           # may ref-pin (tags OK); everything else must hash-pin. Single source of
@@ -212,17 +217,18 @@ jobs:
           fi
           exit "${rc}"
 
-  sha-pin:
-    name: SHA-pin enforcement
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout caller repo
+      # ---- SHA-pin enforcement ------------------------------------------------
+      # A fresh checkout, as before the merge: it runs even when a zizmor step
+      # failed before the first checkout, and resets the tree zizmor wrote to.
+      - name: Checkout caller repo (SHA-pin)
+        if: ${{ !cancelled() }}
         # actions/checkout — first-party, allowed to use a major-version tag.
         uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Enforce 40-char SHA pins on third-party actions
+        if: ${{ !cancelled() }}
         env:
           ALLOW_TAGS_FOR: ${{ inputs.allow_tags_for }}
         run: |
