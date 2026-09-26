@@ -35,7 +35,7 @@ on:
         description: |
           Soft threshold for changed lines (additions + deletions, excluding
           generated/vendored files — see `size_exclude_pattern`) above which the
-          size-warning job posts an informational comment. The check itself
+          size-warning step posts an informational comment. The check itself
           never fails on size — see file header.
         required: false
         type: number
@@ -43,7 +43,7 @@ on:
       large_pr_file_threshold:
         description: |
           Soft threshold for the number of changed files (excluding
-          generated/vendored files) above which the size-warning job posts an
+          generated/vendored files) above which the size-warning step posts an
           informational comment. Fires independently of `large_pr_threshold`:
           either one crossing triggers the notice. Never fails the check.
         required: false
@@ -58,16 +58,22 @@ on:
         type: string
         default: '(^|/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|Cargo\.lock|poetry\.lock|Gemfile\.lock|composer\.lock|go\.sum|uv\.lock|bun\.lockb)$|(^|/)(vendor|node_modules|dist|build|__generated__|__snapshots__)/|\.min\.(js|css)$|\.snap$|\.(pb|pb2)\.(go|py)$|\.generated\.'
 
-# Workflow-level permissions are the union of what both jobs need. Each job
-# below restricts further (least privilege per job).
+# Workflow-level permissions are what the single job needs; the job repeats
+# them so a later edit to one block can't silently widen the other.
 permissions:
   contents: read
   pull-requests: write
 
 jobs:
-  title:
-    name: Conventional Commits title
+  # One job for both checks (DEV-2325): GitHub bills every job as at least a
+  # whole minute, and each check runs for seconds. The title steps come first
+  # and can fail the job. The size steps after them are prefixed with
+  # `!cancelled() &&` so a failing title check does not hide the size report,
+  # and each keeps `continue-on-error: true` so size never turns the job red.
+  hygiene:
+    name: Conventional Commits title + PR size warning
     runs-on: ubuntu-latest
+    # Union of the two former jobs' permissions (they were identical).
     permissions:
       contents: read
       pull-requests: write
@@ -150,26 +156,19 @@ jobs:
           header: pr-hygiene-title
           delete: true
 
-  size:
-    name: PR size warning (non-blocking)
-    runs-on: ubuntu-latest
-    # This job MUST exit 0 even when the PR is over the threshold. The intent
-    # is awareness, not enforcement. Branch protection should NOT be
-    # configured to require this check.
-    permissions:
-      contents: read
-      pull-requests: write
-    env:
-      GH_TOKEN: ${{ github.token }}
-    steps:
+      # ---- size warning (non-blocking) ----------------------------------------
+      # These steps MUST NOT fail the job even when the PR is over the
+      # threshold. The intent is awareness, not enforcement.
       - name: Compute changed size
         id: size
+        if: ${{ !cancelled() }}
         # The size read now makes an API call (per-file breakdown for the
         # generated/vendored filter). A transient API failure must not turn this
         # non-blocking check red — fail open: no outputs, so the post step below
         # simply doesn't fire.
         continue-on-error: true
         env:
+          GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           LOC_THRESHOLD: ${{ inputs.large_pr_threshold }}
@@ -254,7 +253,7 @@ jobs:
           } >> "${GITHUB_OUTPUT}"
 
       - name: Post sticky size warning
-        if: steps.size.outputs.over_threshold == 'true'
+        if: ${{ !cancelled() && steps.size.outputs.over_threshold == 'true' }}
         # Belt-and-suspenders for the non-blocking guarantee. The job's intent
         # is awareness only, so a transient failure of the sticky-comment
         # action (network blip, GitHub API hiccup, secondary rate limit) must
@@ -268,7 +267,7 @@ jobs:
 
       # Clear the warning if a force-push trimmed the PR back below threshold.
       - name: Clear sticky size warning
-        if: steps.size.outputs.over_threshold == 'false'
+        if: ${{ !cancelled() && steps.size.outputs.over_threshold == 'false' }}
         # See note on the post step: the non-blocking guarantee must hold even
         # if the comment-delete call transiently fails.
         continue-on-error: true

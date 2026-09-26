@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Fixture tests for the pr-hygiene size-check logic (DEV-550). The size logic
-# lives inline in the `run:` block of pr-hygiene.yml's `size` job (the job has
+# lives inline in the `run:` block of pr-hygiene.yml's `size` step (the job has
 # no checkout, so the logic can't be a separate script the workflow calls at
 # runtime). To test the EXACT code that ships without duplicating it, this
 # harness extracts that step's `run:` script AND the real `size_exclude_pattern`
@@ -33,8 +33,9 @@ import sys, yaml
 doc = yaml.safe_load(open(sys.argv[1]))
 work = sys.argv[2]
 on = doc.get("on") or doc.get(True)  # YAML parses bare `on:` as the bool True
-size = doc["jobs"]["size"]
-step = next(s for s in size["steps"] if s.get("id") == "size")
+# The size steps share one job with the title check (DEV-2325); find the step
+# by id rather than by job name so a job rename can't break the extraction.
+step = next(s for j in doc["jobs"].values() for s in j["steps"] if s.get("id") == "size")
 open(f"{work}/size.sh", "w").write(step["run"])
 excl = on["workflow_call"]["inputs"]["size_exclude_pattern"]["default"]
 open(f"{work}/exclude.txt", "w").write(excl)
