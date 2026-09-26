@@ -189,6 +189,30 @@ while IFS=$'\t' read -r _updated repo num sha author; do
     continue
   fi
 
+  # In-flight check (DEV-2326): a Pepper floor run already queued or running on
+  # this exact head SHA means the PR is not stranded, just mid-review — the
+  # sweep reopening it now would race that run (cancel its CI, fire a second
+  # floor run) for a review already about to land. Two calls, not one: the runs
+  # list endpoint takes a single `status`, and "in flight" spans both `queued`
+  # and `in_progress`. FAIL CLOSED on either call: an API error here reads as
+  # "assume it's running", because a wrongly-skipped PR just waits one 15-minute
+  # slot while a wrongly-nudged one costs a full duplicate floor run mid-flight.
+  queued_runs="$(gh api --paginate \
+      "repos/${ORG}/${repo}/actions/runs?head_sha=${sha}&status=queued&per_page=100" \
+      --jq '[.workflow_runs[]? | select(.path == ".github/workflows/floor-pepper.yml")] | length' \
+      2>/dev/null | jq -s 'add // 0')" || queued_runs=""
+  in_progress_runs="$(gh api --paginate \
+      "repos/${ORG}/${repo}/actions/runs?head_sha=${sha}&status=in_progress&per_page=100" \
+      --jq '[.workflow_runs[]? | select(.path == ".github/workflows/floor-pepper.yml")] | length' \
+      2>/dev/null | jq -s 'add // 0')" || in_progress_runs=""
+  if [ -z "$queued_runs" ] || [ -z "$in_progress_runs" ]; then
+    inflight=true
+  elif [ "$((queued_runs + in_progress_runs))" -gt 0 ]; then
+    inflight=true
+  else
+    inflight=false
+  fi
+
   decision="$(jq -n \
     --arg bot "$BOT_LOGIN" \
     --argjson excluded_authors "$EXCLUDED_AUTHORS" \
@@ -196,6 +220,7 @@ while IFS=$'\t' read -r _updated repo num sha author; do
         '{draft: false, user: {login: $author}, head: {sha: $sha}}')" \
     --argjson reviews "$reviews" \
     --argjson timeline "$timeline" \
+    --argjson inflight "$inflight" \
     -f "$DECIDE")"
   action="$(jq -r '.action' <<<"$decision")"
   reason="$(jq -r '.reason' <<<"$decision")"

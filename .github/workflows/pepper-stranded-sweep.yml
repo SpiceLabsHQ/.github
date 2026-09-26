@@ -42,11 +42,12 @@ name: Pepper — stranded PR sweep
 #   - Floor exclusions inherited: drafts, docs-tier repos, this `.github` repo,
 #     and rosemary-releaser release PRs.
 #
-# ONE-TIME SETUP: grant the existing `pepper-pr-review` App one more permission,
-# org-wide. It already holds what the close -> reopen needs:
-#       Repository:   Pull requests     = read/write   (already granted)
-#       Repository:   Metadata          = read         (already granted)
-#       Organization: Custom properties = read         (ADD THIS — docs-tier skip)
+# PERMISSIONS: the sweep runs as the existing `pepper-pr-review` App, which
+# holds everything it needs org-wide:
+#       Repository:   Pull requests     = read/write   (close -> reopen)
+#       Repository:   Metadata          = read
+#       Organization: Custom properties = read         (docs-tier skip)
+#       Repository:   Actions           = read         (in-flight check, DEV-2326)
 # The credentials are the App's existing `PEPPER_PR_REVIEW_APP_*` org secrets, so
 # there is nothing new to store. Until they resolve, the workflow no-ops with a
 # warning rather than failing.
@@ -55,6 +56,10 @@ name: Pepper — stranded PR sweep
 # unreadable property list is indistinguishable from "no repo is docs-tier",
 # which would put every docs repo in scope and reopen PRs there that no floor
 # review will ever answer. Fail-closed is the cheap direction here.
+#
+# Do not remove Actions read from the App. The in-flight check fails closed per
+# PR (`inflight=true`) rather than aborting, so losing that permission would not
+# turn a run red: the sweep would quietly skip every candidate and stop nudging.
 
 on:
   schedule:

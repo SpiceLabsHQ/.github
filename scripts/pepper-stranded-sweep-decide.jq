@@ -18,6 +18,11 @@
 #   $pr                — {draft, user:{login}, head:{sha}}
 #   $reviews           — GET /repos/{o}/{r}/pulls/{n}/reviews
 #   $timeline          — GET /repos/{o}/{r}/issues/{n}/timeline
+#   $inflight          — bool: a Pepper floor run (`.github/workflows/floor-pepper.yml`)
+#                        is queued or in progress on this PR's head SHA (DEV-2326).
+#                        The caller fails this CLOSED (true) on any API error, so a
+#                        transient failure here reads as "assume it's running" —
+#                        never as "assume it's stranded".
 #
 # Output: {"action": "nudge"|"skip", "reason": "<slug>"}
 
@@ -70,6 +75,14 @@ elif (last_review != null and last_review.commit_id == $pr.head.sha) then
   # Pepper's newest verdict is against the current head — this PR is reviewed.
   # Same "current verdict" test as the DEV-523 unchanged-SHA short-circuit.
   {action: "skip", reason: "current-verdict"}
+
+elif $inflight then
+  # A Pepper floor run against this exact head SHA is already queued or running
+  # (DEV-2326). Reopening now would race it: the reopen fires a SECOND floor run
+  # on the same commit and cancels the CI it just triggered, for a review the
+  # in-flight run is about to produce anyway. This must win over the backoff
+  # below — an in-flight run is not "awaiting" anything, it is already happening.
+  {action: "skip", reason: "review-in-flight"}
 
 elif (last_nudge_at != null
       and ((last_review == null) or (last_review.submitted_at <= last_nudge_at))) then
