@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.3](https://github.com/SpiceLabsHQ/.github/compare/secret-scan-v1.1.2...secret-scan-v1.1.3) (2026-09-26)
+
+
+### Performance Improvements
+
+* **ci-floor:** run each floor check as one job ([#253](https://github.com/SpiceLabsHQ/.github/issues/253)) ([bc3b403](https://github.com/SpiceLabsHQ/.github/commit/bc3b4037bca61847a0934a6b9b2c7c696453e421))
+
 ## [1.1.2](https://github.com/SpiceLabsHQ/.github/compare/secret-scan-v1.1.1...secret-scan-v1.1.2) (2026-08-22)
 
 
