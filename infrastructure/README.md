@@ -211,7 +211,9 @@ spend disappears from attribution. Profiles are **immutable** in the model they
 wrap: an upgrade means a NEW profile (new id), which in turn means updating the
 `review_model` default in the workflow, the `BedrockModelIdDimension` parameter
 of the `pepper-audit` stack below, and the pinned model ARNs in the policy —
-those four move together (DEV-492/DEV-875).
+those four move together (DEV-492/DEV-875). The full procedure for a model or
+routing change, including the canary and the readout, is
+[`docs/pepper-model-transitions.md`](../docs/pepper-model-transitions.md).
 
 ### GitHub OIDC identity provider
 
