@@ -218,8 +218,9 @@ There was once a second, comment-triggered **on-demand** mode (`@pepper <task>`,
 
 | Input | Default | Notes |
 |---|---|---|
-| `review_model` | `arn:…application-inference-profile/xda66yqkegz4` (`pepper-pr-review-sonnet-5`) | Model used for the review. Default is an AWS Application Inference Profile wrapping Claude Sonnet 5, tagged `Product=pepper, Mode=review` for cost allocation |
-| `model` | `""` | Override. Set only when testing a different model on a debug branch — bypassing the tagged profile forfeits cost attribution. Must still be a `Product=pepper` application inference profile wrapping an authorized model, or Bedrock returns `AccessDenied` (DEV-875) |
+| `review_model` | `arn:…application-inference-profile/xda66yqkegz4` (`pepper-pr-review-sonnet-5`) | Model used for the review. Left at the default, each PR is assigned an arm from the workflow's arm table instead (DEV-2455): a hash of `repo#pr_number` picks it, so every review round of a PR uses the same model and effort. Today that is 50% `s5-high` (this profile) and 50% `s55-high` (Sonnet 5.5), both at `high`. Any other value wins over the arm and records arm `override` |
+| `model` | `""` | Override. Wins over `review_model` and the arm. Set only when testing a different model on a debug branch — bypassing the tagged profile forfeits cost attribution. Must still be a `Product=pepper` application inference profile wrapping an authorized model, or Bedrock returns `AccessDenied` (DEV-875) |
+| `effort` | `""` | Reasoning effort override (`low`, `medium`, `high`, `xhigh`, `max`). Wins over the arm's effort; empty uses the arm's, or `high` under a model override. Other values are ignored with a warning |
 | `aws_region` | `us-west-2` | AWS region where the Bedrock role and inference profiles live |
 | `standards_path` | `.pepper/pr-review-standards.md` | Override if your repo stores standards elsewhere |
 | `reviewers_team` | `reviewers` | Slug of the org team Pepper requests review from on escalation. Must be a team in the repo's own org with read access to the repo; the App token needs org `members: read` to resolve it |

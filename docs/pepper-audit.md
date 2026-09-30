@@ -92,6 +92,7 @@ individual run is readable without AWS access at all.
   "workflow_sha": "3fd2805...",
   "standards_sha256": "9f86d081...",
   "cookbook_ref": "v1.2.0",
+  "arm": "s5-high",
   "model": "arn:aws:bedrock:us-west-2:618640261060:application-inference-profile/xda66yqkegz4",
   "model_executed": "claude-sonnet-5",
   "effort": "high",
@@ -120,6 +121,7 @@ individual run is readable without AWS access at all.
 | `workflow_sha` | The commit of the reusable workflow this run used — which is also the commit its prompt templates and post-verdict scripts were fetched at. The prompt/template version. |
 | `standards_sha256` | SHA-256 of the calling repo's `standards_path` file, or `null` when it has none. The per-repo prompt-customization identity: it separates "this repo's PRs are big" from "this repo's custom standards drive long reviews", and it changes the moment a repo edits its standards mid-series. |
 | `cookbook_ref` | The Eng-Cookbook release tag whose `standards/` the prompt actually carried (DEV-1119), or `null` when the run degraded to the "no org standards this run" marker — no stable release, a failed checkout, or the `dependency` flavor, which has no standards block. Pepper reviews against the **latest stable** release, a deliberate float, so this is the field that attributes a behavior or cost shift to a cookbook release rather than to a prompt or model change. |
+| `arm` | The model/effort arm the workflow picked for this PR (DEV-2455): an arm name from the workflow's arm table (e.g. `s5-high`, `s55-high`), `override` when the caller's `model` or a non-default `review_model` input replaced the arm, `default-fallback` when selection failed and the run used the default model at `high`, or `null` on records written before the field existed. A PR keeps one arm across all its review rounds, so compare arms by PR as well as by run. |
 | `model` | The application-inference-profile ARN the workflow resolved, **as passed** — the key AWS Cost Explorer attribution and IAM scoping hang off. Group cost by this. |
 | `model_executed` | The resolved model id the CLI actually sent (e.g. `claude-sonnet-5`), read off the SDK stream; `null` when no stream was readable. A row whose `model_executed` names something its `model` profile does not wrap is the CLI ignoring the workflow — the DEV-881 failure class. |
 | `effort`, `cli_version` | Recorded **as executed** — read off what the CLI actually sent, with the workflow's own settings only as a fallback (both sources speak the same vocabulary, so as-executed is strictly the better observation). |
