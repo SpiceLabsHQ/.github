@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.12.0](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.11.3...pepper-pr-review-v1.12.0) (2026-09-30)
+
+
+### Features
+
+* **pepper-pr-review:** record why a review ended without a verdict ([#263](https://github.com/SpiceLabsHQ/.github/issues/263)) ([67c370f](https://github.com/SpiceLabsHQ/.github/commit/67c370f79f810b8fb20ae6568754cb6fa972e972))
+
 ## [1.11.3](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.11.2...pepper-pr-review-v1.11.3) (2026-09-26)
 
 
