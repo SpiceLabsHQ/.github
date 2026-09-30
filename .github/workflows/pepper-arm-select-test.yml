@@ -1,0 +1,35 @@
+name: Pepper arm selection — test
+
+# Runs the DEV-2455 arm-selection test on any PR that touches the review
+# workflow or the test. The test pulls the "Select arm and resolve model" step
+# and its arm table out of pepper-pr-review.yml with yq and runs them, so it
+# checks exactly what ships.
+#
+# WHY: that step never fails the job. pepper-pr-review is a required check
+# org-wide (DEV-502/DEV-504), so a broken hash or a malformed arm table falls
+# back to the default model and the check stays green. A canary that silently
+# stopped splitting, or a weight-0 rollback that did not take an arm out, would
+# only show up later in the audit data. Same reasoning as
+# pepper-audit-record-test.yml.
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/pepper-pr-review.yml"
+      - "scripts/test/pepper-arm-select_test.sh"
+      - ".github/workflows/pepper-arm-select-test.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  arm-select:
+    name: pepper-pr-review arm selection
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # jq and yq (mikefarah v4) are preinstalled on ubuntu-latest.
+      - name: Run arm-selection test
+        run: scripts/test/pepper-arm-select_test.sh
