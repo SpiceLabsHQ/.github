@@ -314,6 +314,132 @@ filter ispresent(duration_ms)
     by effort, flavor
 ```
 
+### Comparing runs by model and effort
+
+The canary comparison: does a different model or `effort` change what a review
+costs, how it ends, or how long it takes? Every query here groups by
+`model_executed`, `effort` and `flavor`. Group by `model_executed`, not `model`:
+the profile ARN is what the workflow asked for, `model_executed` is what the CLI
+ran. Once the `arm` field exists (DEV-2455), group by `arm` instead of the
+`model_executed, effort` pair. Read "Reading a canary" below before comparing
+two rows.
+
+Measured over 2026-08-31 to 2026-09-30, 1,018 runs (901 `default`, 117
+`dependency`), all `claude-sonnet-5` at `effort` `high`, so each query returns
+two rows today, one per `flavor`.
+
+Cost, output tokens, cache reads and turns, mean and median. `pct(x, 50)` is the
+median. `runs_with_cost` is the number of runs that had a `cost_usd`; if it is
+below `runs`, the cost columns cover fewer runs than the others (see
+[`cost_usd` may be null](#cost_usd-may-be-null)):
+
+```text
+stats count(*) as runs,
+      count(cost_usd) as runs_with_cost,
+      avg(cost_usd) as avg_cost,
+      pct(cost_usd, 50) as median_cost,
+      avg(tokens.output) as avg_out,
+      pct(tokens.output, 50) as median_out,
+      avg(tokens.cache_read) as avg_cache_read,
+      pct(tokens.cache_read, 50) as median_cache_read,
+      avg(turns_used) as avg_turns,
+      pct(turns_used, 50) as median_turns
+  by model_executed, effort, flavor
+| sort flavor, model_executed, effort
+```
+
+Result: `default` averaged $1.45 (median $1.31), 9.9k output tokens, 19.2 turns;
+`dependency` averaged $0.52 (median $0.50), 2.2k output tokens, 8.4 turns.
+Across both flavors the average was $1.34 and the median $1.24, with 17.9 turns.
+Drop the `by` line for that all-runs row.
+
+Duration, p50 and p90 in seconds:
+
+```text
+stats count(*) as runs,
+      pct(duration_ms / 1000, 50) as p50_secs,
+      pct(duration_ms / 1000, 90) as p90_secs
+  by model_executed, effort, flavor
+| sort flavor, model_executed, effort
+```
+
+Result: `default` p50 134 s, p90 252 s; `dependency` p50 42 s, p90 72 s. Across
+both flavors, p50 123 s and p90 243 s.
+
+Outcome mix. A row with zero `no_verdict` runs still prints `no_verdict = 0`,
+because the `sum` is always present. A no-verdict reason field is planned
+(DEV-1335); until it exists, `no_verdict` cannot be split by cause:
+
+```text
+filter ispresent(outcome)
+| stats count(*) as runs,
+        sum(outcome = "approved") as approved,
+        sum(outcome = "changes_requested") as changes_requested,
+        sum(outcome = "escalated") as escalated,
+        sum(outcome = "no_verdict") as no_verdict,
+        sum(outcome = "approved") * 100.0 / count(*) as approved_pct,
+        sum(outcome = "changes_requested") * 100.0 / count(*) as changes_pct,
+        sum(outcome = "escalated") * 100.0 / count(*) as escalated_pct,
+        sum(outcome = "no_verdict") * 100.0 / count(*) as no_verdict_pct
+    by model_executed, effort, flavor
+| sort flavor, model_executed, effort
+```
+
+Result: `default` 793 approved, 100 changes requested, 8 escalated, 0 no-verdict
+(88.0% / 11.1% / 0.9% / 0%); `dependency` 117 approved, nothing else. Both
+flavors together: 910 / 100 / 8 / 0.
+
+Review rounds per PR. A round is one run on the same PR, so a PR that was
+pushed to and re-reviewed three times has three. The first `stats` counts runs
+per PR, the second averages those counts:
+
+```text
+stats count(*) as runs by repo, pr_number, model_executed, effort, flavor
+| stats count(*) as prs,
+        avg(runs) as avg_rounds,
+        pct(runs, 50) as median_rounds,
+        max(runs) as max_rounds,
+        sum(runs > 1) * 100.0 / count(*) as pct_prs_rereviewed
+    by model_executed, effort, flavor
+| sort flavor, model_executed, effort
+```
+
+Result: `default` 703 PRs at 1.28 rounds on average (median 1, max 10, 20.5%
+re-reviewed); `dependency` 105 PRs at 1.11 (median 1, max 9, 3.8%
+re-reviewed). The same query without `model_executed, effort, flavor` in the
+first `stats` gives one figure for all PRs: 808 PRs at 1.26 rounds. A PR whose
+runs span two arms is counted once in each arm, with only that arm's runs.
+
+### Reading a canary
+
+- **Sample size.** Wait for about 80 PRs per arm before comparing. Count PRs, not
+  runs: the `prs` column of the rounds query. With fewer, one slow repo moves the
+  mean, and the escalation rate (8 in 1,018 runs today) is too rare to compare
+  at all.
+- **Check the repo mix.** `SpiceLabsHQ/Lumen-BI` is about 69% of runs (702 of
+  1,018). An arm that happened to review more or fewer Lumen-BI PRs will look
+  cheaper or dearer for that reason alone. Compare the same repos across arms
+  first:
+
+  ```text
+  stats count(*) as runs,
+        avg(cost_usd) as avg_cost,
+        sum(outcome = "changes_requested") * 100.0 / count(*) as changes_pct
+      by repo, model_executed, effort
+  | sort runs desc
+  | limit 25
+  ```
+
+- **Rounds are per PR, not per run.** Average runs per PR, as above. Dividing
+  total runs by distinct PRs across arms, or counting a run as a round, mixes
+  PRs that only one arm saw.
+- **Cost may be null.** Averages skip `null` `cost_usd`. Check `runs_with_cost`
+  against `runs` before comparing cost, and derive cost from the token split
+  when they differ.
+- **Split by `flavor`.** `dependency` reviews run about a third of the turns
+  and cost about a third as much. A mix shift between arms looks like a cost
+  change.
+
 ### Housekeeping
 
 Is the pipeline alive at all — records per day, and the config spread in them:
