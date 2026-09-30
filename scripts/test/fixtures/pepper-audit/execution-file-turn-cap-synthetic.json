@@ -1,0 +1,6 @@
+[
+  { "type": "system", "subtype": "init", "session_id": "turn-cap-synthetic-fixture" },
+  { "type": "assistant", "version": "2.1.223", "effort": "high", "message": { "model": "us.anthropic.claude-sonnet-5", "stop_reason": "tool_use" } },
+  { "type": "assistant", "isApiErrorMessage": true, "message": { "model": "<synthetic>", "content": [ { "type": "text", "text": "Reached max turns (80)" } ] } },
+  { "type": "result", "subtype": "error_max_turns", "is_error": true, "total_cost_usd": 3.4, "num_turns": 80, "duration_ms": 2100000 }
+]

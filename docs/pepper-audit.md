@@ -93,12 +93,14 @@ individual run is readable without AWS access at all.
   "standards_sha256": "9f86d081...",
   "cookbook_ref": "v1.2.0",
   "model": "arn:aws:bedrock:us-west-2:618640261060:application-inference-profile/xda66yqkegz4",
-  "model_executed": "us.anthropic.claude-sonnet-5",
+  "model_executed": "claude-sonnet-5",
   "effort": "high",
   "max_turns": 80,
   "review_timeout_minutes": 50,
   "cli_version": "2.1.223",
   "outcome": "approved",
+  "no_verdict_reason": null,
+  "refusal_category": null,
   "collapse_fired": false,
   "turns_used": 34,
   "duration_ms": 723000,
@@ -119,9 +121,11 @@ individual run is readable without AWS access at all.
 | `standards_sha256` | SHA-256 of the calling repo's `standards_path` file, or `null` when it has none. The per-repo prompt-customization identity: it separates "this repo's PRs are big" from "this repo's custom standards drive long reviews", and it changes the moment a repo edits its standards mid-series. |
 | `cookbook_ref` | The Eng-Cookbook release tag whose `standards/` the prompt actually carried (DEV-1119), or `null` when the run degraded to the "no org standards this run" marker — no stable release, a failed checkout, or the `dependency` flavor, which has no standards block. Pepper reviews against the **latest stable** release, a deliberate float, so this is the field that attributes a behavior or cost shift to a cookbook release rather than to a prompt or model change. |
 | `model` | The application-inference-profile ARN the workflow resolved, **as passed** — the key AWS Cost Explorer attribution and IAM scoping hang off. Group cost by this. |
-| `model_executed` | The resolved model id the CLI actually sent (e.g. `us.anthropic.claude-sonnet-5`), read off the SDK stream; `null` when no stream was readable. A row whose `model_executed` names something its `model` profile does not wrap is the CLI ignoring the workflow — the DEV-881 failure class. |
+| `model_executed` | The resolved model id the CLI actually sent (e.g. `claude-sonnet-5`), read off the SDK stream; `null` when no stream was readable. A row whose `model_executed` names something its `model` profile does not wrap is the CLI ignoring the workflow — the DEV-881 failure class. |
 | `effort`, `cli_version` | Recorded **as executed** — read off what the CLI actually sent, with the workflow's own settings only as a fallback (both sources speak the same vocabulary, so as-executed is strictly the better observation). |
-| `outcome` | `approved`, `changes_requested`, `escalated`, `no_verdict`, or `null`. **`escalated` and `no_verdict` are different things.** `escalated` is the review working — Pepper formed a judgment and deferred to a human, and a rise in its rate is how a too-low `effort` shows up. `no_verdict` is a failure: the run stopped (timeout, error, turn exhaustion) before any verdict existed. `null` means the outcome labels were unreadable at capture time. |
+| `outcome` | `approved`, `changes_requested`, `escalated`, `no_verdict`, or `null`. **`escalated` and `no_verdict` are different things.** `escalated` is the review working — Pepper formed a judgment and deferred to a human, and a rise in its rate is how a too-low `effort` shows up. `no_verdict` is a failure: the run ended without a verdict the workflow could read — `no_verdict_reason` says why. `null` means the outcome labels were unreadable at capture time. |
+| `no_verdict_reason` | Why a `no_verdict` run ended (DEV-1335); `null` on every other outcome. First match wins: `prompt_build_failure` (a setup step before Run Pepper failed — checkout, prompt build, model/tools/MCP, AWS credentials — so the model never ran); `verdict_unparseable` (Pepper filed a review on the head SHA but never swapped `pepper-cooking`, so the workflow could not read it as a verdict); `refused` (the model stopped with `stop_reason: "refusal"`); `api_error` (a harness-made error message — model `<synthetic>` or `isApiErrorMessage`, e.g. a Bedrock `ValidationException` — or an errored result other than the turn cap); `turn_cap` (`turns_used` reached `max_turns`); `timeout` (Run Pepper failed or was cancelled with no result record and the transcript spans at least 90% of `review_timeout_minutes`); `cancelled` (Run Pepper cancelled otherwise); `verdict_not_filed` (a clean finish under both caps with no verdict filed — the model skipped its one required action); `unknown` (none of these could be established). Added without a schema bump. |
+| `refusal_category` | The refusal's `stop_details.category` (`cyber`, `bio`, `frontier_llm`, `reasoning_extraction`, `general_harms`) when `no_verdict_reason` is `refused`; otherwise `null`, including a refusal whose category was not reported. |
 | `collapse_fired` | The bot-PR outcome collapse rewrote the verdict. `true` only on a confirmed, complete collapse. |
 | `turns_used` / `max_turns` | Turns against the cap. `max_turns` is the graceful primary stop; `review_timeout_minutes` is the ungraceful backstop. |
 | `cost_usd` | **May be `null`** — see below. |

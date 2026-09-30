@@ -1,0 +1,5 @@
+[
+  { "type": "system", "subtype": "init", "session_id": "api-error-fixture" },
+  { "type": "assistant", "isApiErrorMessage": true, "message": { "model": "<synthetic>", "content": [ { "type": "text", "text": "API Error: 400 ValidationException: thinking type disabled is not supported" } ] } },
+  { "type": "result", "subtype": "success", "is_error": true, "total_cost_usd": 0.02, "num_turns": 1, "duration_ms": 9000 }
+]

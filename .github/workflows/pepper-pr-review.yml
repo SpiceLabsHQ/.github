@@ -1484,6 +1484,9 @@ jobs:
           REVIEWERS_TEAM: ${{ inputs.reviewers_team }}
           REPO_OWNER: ${{ github.repository_owner }}
           HEAD_SHA_SHORT: ${{ steps.head-sha.outputs.short }}
+          HEAD_SHA: ${{ steps.head-sha.outputs.sha }}
+          REPO: ${{ github.repository }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
         run: |
           set -uo pipefail
           # A clean review swapped cooking -> pepper-approved/changes-requested
@@ -1501,6 +1504,29 @@ jobs:
             exit 0
           fi
           echo "no_verdict=true" >> "${GITHUB_OUTPUT}"
+
+          # DEV-1335: did Pepper file a review on this head SHA anyway? Then the
+          # verdict exists and only the label swap was missed — the audit
+          # records `verdict_unparseable`, not a model that never decided.
+          # Read-only, and every failure leaves the output empty, which the
+          # audit reads as "not found": this probe must never fail the step.
+          # Only reviews submitted since THIS run began count, so an earlier
+          # run's review on the same SHA is not mistaken for this one's. The
+          # run's start is the newest `pepper-cooking` labeled event — `Mark PR
+          # as cooking` applies it early in this job, and cooking is confirmed
+          # still on above. No readable start time means no answer (empty).
+          REVIEW_FILED=""
+          COOKED_AT=""
+          if [ -n "${APP_SLUG}" ] && [ -n "${HEAD_SHA}" ]; then
+            COOKED_AT="$(gh api --paginate "repos/${REPO}/issues/${PR_NUMBER}/events?per_page=100" --jq '.[]' 2>/dev/null \
+              | jq -sr '[.[] | select(.event == "labeled" and .label.name == "pepper-cooking") | .created_at] | max // empty' 2>/dev/null)" || COOKED_AT=""
+          fi
+          if [ -n "${COOKED_AT}" ]; then
+            REVIEW_FILED="$(gh api --paginate "repos/${REPO}/pulls/${PR_NUMBER}/reviews?per_page=100" --jq '.[]' 2>/dev/null \
+              | jq -sr --arg bot "${APP_SLUG}[bot]" --arg sha "${HEAD_SHA}" --arg since "${COOKED_AT}" \
+                  'any(.[]; .user.login == $bot and .commit_id == $sha and (.submitted_at // "") >= $since)' 2>/dev/null)" || REVIEW_FILED=""
+          fi
+          echo "review_filed=${REVIEW_FILED}" >> "${GITHUB_OUTPUT}"
 
           gh pr edit "${PR_NUMBER}" --add-label "pepper-needs-review" --remove-label "pepper-cooking" || true
 
@@ -1665,6 +1691,11 @@ jobs:
           # audit does not invent a failure or a rewrite that did not happen.
           NO_VERDICT: ${{ steps.escalation.outputs.no_verdict }}
           COLLAPSE_FIRED: ${{ steps.collapse.outputs.collapse_fired }}
+          # Inputs to `no_verdict_reason` (DEV-1335). `skipped` means a setup
+          # step failed before the model ran; `failure`/`cancelled` plus the
+          # transcript's time span separates a timeout kill from an error.
+          PEPPER_OUTCOME: ${{ steps.pepper.outcome }}
+          REVIEW_FILED: ${{ steps.escalation.outputs.review_filed }}
           # Read-only: the PR's final outcome labels.
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           # Telemetry source, preferred over the CLI session transcript because
