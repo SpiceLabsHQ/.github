@@ -39,7 +39,7 @@ convention the workflow followed rather than a boundary the credential enforced.
 |---|---|---|
 | `InvokePepperTaggedProfilesOnly` | Invoke any application inference profile tagged `Product=pepper` | Scoped by **tag, not ARN**. Application inference profiles are immutable in the model they wrap, so a model upgrade replaces the profile and mints a new ARN. Tag-scoping survives that untouched; ARN-pinning would force an IAM edit on every upgrade. |
 | `WritePepperReviewAuditLog` | `logs:CreateLogStream` + `logs:PutLogEvents` on `/pepper/pr-review/audit` only | The DEV-653 audit record, written with the credentials the review job has already assumed. **Append-only, one log group.** No read, no delete, no `logs:CreateLogGroup` — the group and its retention are a CloudFormation resource (`pepper-audit.cfn.yml`), not a role permission. Worst case under role compromise is junk lines in the audit log that the same role cannot then erase. |
-| `AuthorizedModelsReachableOnlyThroughAProfile` | Invoke Sonnet 5 and Sonnet 4.6, in three regions, **only** when reached through one of this account's application inference profiles | AWS requires the underlying foundation model to be authorized alongside the profile. The `bedrock:InferenceProfileArn` condition is what stops a direct model call that would bypass the profile — and therefore bypass the `Product`/`Mode` cost-allocation tags. Sonnet 4.6 is authorized as the rollback path (DEV-299), replacing Sonnet 4.5, which retires 2026-09-29. |
+| `AuthorizedModelsReachableOnlyThroughAProfile` | Invoke Sonnet 5 and Sonnet 4.6, in three regions, and Sonnet 5.5 through global routing (which needs the region-less `arn:aws:bedrock:::foundation-model/anthropic.claude-sonnet-5-5` alongside the `us-west-2` one), **only** when reached through one of this account's application inference profiles | AWS requires the underlying foundation model to be authorized alongside the profile. The `bedrock:InferenceProfileArn` condition is what stops a direct model call that would bypass the profile — and therefore bypass the `Product`/`Mode` cost-allocation tags. Sonnet 4.6 is authorized as the rollback path (DEV-299), replacing Sonnet 4.5, which retires 2026-09-29. |
 | `DiscoverProfiles` | Read-only `ListInferenceProfiles` / `GetInferenceProfile` | The action enumerates profiles at startup. |
 | `MarketplaceModelAccess` | `aws-marketplace:Subscribe` / `ViewSubscriptions` | Retained deliberately — auto-subscription on first use of a model is acceptable. |
 
@@ -181,12 +181,16 @@ The model identities Pepper invokes. All live in `us-west-2` only, all tagged
 |---|---|---|---|
 | `pepper-pr-review-sonnet-5` | `xda66yqkegz4` | `anthropic.claude-sonnet-5` (us-east-1/2, us-west-2) | 2026-07-04 |
 | `pepper-pr-review-sonnet-4-6` | `0dmcow82swxh` | `anthropic.claude-sonnet-4-6` (us-east-1/2, us-west-2) | 2026-09-01 |
+| `pepper-pr-review-sonnet-5-5` | `as10aa0qzyoj` | `global.anthropic.claude-sonnet-5-5` (global routing: worldwide, not pinned to a region) | 2026-09-30 |
 
 `pepper-pr-review-sonnet-5` is the workflow default
 (`review_model` in `pepper-pr-review.yml`). `pepper-pr-review-sonnet-4-6` is the
 rollback path — the policy above keeps its wrapped model authorized for exactly
 that reason. Rolling back means passing its ARN as `review_model`; the default
 stays on Sonnet 5.
+
+`pepper-pr-review-sonnet-5-5` is the canary and target profile for P-DEV-74. It
+routes globally, so requests can be served from any supported region.
 
 **A rollback path is only as good as its model's runway.** The previous rollback
 profile, `pepper-pr-review` (`cz21awrop223`, DEV-245), wrapped Sonnet 4.5, which
