@@ -36,6 +36,14 @@ the claude-cli version moved either.
 Note that `cost_usd` may be `null`: the capture step never invents a price, so
 cost is derived from the token split at query time.
 
+## Changing Pepper's model
+
+Moving Pepper to a new model, Bedrock routing type or effort default follows
+[`docs/pepper-model-transitions.md`](docs/pepper-model-transitions.md): assess,
+access, a per-PR canary, the default switch, then effort re-tuning. It is
+**Proposed** until the Sonnet 5.5 project (DEV-2467) proves it, so treat its
+thresholds as starting values.
+
 ## Renovate policy lives in two repos
 
 Changing org Renovate policy usually means touching one of two files, and they
