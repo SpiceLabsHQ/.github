@@ -19,6 +19,8 @@
   "review_timeout_minutes": 50,
   "cli_version": "2.1.220",
   "outcome": "changes_requested",
+  "no_verdict_reason": null,
+  "refusal_category": null,
   "collapse_fired": true,
   "turns_used": null,
   "duration_ms": null,

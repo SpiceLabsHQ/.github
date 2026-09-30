@@ -1,0 +1,5 @@
+[
+  { "type": "system", "subtype": "init", "session_id": "refused-fixture" },
+  { "type": "assistant", "version": "2.1.230", "effort": "high", "message": { "model": "us.anthropic.claude-sonnet-5-5", "stop_reason": "refusal", "stop_details": { "category": "cyber" } } },
+  { "type": "result", "subtype": "success", "is_error": false, "total_cost_usd": 0.12, "num_turns": 3, "duration_ms": 41000 }
+]

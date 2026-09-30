@@ -19,6 +19,8 @@
   "review_timeout_minutes": 50,
   "cli_version": "2.1.223",
   "outcome": "no_verdict",
+  "no_verdict_reason": "verdict_not_filed",
+  "refusal_category": null,
   "collapse_fired": false,
   "turns_used": 34,
   "duration_ms": 723000,

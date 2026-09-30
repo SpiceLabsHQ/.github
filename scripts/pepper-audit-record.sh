@@ -39,6 +39,9 @@
 #   REVIEW_TIMEOUT_MINUTES
 #   NO_VERDICT       — "true" when the DEV-235 no-verdict escalation fired
 #   COLLAPSE_FIRED   — "true" when the DEV-674 collapse rewrote the verdict
+#   PEPPER_OUTCOME   — `steps.pepper.outcome`, for `no_verdict_reason` (DEV-1335)
+#   REVIEW_FILED     — "true" when a Pepper review sits on the head SHA of a
+#                      no-verdict run (DEV-1335)
 #   GH_TOKEN         — App token, for reading the PR's final outcome labels
 #
 # Environment — telemetry sources and destination:
@@ -77,6 +80,8 @@ MAX_TURNS="${MAX_TURNS:-}"
 REVIEW_TIMEOUT_MINUTES="${REVIEW_TIMEOUT_MINUTES:-}"
 NO_VERDICT="${NO_VERDICT:-}"
 COLLAPSE_FIRED="${COLLAPSE_FIRED:-}"
+PEPPER_OUTCOME="${PEPPER_OUTCOME:-}"
+REVIEW_FILED="${REVIEW_FILED:-}"
 
 LOG_GROUP="${PEPPER_AUDIT_LOG_GROUP:-/pepper/pr-review/audit}"
 REGION="${PEPPER_AUDIT_REGION:-${AWS_REGION:-${AWS_DEFAULT_REGION:-}}}"
@@ -127,7 +132,7 @@ fi
 collect() { # <file> -> collect-json, or the literal "null"
   local file="$1" out
   [ -n "${file}" ] && [ -f "${file}" ] || { printf 'null'; return 0; }
-  out="$(jq -cn -f "${COLLECT_JQ}" "${file}" 2>/dev/null)" || out=""
+  out="$(jq -cnR -f "${COLLECT_JQ}" "${file}" 2>/dev/null)" || out=""
   [ -n "${out}" ] || out="null"
   printf '%s' "${out}"
 }
@@ -199,6 +204,8 @@ RECORD="$(jq -cn \
   --arg labels "${LABELS}" \
   --arg no_verdict "${NO_VERDICT}" \
   --arg collapse_fired "${COLLAPSE_FIRED}" \
+  --arg pepper_outcome "${PEPPER_OUTCOME}" \
+  --arg review_filed "${REVIEW_FILED}" \
   -f "${BUILD_JQ}")" || RECORD=""
 
 if [ -z "${RECORD}" ]; then
@@ -220,6 +227,7 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
       def show: if . == null then "_null_" elif type == "boolean" then tostring else tostring end;
       [
         ["outcome", (.outcome | show)],
+        ["no-verdict reason", ((.no_verdict_reason | show) + (if .refusal_category then " (" + .refusal_category + ")" else "" end))],
         ["collapse fired", (.collapse_fired | show)],
         ["model", (.model | show)],
         ["effort", (.effort | show)],

@@ -22,10 +22,14 @@
 #   $labels     — the PR's labels, comma-joined; "" when unreadable
 #   $no_verdict — "true" when the DEV-235 no-verdict escalation fired
 #   $collapse_fired — "true" when the DEV-674 collapse rewrote the verdict
+#   $pepper_outcome — `steps.pepper.outcome`: success|failure|cancelled|skipped
+#   $review_filed   — "true" when the escalation step found a Pepper review on
+#                     the head SHA despite `pepper-cooking` still being on
 #
 # Output: the schema-v1 record, exactly the field set and field names in
 # DEV-653 (plus the additive, nullable fields added since — `model_executed`,
-# DEV-881; `cookbook_ref`, DEV-1119). Callers depend on the field names:
+# DEV-881; `cookbook_ref`, DEV-1119; `no_verdict_reason` and
+# `refusal_category`, DEV-1335). Callers depend on the field names:
 # renaming or removing one is a schema bump; adding a nullable one is not
 # (docs/pepper-audit.md, "Schema changes").
 
@@ -86,6 +90,58 @@ def obs($raw): ($raw | fromjson? // null) | if type == "object" then . else null
  elif ($lbl | index("pepper-approved")) then "approved"
  else null end) as $outcome |
 
+# Why a no_verdict run ended (DEV-1335). `no_verdict` alone lumps a model that
+# under-thought with a Bedrock error and a prompt that never built — opposite
+# responses, one of them a false revert of a working change (DEV-884). First
+# match wins, ordered so the most specific evidence decides:
+#   prompt_build_failure — Run Pepper was skipped: a setup step before it
+#                          (checkout, prompt build, model/tools/MCP, AWS creds)
+#                          failed, so the model never ran.
+#   verdict_unparseable  — Pepper filed a review on this head SHA but never
+#                          swapped `pepper-cooking`, so the workflow could not
+#                          read it as a verdict (the prompt's "filed, then ran
+#                          out before the label swap" case).
+#   refused              — the model stopped with `stop_reason: "refusal"`;
+#                          `refusal_category` carries `stop_details.category`.
+#   turn_cap             — turns_used reached max_turns, or the result says so.
+#                          Checked before api_error: the CLI can emit a
+#                          synthetic message when it stops on the cap.
+#   api_error            — a harness-made error message (`<synthetic>` model or
+#                          `isApiErrorMessage`, e.g. a Bedrock
+#                          ValidationException, DEV-881), or an errored result
+#                          other than the turn cap.
+#   timeout              — Run Pepper failed or was cancelled with no result
+#                          record, and the transcript spans >= 90% of the
+#                          wall-clock budget (the kill leaves no other clock;
+#                          the slack covers the last in-flight model call).
+#   cancelled            — Run Pepper was cancelled for any other reason.
+#   verdict_not_filed    — the run finished cleanly, under both caps, and the
+#                          model simply never filed a verdict.
+#   unknown              — none of the above could be established.
+(($max_turns | to_num)) as $max_turns_n |
+(($review_timeout_minutes | to_num)) as $timeout_n |
+(($xr.turns_used) // ($tr.turns_used) // null) as $turns_used |
+($xr // $tr) as $res |
+(($x.refusal) // ($t.refusal)) as $refusal |
+(($x.span_ms) // ($t.span_ms) // null) as $span_ms |
+(if $outcome != "no_verdict" then null
+ elif $pepper_outcome == "skipped" then "prompt_build_failure"
+ elif ($review_filed | to_bool) then "verdict_unparseable"
+ elif $refusal != null then "refused"
+ elif ($res.subtype == "error_max_turns")
+      or ($turns_used != null and $max_turns_n != null and $turns_used >= $max_turns_n)
+   then "turn_cap"
+ elif ($x.api_error == true) or ($t.api_error == true)
+      or ($res != null and $res.is_error == true and $res.subtype != "error_max_turns")
+   then "api_error"
+ elif ($pepper_outcome == "failure" or $pepper_outcome == "cancelled")
+      and $xr == null and $span_ms != null and $timeout_n != null
+      and $span_ms >= ($timeout_n * 60000 * 0.9)
+   then "timeout"
+ elif $pepper_outcome == "cancelled" then "cancelled"
+ elif $res != null and $res.is_error == false then "verdict_not_filed"
+ else "unknown" end) as $no_verdict_reason |
+
 {
   schema_version: 1,
   ts: ($ts | as_text),
@@ -107,8 +163,10 @@ def obs($raw): ($raw | fromjson? // null) | if type == "object" then . else null
   review_timeout_minutes: ($review_timeout_minutes | to_num),
   cli_version: $cli_version,
   outcome: $outcome,
+  no_verdict_reason: $no_verdict_reason,
+  refusal_category: (if $no_verdict_reason == "refused" then $refusal.category else null end),
   collapse_fired: ($collapse_fired | to_bool),
-  turns_used: (($xr.turns_used) // ($tr.turns_used) // null),
+  turns_used: $turns_used,
   duration_ms: (($xr.duration_ms) // ($tr.duration_ms) // null),
   cost_usd: (($xr.cost_usd) // ($tr.cost_usd) // ($x.summed_cost_usd) // ($t.summed_cost_usd) // null),
   # A result record's `usage` is the run total; the per-message sum is the

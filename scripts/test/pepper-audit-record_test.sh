@@ -97,6 +97,7 @@ run_audit() { # <execution_file> <transcript> [env assignments...]
     REVIEW_TIMEOUT_MINUTES=50 \
     NO_VERDICT=false \
     COLLAPSE_FIRED=false \
+    PEPPER_OUTCOME=success \
     "$@" \
     bash "${SCRIPT}"
 }
@@ -170,6 +171,49 @@ printf '%s' "pepper-needs-review" > "${WORK}/labels"
 OUT="$(run_audit "${FIX}/execution-file.json" "${FIX}/transcript.jsonl" NO_VERDICT=true)"; RC=$?
 check_record "no-verdict" "${FIX}/expected-no-verdict.json" "${OUT}" "${RC}"
 
+# --- Why a no-verdict run ended (DEV-1335) ---------------------------------
+# One case per reason. A wrong reason is invisible in production (a green check
+# over a mislabeled row), and DEV-884/DEV-2456 read these to tell a model that
+# failed to decide from an outage — so every branch of the classifier is pinned.
+# The clean-finish case (`verdict_not_filed`) is the full-record fixture above.
+# Columns: label | execution file | transcript | expected reason | expected
+# refusal_category | extra env.
+M="${WORK}/missing"
+while IFS='|' read -r label exec_file transcript want_reason want_cat extra; do
+  printf '%s' "pepper-needs-review" > "${WORK}/labels"
+  # shellcheck disable=SC2086 # `extra` is a space-separated env list by design
+  OUT="$(run_audit "${exec_file}" "${transcript}" NO_VERDICT=true ${extra})"; RC=$?
+  GOT="$(record_of "${OUT}" | jq -r '"\(.no_verdict_reason)|\(.refusal_category)"')"
+  if [ "${RC}" -eq 0 ] && [ "${GOT}" = "${want_reason}|${want_cat}" ]; then
+    pass "no_verdict_reason: ${label}"
+  else
+    fail "no_verdict_reason: ${label}" "want: ${want_reason}|${want_cat}" "got:  ${GOT} (rc=${RC})"
+  fi
+done <<CASES
+prompt build failed|${M}.json|${M}.jsonl|prompt_build_failure|null|PEPPER_OUTCOME=skipped
+review filed, label not swapped|${FIX}/execution-file.json|${FIX}/transcript.jsonl|verdict_unparseable|null|REVIEW_FILED=true
+refused|${FIX}/execution-file-refused.json|${M}.jsonl|refused|cyber|
+api error|${FIX}/execution-file-api-error.json|${M}.jsonl|api_error|null|PEPPER_OUTCOME=failure
+turn cap|${FIX}/execution-file-turn-cap.json|${M}.jsonl|turn_cap|null|
+turn cap beats a synthetic message|${FIX}/execution-file-turn-cap-synthetic.json|${M}.jsonl|turn_cap|null|
+timeout|${M}.json|${FIX}/transcript-timeout.jsonl|timeout|null|PEPPER_OUTCOME=failure
+timeout with a torn last line|${M}.json|${FIX}/transcript-timeout-torn.jsonl|timeout|null|PEPPER_OUTCOME=failure
+short failure is not a timeout|${M}.json|${FIX}/transcript-timeout.jsonl|unknown|null|PEPPER_OUTCOME=failure REVIEW_TIMEOUT_MINUTES=120
+cancelled|${M}.json|${FIX}/transcript.jsonl|cancelled|null|PEPPER_OUTCOME=cancelled
+nothing to go on|${M}.json|${M}.jsonl|unknown|null|PEPPER_OUTCOME=failure
+CASES
+
+# A reason is only ever set on a no_verdict row: a refusal signal on a run
+# whose verdict was filed must not leak into the record.
+printf '%s' "pepper-approved" > "${WORK}/labels"
+OUT="$(run_audit "${FIX}/execution-file-refused.json" "${M}.jsonl")"
+GOT="$(record_of "${OUT}" | jq -r '"\(.outcome)|\(.no_verdict_reason)|\(.refusal_category)"')"
+if [ "${GOT}" = "approved|null|null" ]; then
+  pass "no_verdict_reason: null unless outcome is no_verdict"
+else
+  fail "no_verdict_reason: null unless outcome is no_verdict" "got: ${GOT}"
+fi
+
 # --- Missing execution file: fall back to the transcript --------------------
 # The action's `execution_file` output is empty on a timed-out or errored run —
 # exactly the runs worth auditing — so the transcript fallback carries them.
@@ -210,7 +254,7 @@ fi
 printf '%s' "pepper-approved" > "${WORK}/labels"
 OUT="$(run_audit "${FIX}/execution-file.json" "${FIX}/transcript.jsonl")"
 KEYS="$(record_of "${OUT}" | jq -c 'keys_unsorted')"
-WANT_KEYS='["schema_version","ts","repo","pr_number","run_id","run_attempt","event","head_sha","pr_author","flavor","workflow_sha","standards_sha256","cookbook_ref","model","model_executed","effort","max_turns","review_timeout_minutes","cli_version","outcome","collapse_fired","turns_used","duration_ms","cost_usd","tokens"]'
+WANT_KEYS='["schema_version","ts","repo","pr_number","run_id","run_attempt","event","head_sha","pr_author","flavor","workflow_sha","standards_sha256","cookbook_ref","model","model_executed","effort","max_turns","review_timeout_minutes","cli_version","outcome","no_verdict_reason","refusal_category","collapse_fired","turns_used","duration_ms","cost_usd","tokens"]'
 if [ "${KEYS}" = "${WANT_KEYS}" ]; then
   pass "schema: the v1 field set is exactly as specified"
 else
