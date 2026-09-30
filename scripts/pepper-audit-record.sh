@@ -35,7 +35,7 @@
 #
 # Environment — workflow-supplied config (all optional; empty becomes null):
 #   REPO PR_NUMBER RUN_ID RUN_ATTEMPT EVENT_NAME HEAD_SHA PR_AUTHOR FLAVOR
-#   WORKFLOW_SHA STANDARDS_PATH COOKBOOK_REF MODEL EFFORT MAX_TURNS
+#   WORKFLOW_SHA STANDARDS_PATH COOKBOOK_REF ARM MODEL EFFORT MAX_TURNS
 #   REVIEW_TIMEOUT_MINUTES
 #   NO_VERDICT       — "true" when the DEV-235 no-verdict escalation fired
 #   COLLAPSE_FIRED   — "true" when the DEV-674 collapse rewrote the verdict
@@ -74,6 +74,7 @@ FLAVOR="${FLAVOR:-}"
 WORKFLOW_SHA="${WORKFLOW_SHA:-}"
 STANDARDS_PATH="${STANDARDS_PATH:-}"
 COOKBOOK_REF="${COOKBOOK_REF:-}"
+ARM="${ARM:-}"
 MODEL="${MODEL:-}"
 EFFORT="${EFFORT:-}"
 MAX_TURNS="${MAX_TURNS:-}"
@@ -197,6 +198,7 @@ RECORD="$(jq -cn \
   --arg workflow_sha "${WORKFLOW_SHA}" \
   --arg standards_sha256 "${STANDARDS_SHA256}" \
   --arg cookbook_ref "${COOKBOOK_REF}" \
+  --arg arm "${ARM}" \
   --arg model "${MODEL}" \
   --arg effort "${EFFORT}" \
   --arg max_turns "${MAX_TURNS}" \
@@ -229,6 +231,7 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
         ["outcome", (.outcome | show)],
         ["no-verdict reason", ((.no_verdict_reason | show) + (if .refusal_category then " (" + .refusal_category + ")" else "" end))],
         ["collapse fired", (.collapse_fired | show)],
+        ["arm", (.arm | show)],
         ["model", (.model | show)],
         ["effort", (.effort | show)],
         ["cli version", (.cli_version | show)],

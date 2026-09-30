@@ -91,6 +91,7 @@ run_audit() { # <execution_file> <transcript> [env assignments...]
     PR_AUTHOR=octocat \
     FLAVOR=default \
     WORKFLOW_SHA=3fd28051d0e4c8b6a1f2e3d4c5b6a7988990a1b2 \
+    ARM=s5-high \
     MODEL="arn:aws:bedrock:us-west-2:618640261060:application-inference-profile/xda66yqkegz4" \
     EFFORT=high \
     MAX_TURNS=80 \
@@ -229,9 +230,9 @@ check_record "transcript-only" "${FIX}/expected-transcript-only.json" "${OUT}" "
 # The floor of the fail-open contract: every telemetry source missing AND `gh`
 # failing must still produce ONE valid schema-v1 record with nulls in the holes,
 # and must still exit 0. If this case ever crashes, a required check goes red on
-# a review that succeeded.
+# a review that succeeded. `ARM` is empty here too, so `arm: null` is pinned.
 rm -f "${WORK}/labels"
-OUT="$(run_audit "${WORK}/does-not-exist.json" "${WORK}/also-missing.jsonl")"; RC=$?
+OUT="$(run_audit "${WORK}/does-not-exist.json" "${WORK}/also-missing.jsonl" ARM=)"; RC=$?
 check_record "no-telemetry" "${FIX}/expected-no-telemetry.json" "${OUT}" "${RC}"
 
 # --- cookbook_ref is carried through verbatim (DEV-1119) --------------------
@@ -248,13 +249,26 @@ else
   fail "cookbook_ref: the passed Eng-Cookbook tag is recorded as-is" "actual: ${REF}"
 fi
 
+# --- arm is carried through verbatim (DEV-2455) ----------------------------
+# The canary comparison groups by `arm`, so the name the workflow picked must
+# reach the record as passed, overrides included. The fixtures above pin the
+# arm-selected (`s5-high`) and missing (`null`) cases.
+printf '%s' "pepper-approved" > "${WORK}/labels"
+OUT="$(run_audit "${FIX}/execution-file.json" "${FIX}/transcript.jsonl" ARM=override)"
+GOT="$(record_of "${OUT}" | jq -r '.arm')"
+if [ "${GOT}" = "override" ]; then
+  pass "arm: the passed arm name is recorded as-is"
+else
+  fail "arm: the passed arm name is recorded as-is" "actual: ${GOT}"
+fi
+
 # --- The schema itself ------------------------------------------------------
 # The committed queries in docs/pepper-audit.md address fields by name, so the
 # key set is the contract. A rename is a schema bump, not a refactor.
 printf '%s' "pepper-approved" > "${WORK}/labels"
 OUT="$(run_audit "${FIX}/execution-file.json" "${FIX}/transcript.jsonl")"
 KEYS="$(record_of "${OUT}" | jq -c 'keys_unsorted')"
-WANT_KEYS='["schema_version","ts","repo","pr_number","run_id","run_attempt","event","head_sha","pr_author","flavor","workflow_sha","standards_sha256","cookbook_ref","model","model_executed","effort","max_turns","review_timeout_minutes","cli_version","outcome","no_verdict_reason","refusal_category","collapse_fired","turns_used","duration_ms","cost_usd","tokens"]'
+WANT_KEYS='["schema_version","ts","repo","pr_number","run_id","run_attempt","event","head_sha","pr_author","flavor","workflow_sha","standards_sha256","cookbook_ref","arm","model","model_executed","effort","max_turns","review_timeout_minutes","cli_version","outcome","no_verdict_reason","refusal_category","collapse_fired","turns_used","duration_ms","cost_usd","tokens"]'
 if [ "${KEYS}" = "${WANT_KEYS}" ]; then
   pass "schema: the v1 field set is exactly as specified"
 else
@@ -276,7 +290,8 @@ SUMMARY="${WORK}/summary.md"
 : > "${SUMMARY}"
 run_audit "${FIX}/execution-file.json" "${FIX}/transcript.jsonl" \
   GITHUB_STEP_SUMMARY="${SUMMARY}" >/dev/null
-if grep -q "Pepper review audit" "${SUMMARY}" && grep -q "2.1.223" "${SUMMARY}"; then
+if grep -q "Pepper review audit" "${SUMMARY}" && grep -q "2.1.223" "${SUMMARY}" \
+   && grep -q '^| arm | s5-high |$' "${SUMMARY}"; then
   pass "job summary is rendered with the record's values"
 else
   fail "job summary is rendered with the record's values" "$(cat "${SUMMARY}")"

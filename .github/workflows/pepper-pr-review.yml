@@ -19,9 +19,18 @@ on:
     inputs:
       model:
         description: |
-          Override the model. When set, this wins over `review_model`. Leave empty to keep the
-          default, which carries the cost-allocation tags (Product=pepper, Mode=review) — overriding
-          here forfeits that attribution.
+          Override the model. When set, this wins over `review_model` and over the PR's arm (the
+          run's arm is recorded as `override`). Leave empty to keep the default, which carries the
+          cost-allocation tags (Product=pepper, Mode=review) — overriding here forfeits that
+          attribution.
+        required: false
+        type: string
+        default: ""
+      effort:
+        description: |
+          Override the reasoning effort (`low`, `medium`, `high`, `xhigh` or `max`). When set, this
+          wins over the effort of the PR's arm (DEV-2455). Leave empty to use the arm's effort, or
+          `high` when the model is overridden. Any other value is ignored with a warning.
         required: false
         type: string
         default: ""
@@ -36,6 +45,10 @@ on:
           The IAM role behind AWS_CLAUDE_BEDROCK_ROLE_ARN only permits application inference
           profiles tagged Product=pepper, and only the models those profiles wrap (DEV-875), so a
           replacement profile must carry the same tags.
+
+          Left at this default, the model comes from the PR's arm in the arm table (see "Select
+          arm and resolve model"), not from this value. Any other value wins over the arm, like
+          `model` does.
         required: false
         type: string
         default: arn:aws:bedrock:us-west-2:618640261060:application-inference-profile/xda66yqkegz4
@@ -1130,7 +1143,7 @@ jobs:
             echo 'PEPPER_PROMPT_EOF'
           } >> "${GITHUB_OUTPUT}"
 
-      # Pick the model identifier the SDK will pass to Bedrock. The default is
+      # Pick the model and effort the CLI will run with. The default model is
       # an AWS Application Inference Profile tagged for cost allocation
       # (Product=pepper, Mode=review) so AWS Cost Explorer can attribute spend.
       # The `model` input is an explicit override — useful for testing a
@@ -1140,27 +1153,98 @@ jobs:
       # An override must still be an application inference profile tagged
       # Product=pepper wrapping an authorized model: the IAM role permits
       # nothing else (DEV-875). A raw model ARN fails with AccessDenied.
-      - name: Resolve model for this run
+      #
+      # ARMS (DEV-2455). With no override, each PR is assigned one arm of the
+      # table in ARMS: bucket = first 8 hex digits of sha256("<owner/repo>#<pr>")
+      # mod 100, walked against the cumulative weights. The hash is of the PR,
+      # not the run, so every review round of a PR lands in the same arm and a
+      # re-review never switches model mid-PR. Weights must sum to 100; a weight
+      # of 0 takes an arm out entirely, which is the rollback for a canary arm.
+      # The arm name reaches the audit record (`arm`) and the job summary.
+      #
+      # Precedence: `model` input > a `review_model` other than its default >
+      # the arm. Either override records arm `override`. The `effort` input wins
+      # over the arm's effort. DEFAULT_REVIEW_MODEL must equal the
+      # `review_model` input default; scripts/test/pepper-arm-select_test.sh
+      # checks that.
+      #
+      # NEVER FAILS THE JOB. This is a required check org-wide (DEV-502/504), so
+      # any selection problem (no PR number, no hash tool, a malformed table)
+      # falls back to `review_model` at `high` and records `default-fallback`.
+      - name: Select arm and resolve model
         id: model
         env:
+          ARMS: >-
+            [{"name":"s5-high","model":"arn:aws:bedrock:us-west-2:618640261060:application-inference-profile/xda66yqkegz4","effort":"high","weight":50},
+            {"name":"s55-high","model":"arn:aws:bedrock:us-west-2:618640261060:application-inference-profile/as10aa0qzyoj","effort":"high","weight":50}]
+          DEFAULT_REVIEW_MODEL: arn:aws:bedrock:us-west-2:618640261060:application-inference-profile/xda66yqkegz4
           OVERRIDE: ${{ inputs.model }}
           REVIEW_MODEL: ${{ inputs.review_model }}
+          EFFORT_INPUT: ${{ inputs.effort }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          EFFORTS='^(low|medium|high|xhigh|max)$'
+          EFFORT=high
           if [ -n "${OVERRIDE}" ]; then
-            RESOLVED="${OVERRIDE}"
-            echo "Using override model (cost attribution disabled): ${RESOLVED}"
+            ARM=override MODEL="${OVERRIDE}"
+            echo "Using override model (cost attribution disabled): ${MODEL}"
+          elif [ -n "${REVIEW_MODEL}" ] && [ "${REVIEW_MODEL}" != "${DEFAULT_REVIEW_MODEL}" ]; then
+            ARM=override MODEL="${REVIEW_MODEL}"
+            echo "Using the caller's review_model: ${MODEL}"
           else
-            RESOLVED="${REVIEW_MODEL}"
-            echo "Using review profile: ${RESOLVED}"
+            # One tab-separated line "name model effort bucket", or empty on
+            # any failure. The subshell keeps a failed hash or parse contained.
+            PICK="$(
+              [ -n "${REPO}" ] && [ -n "${PR_NUMBER}" ] || exit 1
+              if command -v sha256sum >/dev/null 2>&1; then
+                HASH="$(printf '%s#%s' "${REPO}" "${PR_NUMBER}" | sha256sum)" || exit 1
+              else
+                HASH="$(printf '%s#%s' "${REPO}" "${PR_NUMBER}" | shasum -a 256)" || exit 1
+              fi
+              HASH="${HASH:0:8}"
+              [[ "${HASH}" =~ ^[0-9a-f]{8}$ ]] || exit 1
+              printf '%s' "${ARMS}" | jq -er --argjson bucket "$(( 16#${HASH} % 100 ))" --arg efforts "${EFFORTS}" '
+                if type == "array" and length > 0
+                   and all(.[]; (.name | type == "string" and test("^[a-z0-9-]+$"))
+                            and (.model | type == "string" and startswith("arn:aws:bedrock:") and (test("\\s") | not))
+                            and (.effort | type == "string" and test($efforts))
+                            and (.weight | type == "number" and . == floor and . >= 0))
+                   and (map(.weight) | add) == 100
+                then reduce .[] as $a ({cum: 0, pick: null};
+                       (if .pick == null and $bucket < .cum + $a.weight then .pick = $a else . end)
+                       | .cum += $a.weight)
+                     | .pick | "\(.name)\t\(.model)\t\(.effort)\t\($bucket)"
+                else error("invalid arm table") end'
+            )" || PICK=""
+            if [ -n "${PICK}" ]; then
+              IFS=$'\t' read -r ARM MODEL EFFORT BUCKET <<<"${PICK}"
+              echo "PR ${REPO}#${PR_NUMBER} is in bucket ${BUCKET}: arm ${ARM} (${MODEL}, effort ${EFFORT})"
+            else
+              ARM=default-fallback MODEL="${REVIEW_MODEL:-${DEFAULT_REVIEW_MODEL}}"
+              echo "::warning::Pepper could not select an arm for this PR; using the default model at effort high (DEV-2455)."
+            fi
           fi
-          echo "model=${RESOLVED}" >> "${GITHUB_OUTPUT}"
+          if [ -n "${EFFORT_INPUT}" ]; then
+            if [[ "${EFFORT_INPUT}" =~ ${EFFORTS} ]]; then
+              EFFORT="${EFFORT_INPUT}"
+              echo "Using the caller's effort: ${EFFORT}"
+            else
+              echo "::warning::Ignoring effort input '${EFFORT_INPUT}': not one of low, medium, high, xhigh, max."
+            fi
+          fi
+          {
+            echo "model=${MODEL}"
+            echo "effort=${EFFORT}"
+            echo "arm=${ARM}"
+          } >> "${GITHUB_OUTPUT}"
 
-      # Emits four outputs consumed by the Run Pepper step's claude_args:
+      # Emits three outputs consumed by the Run Pepper step's claude_args
+      # (`--effort` comes from the arm step above, DEV-2455):
       #   allowed     — the --allowedTools list
       #   disallowed  — the --disallowedTools list
       #   max_turns   — turn cap so a looping run can't run away
-      #   effort      — reasoning effort (--effort)
       #
       # Why the allowlist is shaped this way (DEV-235): the model routes
       # the large majority of its work through Bash and reaches for grep/sed/ls/
@@ -1229,7 +1313,8 @@ jobs:
           # lower — `medium`/`low` cut tool calls and investigation depth, which is
           # exactly the recall a review depends on. Per-invocation latency x turn
           # count is the real wall-clock cost (DEV-235), and this is the one safe
-          # lever on it. Passed via `--effort` in claude_args below.
+          # lever on it. Effort now comes from the PR's arm (DEV-2455, see
+          # "Select arm and resolve model"); this is why both arms use `high`.
           echo "allowed=${AUTO_TOOLS},${LINEAR_TOOLS}" >> "${GITHUB_OUTPUT}"
           echo "disallowed=${REVIEW_DISALLOWED}" >> "${GITHUB_OUTPUT}"
           # 80, raised from an initial guess of 40 (DEV-235). A large PR (~700
@@ -1240,7 +1325,6 @@ jobs:
           # verdict. Kept below the wall-clock timeout so max-turns stays the
           # graceful primary stop (see the Run Pepper timeout note).
           echo "max_turns=80" >> "${GITHUB_OUTPUT}"
-          echo "effort=high" >> "${GITHUB_OUTPUT}"
 
       # Wire up Linear's hosted MCP server when LINEAR_API_KEY is set. The
       # action consumes this via `--mcp-config <path>` in claude_args. The bot
@@ -1335,7 +1419,7 @@ jobs:
           # --max-turns caps runaway loops.
           claude_args: >-
             --model ${{ steps.model.outputs.model }}
-            --effort ${{ steps.tools.outputs.effort }}
+            --effort ${{ steps.model.outputs.effort }}
             --allowedTools "${{ steps.tools.outputs.allowed }}"
             --max-turns ${{ steps.tools.outputs.max_turns }}
             ${{ steps.tools.outputs.disallowed != '' && format('--disallowedTools "{0}"', steps.tools.outputs.disallowed) || '' }}
@@ -1657,7 +1741,8 @@ jobs:
           # off the SDK stream (DEV-881: a CLI that silently rewrites a flag is
           # only visible in what it actually sent) and falls back to these.
           MODEL: ${{ steps.model.outputs.model }}
-          EFFORT: ${{ steps.tools.outputs.effort }}
+          EFFORT: ${{ steps.model.outputs.effort }}
+          ARM: ${{ steps.model.outputs.arm }}
           MAX_TURNS: ${{ steps.tools.outputs.max_turns }}
           REVIEW_TIMEOUT_MINUTES: ${{ inputs.review_timeout_minutes }}
           FLAVOR: ${{ steps.flavor.outputs.flavor }}
