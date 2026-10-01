@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.13.0](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.12.0...pepper-pr-review-v1.13.0) (2026-09-30)
+
+
+### Features
+
+* **pepper-pr-review:** assign each PR a model and effort arm and start a Sonnet 5.5 canary ([#265](https://github.com/SpiceLabsHQ/.github/issues/265)) ([42e4ea0](https://github.com/SpiceLabsHQ/.github/commit/42e4ea0e297391341b83ed4350d3da126b7b1417))
+
 ## [1.12.0](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.11.3...pepper-pr-review-v1.12.0) (2026-09-30)
 
 
