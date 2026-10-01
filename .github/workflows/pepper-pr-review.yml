@@ -1431,7 +1431,17 @@ jobs:
           # Without these, the action silently uses defaults, which results in
           # permission denials when Pepper runs gh / git from the prompt.
           # --max-turns caps runaway loops.
+          #
+          # --permission-mode dontAsk keeps --allowedTools the whole boundary.
+          # From claude-cli 2.1.285 a headless run starts in `auto` mode, where
+          # a command that matches no rule goes to a model classifier instead
+          # of being refused. Tested against 2.1.286 with this allowlist, auto
+          # mode ran curl, wget, python3, `find -exec`, `| sh` and `env`, so the
+          # network and execution limits above stopped holding. dontAsk refuses
+          # anything that is neither allowlisted nor on the CLI's built-in
+          # read-only list, which is how every run before 2.1.285 behaved.
           claude_args: >-
+            --permission-mode dontAsk
             --model ${{ steps.model.outputs.model }}
             --effort ${{ steps.model.outputs.effort }}
             --allowedTools "${{ steps.tools.outputs.allowed }}"
