@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.4.3](https://github.com/SpiceLabsHQ/.github/compare/actions-audit-v1.4.2...actions-audit-v1.4.3) (2026-09-30)
+## [1.4.3](https://github.com/SpiceLabsHQ/.github/compare/actions-audit-v1.4.2...actions-audit-v1.4.3) (2026-10-01)
 
 
 ### Bug Fixes
