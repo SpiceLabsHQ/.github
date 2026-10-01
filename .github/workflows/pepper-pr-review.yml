@@ -1282,13 +1282,24 @@ jobs:
           # .pepper-pr-review-tpl scripts are checked out before this step
           # and run after it with AWS and GitHub credentials, so a file write
           # can become code execution. Flags on these tools that write or
-          # execute are denied in REVIEW_DISALLOWED. Left out on purpose:
-          # `uniq` (a second file argument is a write, and no rule can tell
-          # it apart; `… | uniq` still works through the CLI's built-in
-          # read-only list), `xxd` (same; use od or hexdump), curl and wget
-          # (network; WebFetch covers reads), and any interpreter.
+          # execute are denied in REVIEW_DISALLOWED. A shell redirect to a
+          # file (`>`, `>>`, `&>`) needs no rule: the CLI checks its target
+          # against the denied Edit tool and refuses it for every command.
+          # Left out on purpose:
+          #   - sed and awk: their scripts can write files (sed `w`, awk
+          #     `print >`) and run commands (GNU sed `e`, awk `system`), and a
+          #     script read with `-f` from a file in the PR carries none of
+          #     that on the command line for a rule to match. A print-only
+          #     `sed -n '1,3p' file` still runs through the CLI's built-in
+          #     read-only list; Read with offset/limit, head, tail, cut and
+          #     tr cover the rest.
+          #   - uniq and xxd: a second file argument is a write, and no rule
+          #     can tell it apart. `… | uniq` still works through the CLI's
+          #     built-in read-only list; od and hexdump replace xxd.
+          #   - curl and wget (network; WebFetch covers reads), and any
+          #     interpreter.
           SHELL_TOOLS=''
-          for cmd in cat sed jq yq awk head tail sort wc find rg grep ls tr cut \
+          for cmd in cat jq yq head tail sort wc find rg grep ls tr cut \
                      column comm paste nl od hexdump cmp diff file stat tree \
                      basename dirname realpath shasum sha1sum sha256sum \
                      sha512sum md5sum cksum base64 printf echo date which; do
@@ -1385,17 +1396,11 @@ jobs:
           sort *-o*
           sort *--output*
           rg *--pre*
-          awk *system*
-          awk *>*
-          awk *|*
-          awk *getline*
           find *-exec*
           find *-ok*
           find *-delete*
           find *-fprint*
           find *-fls*
-          sed *-i*
-          sed *--in-place*
           yq *-i*
           yq *--inplace*
           yq -s*
