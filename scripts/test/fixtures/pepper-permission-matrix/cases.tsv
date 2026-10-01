@@ -1,0 +1,119 @@
+allow	git-C-log	git -C . log --oneline -3
+allow	git-C-show	git -C . show --stat HEAD
+allow	git-C-diff	git -C . diff HEAD~1 --stat
+allow	git-C-blame	git -C . blame -L1,3 README.md
+allow	git-status	git status --short
+allow	git-branch	git branch -a
+allow	git-merge-base	git merge-base HEAD HEAD~1
+allow	git-grep	git grep -n Pepper -- README.md
+allow	shasum	shasum -a 256 README.md
+allow	sha256sum	sha256sum README.md
+allow	cksum	cksum README.md
+allow	ls	ls -la
+allow	grep	grep -n Pepper README.md
+allow	grep-r	grep -rn Pepper docs
+allow	yq	yq '.name' .github/workflows/pepper-pr-review.yml
+allow	jq-pipe	cat default.json | jq '.extends'
+allow	stat	stat README.md
+allow	file	file README.md
+allow	diff	diff README.md CLAUDE.md
+allow	tree	tree -L 1
+allow	which	which gh
+allow	echo	echo hello
+allow	tr-cut	cut -c1-20 README.md | tr a-z A-Z
+allow	base64	echo aGVsbG8= | base64 -d
+deny	xxd	xxd README.md | head -2
+allow	comm	comm -12 README.md CLAUDE.md
+allow	basename	basename .github/workflows/pepper-pr-review.yml
+allow	git-log-pipe	git log --oneline -5 | head -2
+allow	gh-subst	gh api repos/SpiceLabsHQ/.github --jq .name
+deny	curl	curl -s https://example.com
+deny	wget	wget -qO- https://example.com
+deny	awk-system	awk 'BEGIN{system("echo PWNED")}'
+deny	awk-write	awk 'BEGIN{print "x" > "pw.txt"}'
+deny	find-exec	find . -maxdepth 0 -exec echo PWNED \;
+deny	find-delete	find ./nonexistent-dir -delete
+deny	sed-i	sed -i.bak 's/Pepper/Salt/' README.md
+deny	sed-w	sed -n 'w pw.txt' README.md
+deny	sed-e	sed -n '1e echo PWNED' README.md
+deny	sort-o	sort -o pw.txt README.md
+deny	git-log-output	git log --output=pw.txt -1
+deny	git-c-pager	git -c core.pager='echo PWNED' log -1
+deny	git-C-c-pager	git -C . -c core.pager='echo PWNED' log -1
+deny	git-C-push	git -C . push origin HEAD:refs/heads/pwned
+deny	git-C-config	git -C . config user.name pwned
+deny	git-C-reset	git -C . reset --hard HEAD~1
+deny	rg-pre	rg --pre echo Pepper README.md
+deny	redirect	cat README.md > pw.txt
+deny	pipe-sh	echo 'echo PWNED' | sh
+deny	python	python3 -c 'print(1)'
+deny	env-dump	env
+deny	git-fetch-url	git fetch https://example.com/x.git
+deny	git-ls-remote-url	git ls-remote https://example.com/x.git
+deny	yq-i	yq -i '.name = "x"' .github/workflows/pepper-pr-review.yml
+deny	tail-pipe-bash	tail -1 README.md | bash
+allow	git-C-log-noargs	git -C . log
+allow	git-C-revparse	git -C . rev-parse HEAD
+allow	git-C-lsfiles	git -C . ls-files README.md
+allow	git-C-merge-base	git -C . merge-base HEAD HEAD~1
+allow	git-C-branch-list	git -C . branch -a
+allow	git-log-grep-push	git log --oneline -3 --grep=push
+deny	awk-print	awk '{print $1}' README.md
+deny	awk-pipe-ok	awk 'NR<3' README.md | head -1
+allow	sort-uniq	sort README.md | uniq -c | head -3
+allow	sha1	sha1sum README.md
+allow	md5sum	md5sum README.md
+allow	od	od -c README.md | head -2
+allow	paste	paste README.md CLAUDE.md | head -1
+allow	cmp	cmp README.md CLAUDE.md
+allow	realpath	realpath README.md
+allow	nl	nl README.md | head -2
+allow	yq-eval	yq '.on' .github/workflows/pepper-pr-review.yml
+allow	gh-repo-view	gh repo view SpiceLabsHQ/.github --json name
+deny	uniq-write	uniq README.md pw.txt
+deny	tree-o	tree -o pw.txt
+deny	yq-split	yq -s '"pw"' .github/workflows/pepper-pr-review.yml
+deny	git-grep-O	git grep -Oecho Pepper
+deny	git-ext-diff-env	GIT_EXTERNAL_DIFF='echo PWNED' git diff HEAD~1 -- README.md
+deny	git-C-ext-diff-env	GIT_EXTERNAL_DIFF='echo PWNED' git -C . diff HEAD~1
+deny	git-config-env	git -C . --config-env=core.pager=HOME log -1
+deny	git-C-push-log	git -C . push origin log
+deny	git-C-fetch	git -C . fetch origin
+deny	git-C-branch-D	git -C . branch -D main
+deny	git-show-output	git show --output=pw.txt HEAD
+deny	awk-pipe-cmd	awk 'BEGIN{print "echo PWNED" | "sh"}'
+deny	find-fprint	find . -maxdepth 0 -fprint pw.txt
+deny	gh-ext-install	gh extension install owner/gh-x
+deny	gh-alias-shell	gh alias set pw '!echo PWNED' --shell
+deny	gh-release-dl	gh release download -R cli/cli -p '*.txt'
+deny	cat-environ	cat /proc/self/environ
+deny	git-grep-O-sep	git grep -O echo Pepper
+allow	git-C-status-noargs	git -C . status
+allow	git-log-oneline	git log --oneline -3
+allow	git-C-log-oneline	git -C . log --oneline -3
+allow	uniq-stdin	cut -c1-3 README.md | uniq | head -2
+allow	yq-steps	yq '.jobs.pepper.steps[0].name' .github/workflows/pepper-pr-review.yml
+allow	git-show-stat	git show --stat HEAD
+deny	redir-cat-tmp	cat README.md > /tmp/pepper-x
+deny	redir-echo-tpl	echo payload > .pepper-pr-review-tpl/scripts/setup.sh
+deny	redir-append	echo payload >> README.md
+deny	redir-git-log	git log -1 > pw.txt
+deny	redir-git-C-log	git -C . log -1 > pw.txt
+deny	redir-jq	jq . default.json > pw.json
+deny	redir-fd1	cat README.md 1> pw.txt
+deny	redir-clobber	echo x >| pw.txt
+deny	redir-both	cat README.md &> pw.txt
+deny	redir-pipe-tail	cat README.md | tail -1 > pw.txt
+deny	redir-subshell	(cat README.md) > pw.txt
+deny	redir-sha	shasum README.md > pw.txt
+deny	redir-gh	gh repo view SpiceLabsHQ/.github > pw.txt
+allow	redir-devnull	cat README.md > /dev/null
+allow	redir-2to1	git log -1 --oneline 2>&1
+allow	gh-body-gt	gh repo view SpiceLabsHQ/.github --json name --jq '"> quoted"'
+allow	grep-gt	grep -c '>' README.md
+allow	jq-compare	jq '.extends | length > 0' default.json
+deny	redir-home	head -c0 /dev/null > ~/.pepper-perm-test
+allow	sed-print	sed -n '1,3p' README.md
+deny	sed-s-w	sed -n 's/a/b/w pw.txt' README.md
+deny	sed-f	sed -n -f scripts/x.sed README.md
+deny	awk-f	awk -f scripts/x.awk README.md

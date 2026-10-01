@@ -9,7 +9,7 @@
 #
 # WHY THIS IS NOT A PROMPT RULE. Removing `--request-changes` from a markdown
 # template is not structural. `GH_TOOLS='Bash(gh *)'` leaves the call fully
-# available, `REVIEW_DISALLOWED` carries no `gh` entries, and the review prompt
+# available, `REVIEW_DISALLOWED` denies no review-posting `gh` call, and the review prompt
 # actively drives the call. An in-context rule is exactly what `<budget_discipline>`
 # documents as unreliable under compaction, so the guarantee lives here, after the
 # verdict, where it holds regardless of what the model decided to do.
