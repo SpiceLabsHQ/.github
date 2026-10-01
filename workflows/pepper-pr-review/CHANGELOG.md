@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.13.1](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.13.0...pepper-pr-review-v1.13.1) (2026-10-01)
+
+
+### Bug Fixes
+
+* **pepper-pr-review:** allow safe read-only tools and deny write and exec forms ([#271](https://github.com/SpiceLabsHQ/.github/issues/271)) ([5f1831f](https://github.com/SpiceLabsHQ/.github/commit/5f1831fe60bb4f5062613d2f603bd5a867a7ed0b))
+* **pepper-pr-review:** declare inference profile capabilities to claude-cli ([#268](https://github.com/SpiceLabsHQ/.github/issues/268)) ([945050e](https://github.com/SpiceLabsHQ/.github/commit/945050e33e14127092d693929ef9e9448a36c8b0))
+* **pepper-pr-review:** pin claude-cli to dontAsk permission mode ([#270](https://github.com/SpiceLabsHQ/.github/issues/270)) ([d52cc44](https://github.com/SpiceLabsHQ/.github/commit/d52cc44673d01c3c7e68c086688e54c252ebd1d5))
+
 ## [1.13.0](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.12.0...pepper-pr-review-v1.13.0) (2026-09-30)
 
 
