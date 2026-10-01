@@ -1396,6 +1396,20 @@ jobs:
         timeout-minutes: ${{ inputs.review_timeout_minutes }}
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          # Tell claude-cli what the selected inference profile supports (DEV-881).
+          # The CLI learns a profile's backing model with bedrock:GetInferenceProfile,
+          # but claude-code-action sets ANTHROPIC_BEDROCK_BASE_URL to the
+          # bedrock-runtime endpoint and the CLI sends its control-plane calls
+          # there too, so the lookup fails before reaching AWS. Unresolved, the
+          # CLI treats the ARN as an unknown model: it drops `--effort` from
+          # every request and sends `thinking.type=enabled`, which Sonnet 5 and
+          # 5.5 reject with a 400 before the CLI retries with adaptive.
+          # The variable only adds capabilities. Sonnet 5 and 5.5 (both arms)
+          # support all four. Sonnet 4.6, the other model the role may invoke
+          # (DEV-875), lacks xhigh_effort, so an override to it must not also
+          # set effort `xhigh`. Remove once the CLI resolves profiles correctly
+          # under the action.
+          CLAUDE_CODE_MODEL_CAPABILITIES: ${{ steps.model.outputs.model }}=adaptive_thinking,effort,xhigh_effort,max_effort
         with:
           github_token: ${{ steps.app-token.outputs.token }}
           use_bedrock: "true"
