@@ -1264,14 +1264,40 @@ jobs:
           # command-parser, so the model stops shelling out to grep/ls/cat and
           # getting denied.
           READ_TOOLS='Read,Grep,Glob,LS'
-          # Read-only git history for change context.
-          GIT_TOOLS='Bash(git log:*),Bash(git diff:*),Bash(git blame:*),Bash(git show:*),Bash(git rev-parse:*),Bash(git cat-file:*),Bash(git ls-files:*)'
-          # Read-only shell utilities the model still reaches for. Inspection
-          # only — no writers, no `bash <script>`, no execution sinks.
-          SHELL_TOOLS='Bash(cat:*),Bash(sed:*),Bash(jq:*),Bash(awk:*),Bash(head:*),Bash(tail:*),Bash(sort:*),Bash(uniq:*),Bash(wc:*),Bash(find:*),Bash(rg:*)'
+          # Read-only git subcommands, each with and without `-C <dir>`
+          # (DEV-2481). Newer models write `git -C <checkout> log …` by
+          # default, and a rule for `git log` does not match that form.
+          # The `*` after `-C` can also match a write subcommand
+          # (`git -C . push origin log`), so the git deny rules in
+          # REVIEW_DISALLOWED below are what keep this read-only.
+          GIT_TOOLS=''
+          for sub in log diff blame show rev-parse cat-file ls-files status branch \
+                     merge-base grep show-ref for-each-ref rev-list describe \
+                     name-rev shortlog ls-tree diff-tree whatchanged; do
+            GIT_TOOLS="${GIT_TOOLS:+${GIT_TOOLS},}Bash(git ${sub} *),Bash(git -C * ${sub}),Bash(git -C * ${sub} *)"
+          done
+          # Read-only shell utilities: text, JSON/YAML, hashing and file
+          # inspection. A command here must not reach the network or run
+          # another program. Writes matter as much as execution: the
+          # .pepper-pr-review-tpl scripts are checked out before this step
+          # and run after it with AWS and GitHub credentials, so a file write
+          # can become code execution. Flags on these tools that write or
+          # execute are denied in REVIEW_DISALLOWED. Left out on purpose:
+          # `uniq` (a second file argument is a write, and no rule can tell
+          # it apart; `… | uniq` still works through the CLI's built-in
+          # read-only list), `xxd` (same; use od or hexdump), curl and wget
+          # (network; WebFetch covers reads), and any interpreter.
+          SHELL_TOOLS=''
+          for cmd in cat sed jq yq awk head tail sort wc find rg grep ls tr cut \
+                     column comm paste nl od hexdump cmp diff file stat tree \
+                     basename dirname realpath shasum sha1sum sha256sum \
+                     sha512sum md5sum cksum base64 printf echo date which; do
+            SHELL_TOOLS="${SHELL_TOOLS:+${SHELL_TOOLS},}Bash(${cmd} *)"
+          done
           # gh is the review action surface: read PR/CI context AND post the
-          # review, labels, and reviewer assignment. Broad within gh; file
-          # writes and pushes are blocked because bare Bash is never granted.
+          # review, labels, and reviewer assignment. Broad within gh; the gh
+          # subcommands that install or run code, or write files, are denied
+          # in REVIEW_DISALLOWED.
           GH_TOOLS='Bash(gh *)'
           # Read-only fetch for specs/RFCs linked from PR descriptions
           # (replaces the old Bash(curl *), which could also POST).
@@ -1305,6 +1331,92 @@ jobs:
           # mutation is save_/create_/delete_/prepare_-prefixed; reads (get_/
           # list_/search_) stay allowed.
           REVIEW_DISALLOWED='Edit,Write,MultiEdit,NotebookEdit,mcp__linear__save_*,mcp__linear__create_*,mcp__linear__delete_*,mcp__linear__prepare_*'
+          # Write, execution and network forms of the allowed Bash tools
+          # (DEV-2481). Deny beats allow, so these hold even where an allow
+          # rule's `*` would match. Each one ran under an allow rule when
+          # tested against claude-cli 2.1.286, or is the same mechanism as
+          # one that did. Some rules also catch harmless commands (a deny on
+          # ` config` also refuses `git log -- config/`); a refused read costs
+          # one turn, a missed write can cost the runner's credentials.
+          while IFS= read -r rule; do
+            REVIEW_DISALLOWED="${REVIEW_DISALLOWED},Bash(${rule})"
+          done <<'RULES'
+          git * push*
+          git * commit*
+          git * reset*
+          git * checkout*
+          git * switch*
+          git * restore*
+          git * config*
+          git * fetch*
+          git * pull*
+          git * clone*
+          git * remote*
+          git * ls-remote*
+          git * submodule*
+          git * update-ref*
+          git * tag *
+          git * gc*
+          git * clean*
+          git * apply*
+          git * am *
+          git -c *
+          git * -c *
+          git *--config-env*
+          git *--output*
+          git *--exec-path*
+          git *--upload-pack*
+          git *--ext-diff*
+          git *--textconv*
+          git *-O*
+          git *--open-files-in-pager*
+          git * branch *-d*
+          git * branch *-D*
+          git * branch *-m*
+          git * branch *-M*
+          git * branch *-c*
+          git * branch *-C*
+          git * branch *-f*
+          git * branch *--set-upstream*
+          git * branch *--delete*
+          git * branch *--move*
+          git * branch *--copy*
+          git * branch *--force*
+          sort *-o*
+          sort *--output*
+          rg *--pre*
+          awk *system*
+          awk *>*
+          awk *|*
+          awk *getline*
+          find *-exec*
+          find *-ok*
+          find *-delete*
+          find *-fprint*
+          find *-fls*
+          sed *-i*
+          sed *--in-place*
+          yq *-i*
+          yq *--inplace*
+          yq -s*
+          yq * -s*
+          yq *--split-exp*
+          tree *-o*
+          base64 *-o*
+          base64 *--output*
+          date *-s*
+          date *--set*
+          gh extension*
+          gh ext *
+          gh alias*
+          gh config*
+          gh auth*
+          gh codespace*
+          gh * download*
+          gh pr checkout*
+          gh repo clone*
+          gh api *--hostname*
+          RULES
           # Reasoning effort. Claude Code's agentic default is `xhigh`, which is
           # tuned for the hardest coding tasks and pays a per-turn latency tax on
           # every one of a review's ~26 turns. A PR review is analytically demanding
