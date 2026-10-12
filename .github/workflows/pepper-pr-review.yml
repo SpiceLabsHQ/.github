@@ -477,12 +477,35 @@ jobs:
       needs.gate.outputs.run == 'true' &&
       github.event_name == 'pull_request'
     steps:
+      # The token asks for only what this job's steps use (DEV-2892). Without
+      # `permission-*` inputs it carried everything the App holds, including
+      # `contents: write`, so a prompt-injected run could merge, push or cut a
+      # release through `gh api`, which the command deny rules cannot refuse
+      # without also refusing Pepper's own review POSTs. GitHub now refuses
+      # those writes itself. Each permission and the calls that need it:
+      #   contents: read       checkout, `gh pr diff`, reading files over the API
+      #   pull-requests: write `gh pr review`, inline reviews and dismissals
+      #                        (…/pulls/N/reviews), …/requested_reviewers,
+      #                        `gh pr comment`, `gh pr edit` labels, `gh label create`
+      #   issues: read         `gh issue view` on a linked issue, …/issues/N/events
+      #   members: read        resolving `--add-reviewer <org>/<team>`
+      #   metadata: read       always granted; claude-code-action's actor check
+      # Labels and PR conversation comments use the issues API, which GitHub
+      # serves to either `issues: write` or `pull-requests: write`; the App
+      # installation holds only `issues: read`, and asking for more than the
+      # installation holds fails the mint, so issues stays read. The coverage
+      # poll and claude-code-action's CI server use `github.token`, not this one.
+      # Leaving `owner`/`repositories` unset keeps the token scoped to this repo.
       - name: Generate App installation token
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
           client-id: ${{ inputs.app_client_id }}
           private-key: ${{ secrets.PEPPER_PR_REVIEW_APP_PRIVATE_KEY }}
+          permission-contents: read
+          permission-pull-requests: write
+          permission-issues: read
+          permission-members: read
 
       - name: Checkout caller repo
         uses: actions/checkout@v7
