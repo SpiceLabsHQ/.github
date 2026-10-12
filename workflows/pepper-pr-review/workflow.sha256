@@ -1,4 +1,4 @@
-4700aba1fd63a54ee690542fd2ee317e26f4832026e0224ab58856862d05e4f3  .github/workflows/pepper-pr-review.yml
+e91a7301f06eb988b64d27e10a286380b2b02d73ee71614a46884cb81d528480  .github/workflows/pepper-pr-review.yml
 82b39601fb7ea9e04b2b1353254bd592e702e683d7447596a6abb05301a8d519  prompts/dependency-review-default.md
 9ae1cad5c203ddd9cadedb4870a5ae0301ef24c1151cbfd889572ef8376e1a43  prompts/pr-review-default.md
 8269f48fc45f9ec3075cba3ad3c61c787cdcd1d7bc5d593270dbe328a81bb2f1  scripts/pepper-audit-collect.jq
