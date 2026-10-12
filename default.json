@@ -31,7 +31,7 @@
     {
       "description": "Vite majors ship in one PR with the majors of the plugins that require them (DEV-2882). A plugin major such as @vitejs/plugin-react 6 peers on Vite 8, so it cannot land alone while the repo is still on Vite 6. This is the one exception to majors staying separate (DEV-502); keep the member list narrow. Vitest is deliberately not in the group.",
       "matchUpdateTypes": ["major"],
-      "matchPackageNames": ["vite", "@vitejs/*", "laravel-vite-plugin", "@tailwindcss/vite"],
+      "matchPackageNames": ["vite", "@vitejs/*", "laravel-vite-plugin"],
       "groupName": "vite major"
     },
     {
