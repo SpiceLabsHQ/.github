@@ -33,7 +33,7 @@
 # Output (every field nullable — a missing source is a null, never an error):
 #   {
 #     "result":          {cost_usd, turns_used, duration_ms, tokens,
-#                         subtype, is_error} | null,
+#                         subtype, is_error, permission_denials} | null,
 #     "summed_tokens":   {input, output, cache_read, cache_creation} | null,
 #     "summed_cost_usd": <number> | null,
 #     "assistant_count": <number>,
@@ -54,6 +54,14 @@
 # quote an error while reviewing code. `span_ms` is first-to-last `timestamp`
 # across records (the transcript carries them; the execution file may not): the
 # only clock that survives a timeout kill.
+#
+# `result.permission_denials` lists the tool calls the permission rules refused
+# (DEV-2881), so a no_verdict run caused by an over-broad deny rule can be read
+# from CloudWatch. The CLI's result record carries one entry per refusal as
+# {tool_name, tool_use_id, tool_input}; each becomes {tool, command}, where
+# `command` is `tool_input.command` (Bash) or else the compact tool_input, cut
+# to 200 characters. At most 20 entries are kept. A result record without the
+# list gives null, not an empty list: absent is not the same as none.
 
 # Numbers only. A string "12" from a malformed record is NOT coerced: the audit
 # would rather record a null than a number it invented.
@@ -81,6 +89,20 @@ def refusal_of:
     {category: (((field("stop_details") | field("category"))
                  // (field("message") | field("stop_details") | field("category"))) | as_text)}
   else null end;
+
+# Refused tool calls (DEV-2881), capped so one runaway run cannot bloat a log
+# event: 20 entries, each command cut to 200 characters.
+def denials_of:
+  if type != "array" then null
+  else
+    [ .[] | select(type == "object")
+      | { tool: (field("tool_name") | as_text),
+          command: ((field("tool_input")) as $in
+                    | (($in | field("command") | as_text)
+                       // (if $in == null then null else ($in | tojson) end))
+                    | if . == null then null else .[0:200] end) } ]
+    | .[0:20]
+  end;
 
 # The four-way token split the schema requires. Undifferentiated totals hide
 # output tokens, which are ~90% of Bedrock cost (DEV-653).
@@ -158,7 +180,8 @@ reduce records as $r
        duration_ms: ($r | field("duration_ms") | as_number),
        tokens:      ($r | field("usage") | tokens_of),
        subtype:     ($r | field("subtype") | as_text),
-       is_error:    ($r | field("is_error") | if type == "boolean" then . else null end)
+       is_error:    ($r | field("is_error") | if type == "boolean" then . else null end),
+       permission_denials: ($r | field("permission_denials") | denials_of)
      }
 
    elif ($r | field("type")) == "assistant" then

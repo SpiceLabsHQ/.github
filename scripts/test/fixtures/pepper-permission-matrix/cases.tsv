@@ -117,3 +117,16 @@ allow	sed-print	sed -n '1,3p' README.md
 deny	sed-s-w	sed -n 's/a/b/w pw.txt' README.md
 deny	sed-f	sed -n -f scripts/x.sed README.md
 deny	awk-f	awk -f scripts/x.awk README.md
+allow	gh-pr-review-body-download	gh pr review 1 --approve --body "bumps actions/download-artifact"
+allow	gh-pr-comment-body-download	gh pr comment 1 --body "Downloads the build output once"
+deny	gh-run-dl	gh run download 1 -n artifact
+deny	gh-release-dl-R-first	gh -R o/r release download v1
+deny	gh-run-dl-repo-first	gh --repo o/r run download 1
+deny	gh-release-dl-R-after	gh release download -R o/r
+deny	gh-release-dl-R-between	gh release -R o/r download v1
+allow	gh-pr-review-body-download-word	gh pr review 1 --approve --body "Moves upload-artifact and download-artifact to v5; download behavior is unchanged."
+allow	gh-pr-comment-body-downloads-word	gh pr comment 1 --body "Confirm the job still downloads the build output"
+deny	gh-attestation-dl-R-after	gh attestation download oci://x -R o/r
+deny	gh-at-dl	gh at download x
+deny	gh-attestation-dl-R-first	gh -R o/r attestation download x
+allow	gh-R-pr-review-body-run-download	gh -R o/r pr review 1 --approve --body "bumps run cache; download-artifact v5"

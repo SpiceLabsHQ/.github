@@ -231,6 +231,7 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
         ["outcome", (.outcome | show)],
         ["no-verdict reason", ((.no_verdict_reason | show) + (if .refusal_category then " (" + .refusal_category + ")" else "" end))],
         ["collapse fired", (.collapse_fired | show)],
+        ["refused commands", (.permission_denials | if type == "array" then (length | tostring) else show end)],
         ["arm", (.arm | show)],
         ["model", (.model | show)],
         ["effort", (.effort | show)],

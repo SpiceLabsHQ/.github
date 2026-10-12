@@ -30,7 +30,8 @@
 # Output: the schema-v1 record, exactly the field set and field names in
 # DEV-653 (plus the additive, nullable fields added since — `model_executed`,
 # DEV-881; `cookbook_ref`, DEV-1119; `no_verdict_reason` and
-# `refusal_category`, DEV-1335; `arm`, DEV-2455). Callers depend on the field names:
+# `refusal_category`, DEV-1335; `arm`, DEV-2455; `permission_denials`,
+# DEV-2881). Callers depend on the field names:
 # renaming or removing one is a schema bump; adding a nullable one is not
 # (docs/pepper-audit.md, "Schema changes").
 
@@ -167,6 +168,11 @@ def obs($raw): ($raw | fromjson? // null) | if type == "object" then . else null
   outcome: $outcome,
   no_verdict_reason: $no_verdict_reason,
   refusal_category: (if $no_verdict_reason == "refused" then $refusal.category else null end),
+  # The tool calls the permission rules refused, as {tool, command}, capped by
+  # pepper-audit-collect.jq (DEV-2881). Read from the execution file's result
+  # record only: the transcript has no result record, so without the execution
+  # file this is null, and [] means the run had no refusals.
+  permission_denials: ($xr.permission_denials // null),
   collapse_fired: ($collapse_fired | to_bool),
   turns_used: $turns_used,
   duration_ms: (($xr.duration_ms) // ($tr.duration_ms) // null),
