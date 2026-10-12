@@ -508,10 +508,11 @@ jobs:
           permission-members: read
 
       # TEMP (DEV-2892): live proof that GitHub refuses a write outside the
-      # token's set. No `sha` is sent, so the call can never create a ref.
-      # 403 "Resource not accessible by integration" = refused by scope (pass);
-      # 422 = the token was allowed to write refs (fail). Drop before merge.
-      - name: "TEMP: probe that the review token cannot write refs"
+      # token's set. The body is valid but can never apply: README.md exists
+      # and the sha is all zeros, so a permitted token gets 409 (sha mismatch,
+      # nothing written) and a refused one gets 403 "Resource not accessible by
+      # integration". 403 = pass, 409 = fail. Drop before merge.
+      - name: "TEMP: probe that the review token cannot write contents"
         continue-on-error: true
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -519,15 +520,24 @@ jobs:
         run: |
           set -uo pipefail
           # Actions runs `bash -e`; gh exits non-zero on the expected 403, so
-          # keep going and read the status instead.
-          OUT="$(gh api -i -X POST "repos/${REPO}/git/refs" -f ref=refs/heads/pepper-scope-probe 2>&1)" || true
-          printf '%s\n' "${OUT}" | tee /dev/stderr
+          # every substitution ends in `|| true` and the status is read instead.
+          CONTENT="$(printf probe | base64)" || true
+          OUT="$(gh api -i -X PUT "repos/${REPO}/contents/README.md" \
+            -f message='pepper scope probe' \
+            -f content="${CONTENT}" \
+            -f sha=0000000000000000000000000000000000000000 2>&1)" || true
           STATUS="$(printf '%s\n' "${OUT}" | awk '/^HTTP\//{print $2; exit}')" || true
+          MESSAGE="$(printf '%s\n' "${OUT}" | grep -o '"message":"[^"]*"' | head -n 1)" || true
           echo "HTTP status: ${STATUS:-unknown}"
+          echo "message: ${MESSAGE:-<none>}"
           case "${STATUS}" in
             403) echo "PASS: refused by token scope" ;;
-            422) echo "::error::FAIL: token was permitted to write refs (422)"; exit 1 ;;
-            *)   echo "::warning::Unexpected status ${STATUS:-unknown}"; exit 1 ;;
+            409) echo "::error::FAIL: token was permitted to write contents (409)"; exit 1 ;;
+            *)
+              printf '%s\n' "${OUT}"
+              echo "::warning::Unexpected status ${STATUS:-unknown}"
+              exit 1
+              ;;
           esac
 
       - name: Checkout caller repo
