@@ -1366,8 +1366,10 @@ jobs:
           # write to GitHub. gh 2.101 rejects a leading `-R` on api, gist and
           # skill, so their rules start at the subcommand and never see a
           # `gh pr review` body. A `gh api` rule can still refuse an inline
-          # comment whose body quotes a flag form such as "-X PUT"; that costs
-          # one turn, not the verdict. POST is not denied: the prompts POST to
+          # comment whose body quotes a flag form such as "-X PUT" or a quoted
+          # method name ('PUT'); the prompt then files the verdict with
+          # `gh pr review` instead. The quoted-name rules exist because
+          # `-X 'PUT'` ran under the unquoted rules. POST is not denied: the prompts POST to
           # pulls/N/requested_reviewers, inline comments POST to pulls/N/
           # reviews or pulls/N/comments, and a glob cannot tell those from
           # other endpoints without matching comment bodies. gh also sends
@@ -1486,6 +1488,12 @@ jobs:
           gh api *-X=DELETE*
           gh api *--method DELETE*
           gh api *--method=DELETE*
+          gh api *'PATCH'*
+          gh api *"PATCH"*
+          gh api *'PUT'*
+          gh api *"PUT"*
+          gh api *'DELETE'*
+          gh api *"DELETE"*
           RULES
           # Reasoning effort. Claude Code's agentic default is `xhigh`, which is
           # tuned for the hardest coding tasks and pays a per-turn latency tax on

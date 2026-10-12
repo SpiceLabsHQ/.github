@@ -345,7 +345,7 @@ If `<auto_fail>` triggered, the review already ended; these outcomes do not appl
 <request_changes>
 Pick this when you have at least one concrete blocking issue: a bug, security problem, breaking change without migration, missing or ineffective test for new behavior, scope drift confirmed against the linked issue, half-done work, or a policy violation that `<intent_verification>` already routed here (missing Linear issue ID on a non-chore PR). "Blocking" means you can name the specific failure mode or violated requirement. If you cannot, it is not blocking. A red, pending, or missing CI check is never a blocker — required checks gate the merge without you.
 
-Action: `gh pr review {{PR_NUMBER}} --request-changes --body '<summary>'` plus inline comments using GitHub suggestion blocks (```suggestion … ```) for concrete edits.
+Action: `gh pr review {{PR_NUMBER}} --request-changes --body '<summary>'` plus inline comments using GitHub suggestion blocks (```suggestion … ```) for concrete edits. If a `gh api` call that posts the review or its inline comments is refused, file the verdict with `gh pr review` instead and put the suggestions in its `--body`.
 </request_changes>
 
 <approve>
