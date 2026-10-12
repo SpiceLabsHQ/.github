@@ -162,3 +162,20 @@ jobs:
 
       - name: Check bot allowlists for drift
         run: scripts/check-bot-allowlists.sh
+
+  pepper-review-token-scope:
+    name: Pepper review token scope
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout — first-party, allowed to use a major-version tag.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Fails if the review job's App token gains, widens or loses a
+      # permission-* input (DEV-2892). The test is the check itself, not
+      # fixtures for a scheduled script, so it runs here on every PR rather
+      # than in a path-filtered `*-test.yml`. Needs yq, preinstalled on
+      # ubuntu-latest.
+      - name: Check the review token's permission set
+        run: scripts/test/pepper-review-token-scope_test.sh
