@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.13.2](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.13.1...pepper-pr-review-v1.13.2) (2026-10-12)
+
+
+### Bug Fixes
+
+* **pepper-pr-review:** narrow the review token to reading code and posting reviews ([#278](https://github.com/SpiceLabsHQ/.github/issues/278)) ([8eae01d](https://github.com/SpiceLabsHQ/.github/commit/8eae01d7d49f44feb799461a554a707ee4992fd8))
+* **pepper-pr-review:** refuse gh commands that run code or write to GitHub ([#277](https://github.com/SpiceLabsHQ/.github/issues/277)) ([51621aa](https://github.com/SpiceLabsHQ/.github/commit/51621aae56eeee7f0d2cc3df338043202a1ad247))
+* **pepper-pr-review:** refuse only real download commands and log refused commands ([#275](https://github.com/SpiceLabsHQ/.github/issues/275)) ([de3fb06](https://github.com/SpiceLabsHQ/.github/commit/de3fb067720c905763accea15935525526517a09))
+
 ## [1.13.1](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.13.0...pepper-pr-review-v1.13.1) (2026-10-01)
 
 
