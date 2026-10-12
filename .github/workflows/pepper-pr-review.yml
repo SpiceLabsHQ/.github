@@ -1359,6 +1359,20 @@ jobs:
           # with the subcommand. After a leading `-R`/`--repo`, the rule needs
           # `<sub> download` side by side, because a `*` between them would
           # let a `gh -R o/r pr review` body match.
+          # DEV-2888 adds forms that run code or write: `gh copilot` downloads
+          # and runs the Copilot CLI, `gh gist clone` writes a checkout,
+          # `gh skill install|add|update|publish` (alias `gh skills`) writes or
+          # publishes skills, `gh cache delete` and `gh api` PATCH/PUT/DELETE
+          # write to GitHub. gh 2.101 rejects a leading `-R` on api, gist and
+          # skill, so their rules start at the subcommand and never see a
+          # `gh pr review` body. A `gh api` rule can still refuse an inline
+          # comment whose body quotes a flag form such as "-X PUT"; that costs
+          # one turn, not the verdict. POST is not denied: the prompts POST to
+          # pulls/N/requested_reviewers, inline comments POST to pulls/N/
+          # reviews or pulls/N/comments, and a glob cannot tell those from
+          # other endpoints without matching comment bodies. gh also sends
+          # POST unasked whenever -f/-F is given, so a method rule would not
+          # hold anyway.
           while IFS= read -r rule; do
             REVIEW_DISALLOWED="${REVIEW_DISALLOWED},Bash(${rule})"
           done <<'RULES'
@@ -1446,6 +1460,32 @@ jobs:
           gh pr checkout*
           gh repo clone*
           gh api *--hostname*
+          gh copilot*
+          gh gist clone*
+          gh cache delete*
+          gh cache * delete*
+          gh -R* cache delete*
+          gh --repo* cache delete*
+          gh skill* install*
+          gh skill* add*
+          gh skill* update*
+          gh skill* publish*
+          gh api *-iX*
+          gh api *-X PATCH*
+          gh api *-XPATCH*
+          gh api *-X=PATCH*
+          gh api *--method PATCH*
+          gh api *--method=PATCH*
+          gh api *-X PUT*
+          gh api *-XPUT*
+          gh api *-X=PUT*
+          gh api *--method PUT*
+          gh api *--method=PUT*
+          gh api *-X DELETE*
+          gh api *-XDELETE*
+          gh api *-X=DELETE*
+          gh api *--method DELETE*
+          gh api *--method=DELETE*
           RULES
           # Reasoning effort. Claude Code's agentic default is `xhigh`, which is
           # tuned for the hardest coding tasks and pays a per-turn latency tax on

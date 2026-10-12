@@ -130,3 +130,32 @@ deny	gh-attestation-dl-R-after	gh attestation download oci://x -R o/r
 deny	gh-at-dl	gh at download x
 deny	gh-attestation-dl-R-first	gh -R o/r attestation download x
 allow	gh-R-pr-review-body-run-download	gh -R o/r pr review 1 --approve --body "bumps run cache; download-artifact v5"
+deny	gh-copilot-remove	gh copilot --remove
+deny	gh-copilot-prompt	gh copilot -p "print hello"
+deny	gh-gist-clone	gh gist clone 0123456789abcdef0123456789abcdef
+deny	gh-cache-delete	gh cache delete 123 -R o/r
+deny	gh-cache-delete-R-between	gh cache -R o/r delete 123
+deny	gh-cache-delete-R-first	gh -R o/r cache delete 123
+deny	gh-cache-delete-repo-first	gh --repo=o/r cache delete 123
+deny	gh-skill-install	gh skill install o/r --all
+deny	gh-skills-add	gh skills add o/r some-skill
+deny	gh-skill-update	gh skill update --all
+deny	gh-skill-publish	gh skill publish --tag v1.0.0
+deny	gh-api-X-PATCH	gh api -X PATCH repos/o/r -f description=x
+deny	gh-api-method-PATCH-after	gh api repos/o/r --method PATCH -f description=x
+deny	gh-api-iX-PATCH	gh api -iX PATCH repos/o/r -f description=x
+deny	gh-api-XPUT	gh api -XPUT repos/o/r/pulls/1/merge
+deny	gh-api-method-eq-PUT	gh api --method=PUT repos/o/r/contents/x -f message=x -f content=eA==
+deny	gh-api-X-DELETE-after	gh api repos/o/r/git/refs/heads/x -X DELETE
+deny	gh-api-method-DELETE	gh api --method DELETE repos/o/r/git/refs/heads/x
+deny	gh-api-X-eq-DELETE	gh api -X=DELETE repos/o/r/releases/1
+allow	gh-api-POST-requested-reviewers	gh api --method POST repos/{owner}/{repo}/pulls/1/requested_reviewers -f 'team_reviewers[]=reviewers'
+allow	gh-api-X-POST-review-inline	gh api -X POST repos/{owner}/{repo}/pulls/1/reviews -f event=COMMENT -f body='Swap this PATCH for a PUT; the DELETE stays'
+allow	gh-api-POST-inline-comment	gh api repos/{owner}/{repo}/pulls/1/comments --method POST -f body='nit: rename' -f commit_id=abc -f path=a.sh -F line=3
+allow	gh-api-graphql-read	gh api graphql -f query='{ viewer { login } }'
+allow	gh-api-X-GET	gh api -X GET repos/SpiceLabsHQ/.github --jq .name
+allow	gh-api-tag-ref	gh api repos/cli/cli/git/refs/tags/v2.0.0 --jq .object.sha
+allow	gh-cache-list	gh cache list -R o/r
+allow	gh-skill-list	gh skill list
+allow	gh-pr-review-body-gh-forms	gh pr review 1 --comment --body "Covers gh copilot, gh gist clone, gh cache delete, gh api -X POST, gh api --method PATCH and gh skill install"
+allow	gh-pr-comment-body-gh-forms	gh pr comment 1 --body "Refused now: copilot, gist clone, cache delete, api -X DELETE, skill update and skills add"
