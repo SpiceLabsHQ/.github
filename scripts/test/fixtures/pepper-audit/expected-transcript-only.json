@@ -22,6 +22,7 @@
   "outcome": "changes_requested",
   "no_verdict_reason": null,
   "refusal_category": null,
+  "permission_denials": null,
   "collapse_fired": true,
   "turns_used": null,
   "duration_ms": null,

@@ -1,0 +1,35 @@
+[
+  { "type": "system", "subtype": "init", "session_id": "denials-fixture", "cwd": "/home/runner/work/example/example" },
+  {
+    "type": "assistant",
+    "version": "2.1.286",
+    "effort": "high",
+    "message": { "model": "us.anthropic.claude-sonnet-5", "usage": { "input_tokens": 1, "output_tokens": 2, "cache_read_input_tokens": 3, "cache_creation_input_tokens": 4 } }
+  },
+  {
+    "type": "result",
+    "subtype": "success",
+    "is_error": false,
+    "total_cost_usd": 0.42,
+    "num_turns": 11,
+    "duration_ms": 180000,
+    "permission_denials": [
+      {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_01",
+        "tool_input": { "command": "gh pr review 49 --approve --body \"bumps actions/download-artifact\"", "description": "Approve the PR" }
+      },
+      {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_02",
+        "tool_input": { "command": "gh pr comment 49 --body \"This update moves actions/upload-artifact and actions/download-artifact to the next major version. The breaking change is that artifacts are immutable once uploaded, so the workflow must use unique names per job. Checked: every upload in this repo already does.\"" }
+      },
+      {
+        "tool_name": "Edit",
+        "tool_use_id": "toolu_03",
+        "tool_input": { "file_path": "README.md", "old_string": "a", "new_string": "b" }
+      }
+    ],
+    "usage": { "input_tokens": 100, "output_tokens": 200, "cache_read_input_tokens": 300, "cache_creation_input_tokens": 40 }
+  }
+]

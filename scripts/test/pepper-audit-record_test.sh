@@ -262,13 +262,48 @@ else
   fail "arm: the passed arm name is recorded as-is" "actual: ${GOT}"
 fi
 
+# --- permission_denials lists each refused command (DEV-2881) ---------------
+# A no_verdict run caused by an over-broad deny rule is only diagnosable if the
+# refused commands reach CloudWatch. The run-without-denials case (`[]`) and the
+# no-execution-file case (`null`) are pinned by the full-record fixtures above.
+# Here: each entry becomes {tool, command}; a Bash entry keeps its command, a
+# long one is cut to 200 characters, and a non-Bash entry falls back to its
+# compact tool_input.
+printf '%s' "pepper-needs-review" > "${WORK}/labels"
+OUT="$(run_audit "${FIX}/execution-file-denials.json" "${M}.jsonl" NO_VERDICT=true)"; RC=$?
+GOT="$(record_of "${OUT}" | jq -c '.permission_denials')"
+WANT="$(jq -c '[.[] | select(.type == "result") | .permission_denials[]
+  | {tool: .tool_name,
+     command: ((.tool_input.command // (.tool_input | tojson))[0:200])}]' \
+  "${FIX}/execution-file-denials.json")"
+if [ "${RC}" -eq 0 ] && [ "${GOT}" = "${WANT}" ] \
+   && jq -e 'length == 3 and .[0].command == "gh pr review 49 --approve --body \"bumps actions/download-artifact\""
+             and (.[1].command | length) == 200 and .[2].tool == "Edit"' >/dev/null <<<"${GOT}"; then
+  pass "permission_denials: each refused command is recorded as {tool, command}, truncated"
+else
+  fail "permission_denials: each refused command is recorded as {tool, command}, truncated" \
+    "want: ${WANT}" "got:  ${GOT} (rc=${RC})"
+fi
+
+# The list is capped at 20 entries, so one runaway run cannot bloat a log event.
+jq '(.[] | select(.type == "result") | .permission_denials) |= [range(25) as $i
+      | {tool_name: "Bash", tool_use_id: "t\($i)", tool_input: {command: "gh run download \($i)"}}]' \
+  "${FIX}/execution-file-denials.json" > "${WORK}/many-denials.json"
+OUT="$(run_audit "${WORK}/many-denials.json" "${M}.jsonl" NO_VERDICT=true)"
+GOT="$(record_of "${OUT}" | jq -c '[(.permission_denials | length), .permission_denials[19].command]')"
+if [ "${GOT}" = '[20,"gh run download 19"]' ]; then
+  pass "permission_denials: capped at the first 20 entries"
+else
+  fail "permission_denials: capped at the first 20 entries" "got: ${GOT}"
+fi
+
 # --- The schema itself ------------------------------------------------------
 # The committed queries in docs/pepper-audit.md address fields by name, so the
 # key set is the contract. A rename is a schema bump, not a refactor.
 printf '%s' "pepper-approved" > "${WORK}/labels"
 OUT="$(run_audit "${FIX}/execution-file.json" "${FIX}/transcript.jsonl")"
 KEYS="$(record_of "${OUT}" | jq -c 'keys_unsorted')"
-WANT_KEYS='["schema_version","ts","repo","pr_number","run_id","run_attempt","event","head_sha","pr_author","flavor","workflow_sha","standards_sha256","cookbook_ref","arm","model","model_executed","effort","max_turns","review_timeout_minutes","cli_version","outcome","no_verdict_reason","refusal_category","collapse_fired","turns_used","duration_ms","cost_usd","tokens"]'
+WANT_KEYS='["schema_version","ts","repo","pr_number","run_id","run_attempt","event","head_sha","pr_author","flavor","workflow_sha","standards_sha256","cookbook_ref","arm","model","model_executed","effort","max_turns","review_timeout_minutes","cli_version","outcome","no_verdict_reason","refusal_category","permission_denials","collapse_fired","turns_used","duration_ms","cost_usd","tokens"]'
 if [ "${KEYS}" = "${WANT_KEYS}" ]; then
   pass "schema: the v1 field set is exactly as specified"
 else
@@ -291,7 +326,8 @@ SUMMARY="${WORK}/summary.md"
 run_audit "${FIX}/execution-file.json" "${FIX}/transcript.jsonl" \
   GITHUB_STEP_SUMMARY="${SUMMARY}" >/dev/null
 if grep -q "Pepper review audit" "${SUMMARY}" && grep -q "2.1.223" "${SUMMARY}" \
-   && grep -q '^| arm | s5-high |$' "${SUMMARY}"; then
+   && grep -q '^| arm | s5-high |$' "${SUMMARY}" \
+   && grep -q '^| refused commands | 0 |$' "${SUMMARY}"; then
   pass "job summary is rendered with the record's values"
 else
   fail "job summary is rendered with the record's values" "$(cat "${SUMMARY}")"
