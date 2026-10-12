@@ -1350,11 +1350,15 @@ jobs:
           # ` config` also refuses `git log -- config/`); a refused read costs
           # one turn, a missed write can cost the runner's credentials.
           # A `*` here spans spaces and quotes, so a rule must not end on a word
-          # a review body can contain. The download rules name `gh release` and
-          # `gh run` (with or without `-R`/`--repo` in front) for that reason: a
-          # bare `gh * download*` refused `gh pr review --body "…download…"`
-          # and left Renovate PRs for download-artifact without a verdict
-          # (DEV-2881).
+          # a review body can contain. A bare `gh * download*` refused
+          # `gh pr review --body "…download…"` and left Renovate PRs for
+          # download-artifact without a verdict (DEV-2881). The download rules
+          # instead name the three subcommands with a download verb in gh 2.101
+          # (`release`, `run`, `attestation`/`at`). Flags between the
+          # subcommand and `download` are covered only when the command starts
+          # with the subcommand. After a leading `-R`/`--repo`, the rule needs
+          # `<sub> download` side by side, because a `*` between them would
+          # let a `gh -R o/r pr review` body match.
           while IFS= read -r rule; do
             REVIEW_DISALLOWED="${REVIEW_DISALLOWED},Bash(${rule})"
           done <<'RULES'
@@ -1427,14 +1431,18 @@ jobs:
           gh release * download*
           gh run download*
           gh run * download*
+          gh attestation download*
+          gh attestation * download*
+          gh at download*
+          gh at * download*
           gh -R* release download*
-          gh -R* release * download*
           gh -R* run download*
-          gh -R* run * download*
+          gh -R* attestation download*
+          gh -R* at download*
           gh --repo* release download*
-          gh --repo* release * download*
           gh --repo* run download*
-          gh --repo* run * download*
+          gh --repo* attestation download*
+          gh --repo* at download*
           gh pr checkout*
           gh repo clone*
           gh api *--hostname*

@@ -126,3 +126,7 @@ deny	gh-release-dl-R-after	gh release download -R o/r
 deny	gh-release-dl-R-between	gh release -R o/r download v1
 allow	gh-pr-review-body-download-word	gh pr review 1 --approve --body "Moves upload-artifact and download-artifact to v5; download behavior is unchanged."
 allow	gh-pr-comment-body-downloads-word	gh pr comment 1 --body "Confirm the job still downloads the build output"
+deny	gh-attestation-dl-R-after	gh attestation download oci://x -R o/r
+deny	gh-at-dl	gh at download x
+deny	gh-attestation-dl-R-first	gh -R o/r attestation download x
+allow	gh-R-pr-review-body-run-download	gh -R o/r pr review 1 --approve --body "bumps run cache; download-artifact v5"
