@@ -23,5 +23,5 @@ runs:
     - uses: actions/checkout@v7
     - uses: actions/setup-python@v7
       with:
-        python-version: "3.14"
+        python-version: "3.15"
     - uses: github/codeql-action/upload-sarif@v4
