@@ -7,7 +7,7 @@
   "workflows/pr-hygiene": "1.1.2",
   "workflows/release-artifacts": "1.0.3",
   "workflows/release-please": "1.1.2",
-  "workflows/sast": "1.2.1",
+  "workflows/sast": "1.2.2",
   "workflows/scorecard": "1.2.1",
   "workflows/scorecard-public": "1.2.1",
   "workflows/secret-scan": "1.1.3"
