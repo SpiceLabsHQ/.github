@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.2](https://github.com/SpiceLabsHQ/.github/compare/sast-v1.2.1...sast-v1.2.2) (2026-10-20)
+
+
+### Bug Fixes
+
+* **deps:** update dependency python to 3.15 ([#281](https://github.com/SpiceLabsHQ/.github/issues/281)) ([b014cff](https://github.com/SpiceLabsHQ/.github/commit/b014cffcedda4990ecddaf9e15841111c73767f9))
+
 ## [1.2.1](https://github.com/SpiceLabsHQ/.github/compare/sast-v1.2.0...sast-v1.2.1) (2026-08-22)
 
 
