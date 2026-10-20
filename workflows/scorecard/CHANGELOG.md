@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.2](https://github.com/SpiceLabsHQ/.github/compare/scorecard-v1.2.1...scorecard-v1.2.2) (2026-10-20)
+
+
+### Bug Fixes
+
+* **deps:** update ossf/scorecard-action action to v2.5.0 ([#283](https://github.com/SpiceLabsHQ/.github/issues/283)) ([3d0bca5](https://github.com/SpiceLabsHQ/.github/commit/3d0bca5600da36c4e73262e9d55b15763578450d))
+
 ## [1.2.1](https://github.com/SpiceLabsHQ/.github/compare/scorecard-v1.2.0...scorecard-v1.2.1) (2026-08-22)
 
 
