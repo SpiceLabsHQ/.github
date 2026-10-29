@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.4.4](https://github.com/SpiceLabsHQ/.github/compare/actions-audit-v1.4.3...actions-audit-v1.4.4) (2026-10-29)
+
+
+### Bug Fixes
+
+* **deps:** update astral-sh/setup-uv action to v10.3.0 ([#279](https://github.com/SpiceLabsHQ/.github/issues/279)) ([0408e43](https://github.com/SpiceLabsHQ/.github/commit/0408e4311acc07176e8220706bd140b3b47168be))
+* **deps:** update astral-sh/setup-uv action to v10.3.1 ([#288](https://github.com/SpiceLabsHQ/.github/issues/288)) ([3c3ca92](https://github.com/SpiceLabsHQ/.github/commit/3c3ca92da39b86709548d47beef255a50814098b))
+* **deps:** update astral-sh/setup-uv action to v10.3.2 ([#289](https://github.com/SpiceLabsHQ/.github/issues/289)) ([80f7ac4](https://github.com/SpiceLabsHQ/.github/commit/80f7ac403868280558899e2494c28e873a8c0fa2))
+
 ## [1.4.3](https://github.com/SpiceLabsHQ/.github/compare/actions-audit-v1.4.2...actions-audit-v1.4.3) (2026-10-01)
 
 
