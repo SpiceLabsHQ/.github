@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/SpiceLabsHQ/.github/compare/markdownlint-v1.2.1...markdownlint-v1.3.0) (2026-11-04)
+
+
+### Features
+
+* **deps:** update davidanson/markdownlint-cli2-action action to v25 ([#290](https://github.com/SpiceLabsHQ/.github/issues/290)) ([142195f](https://github.com/SpiceLabsHQ/.github/commit/142195f7d372a7b5e6b3aca5b5277a1d572c1a0c))
+
 ## [1.2.1](https://github.com/SpiceLabsHQ/.github/compare/markdownlint-v1.2.0...markdownlint-v1.2.1) (2026-08-22)
 
 
