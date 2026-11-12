@@ -100,7 +100,7 @@ jobs:
         # SHA-pinned to v6.1.1 (third-party action — must be 40-char SHA per
         # actions-audit policy). Bump by re-running the API tag lookup and
         # updating both the SHA and the trailing comment.
-        uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
+        uses: amannn/action-semantic-pull-request@2252a14e810aa9b85c2d560bd7070c802206ecf6 # v6.1.2
         env:
           GITHUB_TOKEN: ${{ github.token }}
         with:
