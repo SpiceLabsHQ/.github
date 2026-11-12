@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.3](https://github.com/SpiceLabsHQ/.github/compare/pr-hygiene-v1.1.2...pr-hygiene-v1.1.3) (2026-11-12)
+
+
+### Bug Fixes
+
+* **deps:** update sigstore/cosign-installer action to v4.1.3 ([#293](https://github.com/SpiceLabsHQ/.github/issues/293)) ([47c8b2d](https://github.com/SpiceLabsHQ/.github/commit/47c8b2d5ca64100b148822722aa67aba24c39b22))
+
 ## [1.1.2](https://github.com/SpiceLabsHQ/.github/compare/pr-hygiene-v1.1.1...pr-hygiene-v1.1.2) (2026-09-26)
 
 
