@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.14.0](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.13.2...pepper-pr-review-v1.14.0) (2026-11-18)
+
+
+### Features
+
+* **pepper-pr-review:** default to Sonnet 5.5, with Sonnet 5 as the rollback ([#296](https://github.com/SpiceLabsHQ/.github/issues/296)) ([54f546e](https://github.com/SpiceLabsHQ/.github/commit/54f546e94819bdad6517a86673e8ec1d65ac7c77))
+
 ## [1.13.2](https://github.com/SpiceLabsHQ/.github/compare/pepper-pr-review-v1.13.1...pepper-pr-review-v1.13.2) (2026-10-12)
 
 
