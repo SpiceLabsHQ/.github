@@ -39,7 +39,7 @@ convention the workflow followed rather than a boundary the credential enforced.
 |---|---|---|
 | `InvokePepperTaggedProfilesOnly` | Invoke any application inference profile tagged `Product=pepper` | Scoped by **tag, not ARN**. Application inference profiles are immutable in the model they wrap, so a model upgrade replaces the profile and mints a new ARN. Tag-scoping survives that untouched; ARN-pinning would force an IAM edit on every upgrade. |
 | `WritePepperReviewAuditLog` | `logs:CreateLogStream` + `logs:PutLogEvents` on `/pepper/pr-review/audit` only | The DEV-653 audit record, written with the credentials the review job has already assumed. **Append-only, one log group.** No read, no delete, no `logs:CreateLogGroup` — the group and its retention are a CloudFormation resource (`pepper-audit.cfn.yml`), not a role permission. Worst case under role compromise is junk lines in the audit log that the same role cannot then erase. |
-| `AuthorizedModelsReachableOnlyThroughAProfile` | Invoke Sonnet 5, in three regions, and Sonnet 5.5 through global routing (which needs the region-less `arn:aws:bedrock:::foundation-model/anthropic.claude-sonnet-5-5` alongside the `us-west-2` one), **only** when reached through one of this account's application inference profiles | AWS requires the underlying foundation model to be authorized alongside the profile. The `bedrock:InferenceProfileArn` condition is what stops a direct model call that would bypass the profile — and therefore bypass the `Product`/`Mode` cost-allocation tags. Sonnet 5 is authorized as the rollback path (DEV-2457). Sonnet 4.6, the rollback before it, was removed because it is older than the model it backed up. |
+| `AuthorizedModelsReachableOnlyThroughAProfile` | Invoke Sonnet 5, in three regions, and Sonnet 5.5 through both global routing (which needs the region-less `arn:aws:bedrock:::foundation-model/anthropic.claude-sonnet-5-5` alongside the `us-west-2` one) and US-only routing (us-east-1/2, us-west-2, DEV-2462), **only** when reached through one of this account's application inference profiles | AWS requires the underlying foundation model to be authorized alongside the profile. The `bedrock:InferenceProfileArn` condition is what stops a direct model call that would bypass the profile — and therefore bypass the `Product`/`Mode` cost-allocation tags. Sonnet 5 is authorized as the rollback path (DEV-2457). Sonnet 4.6, the rollback before it, was removed because it is older than the model it backed up. |
 | `DiscoverProfiles` | Read-only `ListInferenceProfiles` / `GetInferenceProfile` | The action enumerates profiles at startup. |
 | `MarketplaceModelAccess` | `aws-marketplace:Subscribe` / `ViewSubscriptions` | Retained deliberately — auto-subscription on first use of a model is acceptable. |
 
@@ -181,6 +181,7 @@ The model identities Pepper invokes. All live in `us-west-2` only, all tagged
 |---|---|---|---|
 | `pepper-pr-review-sonnet-5` | `xda66yqkegz4` | `anthropic.claude-sonnet-5` (us-east-1/2, us-west-2) | 2026-07-04 |
 | `pepper-pr-review-sonnet-5-5` | `as10aa0qzyoj` | `global.anthropic.claude-sonnet-5-5` (global routing: worldwide, not pinned to a region) | 2026-09-30 |
+| `pepper-pr-review-sonnet-5-5-us` | `1c48m80693sl` | `us.anthropic.claude-sonnet-5-5` (us-east-1/2, us-west-2) | 2026-11-18 |
 
 `pepper-pr-review-sonnet-5-5` is the workflow default (`review_model` in
 `pepper-pr-review.yml`, DEV-2457). It routes globally, so requests can be served
@@ -189,6 +190,10 @@ P-DEV-74. `pepper-pr-review-sonnet-5` is the rollback path — the policy above
 keeps its wrapped model authorized for exactly that reason. Rolling back means
 setting the `s5-high` arm's weight to 100 and `s55-high`'s to 0, or passing the
 Sonnet 5 ARN as `review_model`.
+
+`pepper-pr-review-sonnet-5-5-us` wraps the same model with US-only routing, so
+inference stays in us-east-1, us-east-2 and us-west-2 (DEV-2462). No arm uses it
+yet; DEV-2464 moves Pepper onto it once the role policy above is applied.
 
 `pepper-pr-review-sonnet-4-6` (`0dmcow82swxh`, DEV-299) was the rollback until
 DEV-2457. It was retired because Sonnet 4.6 is older than Sonnet 5, the new
