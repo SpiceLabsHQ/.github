@@ -39,7 +39,7 @@ convention the workflow followed rather than a boundary the credential enforced.
 |---|---|---|
 | `InvokePepperTaggedProfilesOnly` | Invoke any application inference profile tagged `Product=pepper` | Scoped by **tag, not ARN**. Application inference profiles are immutable in the model they wrap, so a model upgrade replaces the profile and mints a new ARN. Tag-scoping survives that untouched; ARN-pinning would force an IAM edit on every upgrade. |
 | `WritePepperReviewAuditLog` | `logs:CreateLogStream` + `logs:PutLogEvents` on `/pepper/pr-review/audit` only | The DEV-653 audit record, written with the credentials the review job has already assumed. **Append-only, one log group.** No read, no delete, no `logs:CreateLogGroup` — the group and its retention are a CloudFormation resource (`pepper-audit.cfn.yml`), not a role permission. Worst case under role compromise is junk lines in the audit log that the same role cannot then erase. |
-| `AuthorizedModelsReachableOnlyThroughAProfile` | Invoke Sonnet 5 and Sonnet 4.6, in three regions, and Sonnet 5.5 through global routing (which needs the region-less `arn:aws:bedrock:::foundation-model/anthropic.claude-sonnet-5-5` alongside the `us-west-2` one), **only** when reached through one of this account's application inference profiles | AWS requires the underlying foundation model to be authorized alongside the profile. The `bedrock:InferenceProfileArn` condition is what stops a direct model call that would bypass the profile — and therefore bypass the `Product`/`Mode` cost-allocation tags. Sonnet 4.6 is authorized as the rollback path (DEV-299), replacing Sonnet 4.5, which retires 2026-09-29. |
+| `AuthorizedModelsReachableOnlyThroughAProfile` | Invoke Sonnet 5, in three regions, and Sonnet 5.5 through global routing (which needs the region-less `arn:aws:bedrock:::foundation-model/anthropic.claude-sonnet-5-5` alongside the `us-west-2` one), **only** when reached through one of this account's application inference profiles | AWS requires the underlying foundation model to be authorized alongside the profile. The `bedrock:InferenceProfileArn` condition is what stops a direct model call that would bypass the profile — and therefore bypass the `Product`/`Mode` cost-allocation tags. Sonnet 5 is authorized as the rollback path (DEV-2457). Sonnet 4.6, the rollback before it, was removed because it is older than the model it backed up. |
 | `DiscoverProfiles` | Read-only `ListInferenceProfiles` / `GetInferenceProfile` | The action enumerates profiles at startup. |
 | `MarketplaceModelAccess` | `aws-marketplace:Subscribe` / `ViewSubscriptions` | Retained deliberately — auto-subscription on first use of a model is acceptable. |
 
@@ -84,13 +84,13 @@ aws iam get-role-policy \
 
 # 2. Validate the change before applying it. Both cases must hold.
 POLICY=$(jq -c . infrastructure/bedrock-role-policy.json)
-PROFILE=arn:aws:bedrock:us-west-2:618640261060:application-inference-profile/xda66yqkegz4
+PROFILE=arn:aws:bedrock:us-west-2:618640261060:application-inference-profile/as10aa0qzyoj
 
 #    Authorized model reached through a profile -> allowed
 aws iam simulate-custom-policy --profile spice-admin \
   --policy-input-list "$POLICY" \
   --action-names bedrock:InvokeModelWithResponseStream \
-  --resource-arns arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-sonnet-5 \
+  --resource-arns arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-sonnet-5-5 \
   --context-entries "ContextKeyName=bedrock:InferenceProfileArn,ContextKeyType=string,ContextKeyValues=$PROFILE" \
   --query 'EvaluationResults[0].EvalDecision'
 
@@ -98,7 +98,7 @@ aws iam simulate-custom-policy --profile spice-admin \
 aws iam simulate-custom-policy --profile spice-admin \
   --policy-input-list "$POLICY" \
   --action-names bedrock:InvokeModel \
-  --resource-arns arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-sonnet-5 \
+  --resource-arns arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-sonnet-5-5 \
   --query 'EvaluationResults[0].EvalDecision'
 
 # 3. Apply.
@@ -180,17 +180,19 @@ The model identities Pepper invokes. All live in `us-west-2` only, all tagged
 | Profile | Id | Wraps | Created |
 |---|---|---|---|
 | `pepper-pr-review-sonnet-5` | `xda66yqkegz4` | `anthropic.claude-sonnet-5` (us-east-1/2, us-west-2) | 2026-07-04 |
-| `pepper-pr-review-sonnet-4-6` | `0dmcow82swxh` | `anthropic.claude-sonnet-4-6` (us-east-1/2, us-west-2) | 2026-09-01 |
 | `pepper-pr-review-sonnet-5-5` | `as10aa0qzyoj` | `global.anthropic.claude-sonnet-5-5` (global routing: worldwide, not pinned to a region) | 2026-09-30 |
 
-`pepper-pr-review-sonnet-5` is the workflow default
-(`review_model` in `pepper-pr-review.yml`). `pepper-pr-review-sonnet-4-6` is the
-rollback path — the policy above keeps its wrapped model authorized for exactly
-that reason. Rolling back means passing its ARN as `review_model`; the default
-stays on Sonnet 5.
+`pepper-pr-review-sonnet-5-5` is the workflow default (`review_model` in
+`pepper-pr-review.yml`, DEV-2457). It routes globally, so requests can be served
+from any supported region; the move to US-only routing is milestone 4 of
+P-DEV-74. `pepper-pr-review-sonnet-5` is the rollback path — the policy above
+keeps its wrapped model authorized for exactly that reason. Rolling back means
+setting the `s5-high` arm's weight to 100 and `s55-high`'s to 0, or passing the
+Sonnet 5 ARN as `review_model`.
 
-`pepper-pr-review-sonnet-5-5` is the canary and target profile for P-DEV-74. It
-routes globally, so requests can be served from any supported region.
+`pepper-pr-review-sonnet-4-6` (`0dmcow82swxh`, DEV-299) was the rollback until
+DEV-2457. It was retired because Sonnet 4.6 is older than Sonnet 5, the new
+backup, and so reaches the deprecation list first.
 
 **A rollback path is only as good as its model's runway.** The previous rollback
 profile, `pepper-pr-review` (`cz21awrop223`, DEV-245), wrapped Sonnet 4.5, which
@@ -202,10 +204,10 @@ been exercised: 23 invocations, all on 2026-07-03, the day before
 `pepper-pr-review-sonnet-5` was created, against ~37k on the Sonnet 5 profile
 over the same window.
 
-Sonnet 4.6 is current with no announced deprecation, but it is one generation
-behind the primary, so it will reach the deprecation list before Sonnet 5 does.
-**Re-check this pairing whenever the primary moves**, and prefer a replacement
-that is not older than the model it backs up.
+Sonnet 5 is one generation behind the primary, so it will reach the
+deprecation list before Sonnet 5.5 does. **Re-check this pairing whenever the
+primary moves**, and prefer a replacement that is not older than the model it
+backs up.
 
 **The tags are load-bearing twice over.** IAM access is granted by
 `aws:ResourceTag/Product = pepper` (see the policy table above), and Cost
@@ -267,7 +269,7 @@ alarms or log groups.
 ```sh
 # 1. Confirm the ModelId dimension for the review inference profile. The alarm's
 #    "reviews ran" half keys on it, and a stale value makes the alarm silently
-#    un-fireable. Expect a bare profile id (e.g. xda66yqkegz4) — application
+#    un-fireable. Expect a bare profile id (e.g. as10aa0qzyoj) — application
 #    inference profiles are immutable, so a model upgrade mints a new one.
 aws cloudwatch list-metrics --namespace AWS/Bedrock --metric-name Invocations \
   --profile spice-ro --region us-west-2 \
@@ -291,7 +293,7 @@ aws sns get-topic-attributes \
 aws cloudformation deploy \
   --template-file infrastructure/pepper-audit.cfn.yml \
   --stack-name pepper-audit \
-  --parameter-overrides BedrockModelIdDimension=xda66yqkegz4 \
+  --parameter-overrides BedrockModelIdDimension=as10aa0qzyoj \
   --profile spice-admin --region us-west-2
 
 # 4. Read back what was created.
@@ -351,7 +353,7 @@ the first question is always whether records are genuinely missing, not why.
 ```sh
 cat > /tmp/pepper-audit-triage.json <<'JSON'
 [{"Id":"inv","MetricStat":{"Metric":{"Namespace":"AWS/Bedrock","MetricName":"Invocations",
-  "Dimensions":[{"Name":"ModelId","Value":"xda66yqkegz4"}]},"Period":86400,"Stat":"Sum"}},
+  "Dimensions":[{"Name":"ModelId","Value":"as10aa0qzyoj"}]},"Period":86400,"Stat":"Sum"}},
  {"Id":"rec","MetricStat":{"Metric":{"Namespace":"AWS/Logs","MetricName":"IncomingLogEvents",
   "Dimensions":[{"Name":"LogGroupName","Value":"/pepper/pr-review/audit"}]},"Period":86400,"Stat":"Sum"}}]
 JSON
