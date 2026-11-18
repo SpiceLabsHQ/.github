@@ -36,11 +36,12 @@ on:
         default: ""
       review_model:
         description: |
-          Model used for the review. Defaults to the `pepper-pr-review-sonnet-5` Application
+          Model used for the review. Defaults to the `pepper-pr-review-sonnet-5-5` Application
           Inference Profile, tagged Mode=review for AWS cost allocation. The profile wraps the
-          `us.anthropic.claude-sonnet-5` cross-region inference profile (DEV-492; Application
-          Inference Profiles are immutable, so a model upgrade means a new profile ARN here, not
-          an edit to the old one).
+          `global.anthropic.claude-sonnet-5-5` cross-region inference profile (DEV-2457;
+          Application Inference Profiles are immutable, so a model upgrade means a new profile ARN
+          here, not an edit to the old one). The rollback is the `pepper-pr-review-sonnet-5`
+          profile (`xda66yqkegz4`).
 
           The IAM role behind AWS_CLAUDE_BEDROCK_ROLE_ARN only permits application inference
           profiles tagged Product=pepper, and only the models those profiles wrap (DEV-875), so a
@@ -51,7 +52,7 @@ on:
           `model` does.
         required: false
         type: string
-        default: arn:aws:bedrock:us-west-2:618640261060:application-inference-profile/xda66yqkegz4
+        default: arn:aws:bedrock:us-west-2:618640261060:application-inference-profile/as10aa0qzyoj
       aws_region:
         description: AWS region where the Bedrock role and models live.
         required: false
@@ -1184,6 +1185,9 @@ jobs:
       # re-review never switches model mid-PR. Weights must sum to 100; a weight
       # of 0 takes an arm out entirely, which is the rollback for a canary arm.
       # The arm name reaches the audit record (`arm`) and the job summary.
+      # Since DEV-2457 every PR goes to `s55-high`. `s5-high` stays in the table
+      # at weight 0 as the rollback: swap the two weights to send every PR back
+      # to Sonnet 5.
       #
       # Precedence: `model` input > a `review_model` other than its default >
       # the arm. Either override records arm `override`. The `effort` input wins
@@ -1198,9 +1202,9 @@ jobs:
         id: model
         env:
           ARMS: >-
-            [{"name":"s5-high","model":"arn:aws:bedrock:us-west-2:618640261060:application-inference-profile/xda66yqkegz4","effort":"high","weight":50},
-            {"name":"s55-high","model":"arn:aws:bedrock:us-west-2:618640261060:application-inference-profile/as10aa0qzyoj","effort":"high","weight":50}]
-          DEFAULT_REVIEW_MODEL: arn:aws:bedrock:us-west-2:618640261060:application-inference-profile/xda66yqkegz4
+            [{"name":"s5-high","model":"arn:aws:bedrock:us-west-2:618640261060:application-inference-profile/xda66yqkegz4","effort":"high","weight":0},
+            {"name":"s55-high","model":"arn:aws:bedrock:us-west-2:618640261060:application-inference-profile/as10aa0qzyoj","effort":"high","weight":100}]
+          DEFAULT_REVIEW_MODEL: arn:aws:bedrock:us-west-2:618640261060:application-inference-profile/as10aa0qzyoj
           OVERRIDE: ${{ inputs.model }}
           REVIEW_MODEL: ${{ inputs.review_model }}
           EFFORT_INPUT: ${{ inputs.effort }}
@@ -1617,11 +1621,10 @@ jobs:
           # CLI treats the ARN as an unknown model: it drops `--effort` from
           # every request and sends `thinking.type=enabled`, which Sonnet 5 and
           # 5.5 reject with a 400 before the CLI retries with adaptive.
-          # The variable only adds capabilities. Sonnet 5 and 5.5 (both arms)
-          # support all four. Sonnet 4.6, the other model the role may invoke
-          # (DEV-875), lacks xhigh_effort, so an override to it must not also
-          # set effort `xhigh`. Remove once the CLI resolves profiles correctly
-          # under the action.
+          # The variable only adds capabilities. Sonnet 5 and 5.5, the two
+          # models the role may invoke (DEV-875, DEV-2457), both support all
+          # four. Remove once the CLI resolves profiles correctly under the
+          # action.
           CLAUDE_CODE_MODEL_CAPABILITIES: ${{ steps.model.outputs.model }}=adaptive_thinking,effort,xhigh_effort,max_effort
         with:
           github_token: ${{ steps.app-token.outputs.token }}

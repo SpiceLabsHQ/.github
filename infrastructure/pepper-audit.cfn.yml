@@ -44,13 +44,14 @@ Parameters:
 
   BedrockModelIdDimension:
     Type: String
-    Default: xda66yqkegz4
+    Default: as10aa0qzyoj
     Description: >-
       Value of the AWS/Bedrock `ModelId` dimension for the review inference
       profile. For an APPLICATION inference profile this is the bare profile id
       (not the ARN, not the wrapped foundation-model id) — confirmed against live
-      metrics in this account on 2026-08-07, where `ModelId=xda66yqkegz4` carries
-      real daily invocation counts. Note there is ALSO a sibling series
+      metrics in this account on 2026-08-07, where `ModelId=xda66yqkegz4` (then
+      the Sonnet 5 default) carried real daily invocation counts. Since DEV-2457
+      the default is the Sonnet 5.5 profile, `as10aa0qzyoj`. Note there is ALSO a sibling series
       dimensioned `ModelId` + `ContextWindow=1M`; this alarm deliberately uses
       the ModelId-only series, which aggregates every context window. RE-CONFIRM
       AT DEPLOY TIME and after any profile replacement: application inference

@@ -10,7 +10,8 @@
 #
 # What it pins:
 #   - the same PR always lands in the same arm;
-#   - the shipped 50/50 table splits PRs 1..1000 of one repo roughly evenly;
+#   - the shipped table sends every PR to s55-high (DEV-2457);
+#   - a 50/50 table splits PRs 1..1000 of one repo roughly evenly;
 #   - a weight of 0 takes an arm out entirely (the canary rollback);
 #   - `model` > non-default `review_model` > arm, and `effort` > arm effort;
 #   - any selection failure falls back to the default model, never fails;
@@ -75,7 +76,8 @@ S55="$(jq -r '.[] | select(.name == "s55-high") | .model' <<<"${ARMS_SHIPPED}")"
 # --- The shipped table -------------------------------------------------------
 check "DEFAULT_REVIEW_MODEL matches the review_model input default" "${INPUT_DEFAULT}" "${DEFAULT_MODEL}"
 check "shipped weights sum to 100" "100" "$(jq '[.[].weight] | add' <<<"${ARMS_SHIPPED}")"
-check "s5-high runs the default profile" "${INPUT_DEFAULT}" "${S5}"
+check "s55-high runs the default profile" "${INPUT_DEFAULT}" "${S55}"
+check "shipped table gives s55-high every PR" "0 100" "$(jq -r '[(.[] | select(.name == "s5-high") | .weight), (.[] | select(.name == "s55-high") | .weight)] | join(" ")' <<<"${ARMS_SHIPPED}")"
 case "${PR_EXPR}" in
   *github.event.pull_request.number*github.event.issue.number*)
     pass "PR number is read from both pull_request and issue_comment events" ;;
@@ -93,9 +95,12 @@ C="$(select_arm REPO=SpiceLabsHQ/other PR_NUMBER=42)"
 check "arm is a function of repo and PR only (rerun, other repo)" "${C}" "$(select_arm REPO=SpiceLabsHQ/other PR_NUMBER=42)"
 
 # --- Split over PRs 1..1000 --------------------------------------------------
+# The shipped table is 0/100 now, so the split is checked on a 50/50 copy of it:
+# the hash must still spread PRs evenly for the next canary.
+HALF="$(jq -c 'map(.weight = 50)' <<<"${ARMS_SHIPPED}")"
 n5=0 n55=0 other=0
 for pr in $(seq 1 1000); do
-  case "$(select_arm PR_NUMBER="${pr}")" in
+  case "$(select_arm ARMS="${HALF}" PR_NUMBER="${pr}")" in
     "s5-high|${S5}|high") n5=$((n5 + 1)) ;;
     "s55-high|${S55}|high") n55=$((n55 + 1)) ;;
     *) other=$((other + 1)) ;;
