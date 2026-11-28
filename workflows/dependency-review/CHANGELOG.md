@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.2](https://github.com/SpiceLabsHQ/.github/compare/dependency-review-v1.1.1...dependency-review-v1.1.2) (2026-11-28)
+
+
+### Bug Fixes
+
+* **deps:** update actions/dependency-review-action action to v5.0.1 ([#299](https://github.com/SpiceLabsHQ/.github/issues/299)) ([c2c6342](https://github.com/SpiceLabsHQ/.github/commit/c2c6342849abd99f53504c4d2154dbce03e0086f))
+
 ## [1.1.1](https://github.com/SpiceLabsHQ/.github/compare/dependency-review-v1.1.0...dependency-review-v1.1.1) (2026-08-22)
 
 
