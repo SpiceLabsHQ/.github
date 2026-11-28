@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.3](https://github.com/SpiceLabsHQ/.github/compare/release-please-v1.1.2...release-please-v1.1.3) (2026-11-28)
+
+
+### Bug Fixes
+
+* **deps:** update actions/create-github-app-token action to v3.3.0 ([#286](https://github.com/SpiceLabsHQ/.github/issues/286)) ([65af00b](https://github.com/SpiceLabsHQ/.github/commit/65af00b33eb73fc7a958e77071437cfa10823006))
+* **deps:** update actions/create-github-app-token action to v3.4.0 ([#301](https://github.com/SpiceLabsHQ/.github/issues/301)) ([c522949](https://github.com/SpiceLabsHQ/.github/commit/c522949125029ec7a4c97cf94408af57757bfc7a))
+
 ## [1.1.2](https://github.com/SpiceLabsHQ/.github/compare/release-please-v1.1.1...release-please-v1.1.2) (2026-08-22)
 
 
